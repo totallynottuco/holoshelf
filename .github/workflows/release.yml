@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows Release
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+
+      - name: Patch GitHub release metadata
+        shell: node {0}
+        run: |
+          const fs = require("fs");
+          const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split("/");
+          const isTagRelease = process.env.GITHUB_REF_TYPE === "tag";
+          packageJson.repository = {
+            type: "git",
+            url: `https://github.com/${owner}/${repo}.git`
+          };
+          packageJson.build = packageJson.build ?? {};
+          packageJson.build.publish = [
+            {
+              provider: "github",
+              owner,
+              repo,
+              releaseType: isTagRelease ? "release" : "draft"
+            }
+          ];
+          fs.writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
+
+      - name: Build and publish release
+        run: npm run release:ci
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: holoshelf-windows-release
+          path: |
+            release/Holoshelf-Setup-*.exe
+            release/Holoshelf-Setup-*.exe.blockmap
+            release/latest.yml
+            release/win-unpacked/**

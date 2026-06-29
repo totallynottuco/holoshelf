@@ -1,0 +1,830 @@
+import type { HololiveIdol } from "../../shared/contracts";
+
+export type HololiveIdolProfileSeed = Pick<
+  HololiveIdol,
+  | "profileImageUrl"
+  | "profileQuote"
+  | "youtubeChannelUrl"
+  | "xHandle"
+  | "xUrl"
+  | "birthday"
+  | "debutDate"
+  | "height"
+  | "unit"
+>;
+
+export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfileSeed> = {
+  "tokino-sora": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tokino-Sora_pr-img_01.webp",
+    "profileQuote": "“Hey, Sora-tomo! How are you all doing? It's me, Tokino Sora!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCp6993wxpyDPHUpavwDFqgg",
+    "xHandle": "@tokino_sora",
+    "xUrl": "https://twitter.com/tokino_sora",
+    "birthday": "May 15",
+    "debutDate": "September 7, 2017",
+    "height": "160 cm",
+    "unit": "hololive Generation 0"
+  },
+  "roboco-san": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Robocosan_pr-img_01.webp",
+    "profileQuote": "“Hellobo! Roboco here!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCDqI2jOz0weumE8s7paEk6g",
+    "xHandle": "@robocosan",
+    "xUrl": "https://twitter.com/robocosan",
+    "birthday": "May 23",
+    "debutDate": "March 9, 2018",
+    "height": "154 cm",
+    "unit": "hololive Generation 0"
+  },
+  "aki-rosenthal": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Aki-Rosenthal_pr-img_01.png",
+    "profileQuote": "“Alona, everyone! This is Aki Rosenthal a.k.a. AkiRose!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCFTLzh12_nrtzqBPsTCqenA",
+    "xHandle": "@akirosenthal",
+    "xUrl": "https://twitter.com/akirosenthal",
+    "birthday": "February 17",
+    "debutDate": "June 1, 2018",
+    "height": "162 cm",
+    "unit": "hololive 1st Generation"
+  },
+  "akai-haato": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Akai-Haato_pr-img_01.webp",
+    "profileQuote": "“Welcome to your rouge awakening! This is Akai Haato!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC1CfXB_kRs3C-zaeTG3oGyg",
+    "xHandle": "@akaihaato",
+    "xUrl": "https://twitter.com/akaihaato",
+    "birthday": "August 10",
+    "debutDate": "June 2, 2018",
+    "height": "154 cm",
+    "unit": "hololive 1st Generation"
+  },
+  "shirakami-fubuki": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirakami-Fubuki_pr-img_01.webp",
+    "profileQuote": "“Good foxy day! I'm Shirakami Fubuki!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCdn5BQ06XqgXoAxIhbqw5Rg",
+    "xHandle": "@shirakamifubuki",
+    "xUrl": "https://twitter.com/shirakamifubuki",
+    "birthday": "October 5",
+    "debutDate": "June 1, 2018",
+    "height": "155cm",
+    "unit": "hololive 1st Generation/Gamers"
+  },
+  "natsuiro-matsuri": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Natsuiro-Matsuri_pr-img_01.png",
+    "profileQuote": "“Wasshoi! hololive's symbol of purity and everyone's idol, Natsuiro Matsuri here!”",
+    "youtubeChannelUrl": "https://youtube.com/channel/UCQ0UDLQCjY0rmuxCDE38FGg",
+    "xHandle": "@natsuiromatsuri",
+    "xUrl": "https://twitter.com/natsuiromatsuri",
+    "birthday": "July 22",
+    "debutDate": "June 1, 2018",
+    "height": "152 cm",
+    "unit": "hololive 1st Generation"
+  },
+  "nakiri-ayame": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Nakiri-Ayame_pr-img_01.webp",
+    "profileQuote": "“Greetings, Humans! Yoohoo!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC7fk0CB07ly8oSl0aqKkqFg",
+    "xHandle": "@nakiriayame",
+    "xUrl": "https://twitter.com/nakiriayame",
+    "birthday": "December 13",
+    "debutDate": "September 3, 2018",
+    "height": "152 cm",
+    "unit": "hololive 2nd Generation"
+  },
+  "yuzuki-choco": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Yuzuki-Choco_pr-img_01.webp",
+    "profileQuote": "“Good evening, my cute students! Choc-on!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC1suqwovbL1kzsoaZgFZLKg",
+    "xHandle": "@yuzukichococh",
+    "xUrl": "https://twitter.com/yuzukichococh",
+    "birthday": "February 14",
+    "debutDate": "September 4, 2018",
+    "height": "165 cm",
+    "unit": "hololive 2nd Generation"
+  },
+  "oozora-subaru": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Oozora-Subaru_pr-img_01.webp",
+    "profileQuote": "“Sup! I'm Oozora Subaru from hololive 2nd Generation!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCvzGlP9oQwU--Y0r9id_jnA",
+    "xHandle": "@oozorasubaru",
+    "xUrl": "https://twitter.com/oozorasubaru",
+    "birthday": "July 2",
+    "debutDate": "September 16, 2018",
+    "height": "154 cm",
+    "unit": "hololive 2nd Generation"
+  },
+  "azki": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/12/AZKi_pr-img_01.png",
+    "profileQuote": "“I'm the Virtual Diva AZKi! I love music and singing!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC0TXe_LYZ4scaW2XMyi5_kw",
+    "xHandle": "@AZKi_VDiVA",
+    "xUrl": "https://twitter.com/AZKi_VDiVA",
+    "birthday": "July 1",
+    "height": "158 cm",
+    "unit": "hololive Generation 0 SorAZ Shotgun Rose"
+  },
+  "ookami-mio": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Ookami-Mio_pr-img_01.png",
+    "profileQuote": "“Hellooowl! It is Ookami Mio!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCp-5t9SrOQwXMU7iIjQfARg",
+    "xHandle": "@ookamimio",
+    "xUrl": "https://twitter.com/ookamimio",
+    "birthday": "August 20",
+    "debutDate": "December 7, 2018",
+    "height": "160 cm",
+    "unit": "hololive GAMERS"
+  },
+  "sakuramiko": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Sakura-Miko_pr-img_01.png",
+    "profileQuote": "“Nya-hello~! I'm Sakura Miko, an elite shrine maiden-idol!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC-hM6YJuNYVAmUWxeIr9FeA",
+    "xHandle": "@sakuramiko35",
+    "xUrl": "https://twitter.com/sakuramiko35",
+    "birthday": "March 5",
+    "debutDate": "August 1, 2018",
+    "height": "152 cm",
+    "unit": "hololive Generation 0"
+  },
+  "nekomata-okayu": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Nekomata-Okayu_pr-img_01.png",
+    "profileQuote": "“Nom nom Okayu~!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCvaTdHTWBGv3MKj3KVqJVCw",
+    "xHandle": "@nekomataokayu",
+    "xUrl": "https://twitter.com/nekomataokayu",
+    "birthday": "February 22",
+    "debutDate": "April 6, 2019",
+    "height": "152 cm",
+    "unit": "hololive GAMERS"
+  },
+  "inugami-korone": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Inugami-Korone_pr-img_01.png",
+    "profileQuote": "“Ello! Fingers! Give me your fingers!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UChAnqc_AY5_I3Px5dig3X1Q",
+    "xHandle": "@inugamikorone",
+    "xUrl": "https://twitter.com/inugamikorone",
+    "birthday": "October 1",
+    "debutDate": "April 13, 2019",
+    "height": "156 cm",
+    "unit": "hololive GAMERS"
+  },
+  "hoshimachi-suisei": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Hoshimachi-Suisei_pr-img_01.png",
+    "profileQuote": "“A shooting star that appeared from diamonds in the rough; I'm the virtual idol Hoshimachi Suisei!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC5CwaMl1eIgY8h02uZw7u8A",
+    "xHandle": "@suisei_hosimati",
+    "xUrl": "https://twitter.com/suisei_hosimati",
+    "birthday": "March 22",
+    "debutDate": "March 22, 2018",
+    "height": "160 cm",
+    "unit": "hololive Generation 0 Makeup charge Teshima Nari"
+  },
+  "usada-pekora": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Usada-Pekora_pr-img_01.png",
+    "profileQuote": "“Hiya-peko! Hiya-peko! Hiya-pekooo! I'm Usada Pekora, peko!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC1DCedRgGHBdm81E1llLhOQ",
+    "xHandle": "@usadapekora",
+    "xUrl": "https://twitter.com/usadapekora",
+    "birthday": "January 12",
+    "debutDate": "July 17, 2019",
+    "height": "153 cm Age 111 years old",
+    "unit": "hololive 3rd Generation"
+  },
+  "shiranui-flare": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shiranui-Flare_pr-img_01.png",
+    "profileQuote": "“Noon-nui! This is hololive 3rd Gen's Shiranui Flare!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCvInZx9h3jC2JzsIzoOebWg",
+    "xHandle": "@shiranuiflare",
+    "xUrl": "https://twitter.com/shiranuiflare",
+    "birthday": "April 2",
+    "debutDate": "August 7, 2019",
+    "height": "158 cm",
+    "unit": "hololive 3rd Generation"
+  },
+  "shirogane-noel": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirogane-Noel_pr-img_01.webp",
+    "profileQuote": "“All hustle, all muscle! Shirogane Noel's here!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCdyqAaZDKHXg4Ahi7VENThQ",
+    "xHandle": "@shiroganenoel",
+    "xUrl": "https://twitter.com/shiroganenoel",
+    "birthday": "November 24",
+    "debutDate": "August 8, 2019",
+    "height": "158 cm",
+    "unit": "hololive 3rd Generation"
+  },
+  "houshou-marine": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Houshou-Marine_pr-img_01.png",
+    "profileQuote": "“Ahoy! Captain of the Houshou Pirates, Houshou Marine here!\" \"Keep 'er steady!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCCzUftO8KOVkV4wQG1vkUvg",
+    "xHandle": "@houshoumarine",
+    "xUrl": "https://twitter.com/houshoumarine",
+    "birthday": "July 30",
+    "debutDate": "August 11, 2019",
+    "height": "150 cm",
+    "unit": "hololive 3rd Generation"
+  },
+  "tsunomaki-watame": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tsunomaki-Watame_pr-img_01.webp",
+    "profileQuote": "“Hoof, hoof, helloof!” “Watame did nothing wrong!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCqm3BQLlJfvkTsX_hvm0UmA",
+    "xHandle": "@tsunomakiwatame",
+    "xUrl": "https://twitter.com/tsunomakiwatame",
+    "birthday": "June 6",
+    "debutDate": "December 29, 2019",
+    "height": "151 cm",
+    "unit": "hololive 4th Generation"
+  },
+  "tokoyami-towa": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tokoyami-Towa_pr-img_01.webp",
+    "profileQuote": "“Suppies! 'Tis I, Tokoyami Towa, from hololive 4th Generation!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC1uv2Oq6kNxgATlCiez59hw",
+    "xHandle": "@tokoyamitowa",
+    "xUrl": "https://twitter.com/tokoyamitowa",
+    "birthday": "August 8",
+    "debutDate": "January 3, 2020",
+    "height": "150 cm",
+    "unit": "hololive 4th Generation"
+  },
+  "himemori-luna": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Himemori-Luna_pr-img_01.png",
+    "profileQuote": "“Is evewyone heeere?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCa9Y57gfeY0Zro_noHRVrnw",
+    "xHandle": "@himemoriluna",
+    "xUrl": "https://twitter.com/himemoriluna",
+    "birthday": "October 10",
+    "debutDate": "January 4, 2020",
+    "height": "140 cm",
+    "unit": "hololive 4th Generation"
+  },
+  "yukihana-lamy": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Yukihana-Lamy_pr-img_01.png",
+    "profileQuote": "“Lamyoohoo!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCFKOVgVbGmX65RxO3EtH3iw",
+    "xHandle": "@yukihanalamy",
+    "xUrl": "https://twitter.com/yukihanalamy",
+    "birthday": "November 15",
+    "debutDate": "August 12, 2020",
+    "height": "158 cm",
+    "unit": "hololive 5th Generation"
+  },
+  "momosuzu-nene": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Momosuzu-Nene_pr-img_01.webp",
+    "profileQuote": "“Kon-Nene~! hololive 5th Generation, Momosuzu Nene the idol VTuber!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCAWSyEs_Io8MtpY3m-zqILA",
+    "xHandle": "@momosuzunene",
+    "xUrl": "https://twitter.com/momosuzunene",
+    "birthday": "March 2",
+    "debutDate": "August 13, 2020",
+    "height": "159 cm",
+    "unit": "hololive 5th Generation"
+  },
+  "shishiro-botan": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/05/Shishiro-Botan_pr-img_01.png",
+    "profileQuote": "“La-lion♪” “Well then, cya~”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCUKD-uaobj9jiqB-VXt71mA",
+    "xHandle": "@shishirobotan",
+    "xUrl": "https://twitter.com/shishirobotan",
+    "birthday": "September 8",
+    "debutDate": "August 14, 2020",
+    "height": "166 cm",
+    "unit": "hololive 5th Generation"
+  },
+  "omaru-polka": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/12/Omaru-Polka_pr-img_01.png",
+    "profileQuote": "“Is Polka on the dot? Yes, she is!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCK9V2B22uJYu3N7eR_BT9QA",
+    "xHandle": "@omarupolka",
+    "xUrl": "https://twitter.com/omarupolka",
+    "birthday": "January 30",
+    "debutDate": "August 16, 2020",
+    "height": "153 cm",
+    "unit": "hololive 5th Generation"
+  },
+  "la-darknesss": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/La-Darknesss_pr-img_01.png",
+    "profileQuote": "“See me, hear me, all of you!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCENwRMx5Yh42zWpzURebzTw",
+    "xHandle": "@LaplusDarknesss",
+    "xUrl": "https://twitter.com/LaplusDarknesss",
+    "birthday": "May 25",
+    "debutDate": "November 26, 2021",
+    "height": "139 cm",
+    "unit": "holoX"
+  },
+  "takane-lui": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/08/Takane-Lui_pr-img_01.png",
+    "profileQuote": "“Did I Luive you waiting!?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCs9_O1tRPMQTHQ-N_L6FU2g",
+    "xHandle": "@takanelui",
+    "xUrl": "https://twitter.com/takanelui",
+    "birthday": "June 11",
+    "debutDate": "November 27, 2021",
+    "height": "161 cm",
+    "unit": "holoX"
+  },
+  "hakui-koyori": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Hakui-Koyori_pr-img_01.png",
+    "profileQuote": "“The brain of holoX! My name is Koyori Hakui!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC6eWCld0KwmyHFbAqK3V-Rw",
+    "xHandle": "@hakuikoyori",
+    "xUrl": "https://twitter.com/hakuikoyori",
+    "birthday": "March 15",
+    "debutDate": "November 28, 2021",
+    "height": "153 cm",
+    "unit": "holoX"
+  },
+  "kazama-iroha": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Kazama-Iroha_pr-img_01.png",
+    "profileQuote": "“Secret Society holoX’s insurance policy, Kazama Iroha here, I daresay!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC_vMYWcDjmfdpH6r4TTn1MQ",
+    "xHandle": "@kazamairohach",
+    "xUrl": "https://twitter.com/kazamairohach",
+    "birthday": "June 18",
+    "debutDate": "November 30, 2021",
+    "height": "156 cm",
+    "unit": "holoX"
+  },
+  "sakamata-chloe": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/09/Sakamata-Chloe_pr-img_01.png",
+    "profileQuote": "“Chomp, chomp, chooomp!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCIBY1ollUsauvVi4hW4cumw",
+    "xHandle": "@sakamatachloe",
+    "xUrl": "https://twitter.com/sakamatachloe",
+    "birthday": "May 18",
+    "debutDate": "November 29, 2021",
+    "height": "148 cm",
+    "unit": "holoX"
+  },
+  "ayunda-risu": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Ayunda-Risu_pr-img_01.webp",
+    "profileQuote": "“Hewwrroo everyone ~!” “Purupuru ganbari Risu ~!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCOyYb1c43VlX9rc_lT6NKQw",
+    "xHandle": "@ayunda_risu",
+    "xUrl": "https://twitter.com/ayunda_risu",
+    "birthday": "January 15",
+    "debutDate": "April 10, 2020",
+    "height": "153 cm",
+    "unit": "hololive Indonesia"
+  },
+  "moona-hoshinova": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Moona-Hoshinova_pr-img_01.webp",
+    "profileQuote": "“Moon Moon~ Moona Dayo!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCP0BspO_AMEe3aQqqpo89Dg",
+    "xHandle": "@moonahoshinova",
+    "xUrl": "https://twitter.com/moonahoshinova",
+    "birthday": "February 15",
+    "debutDate": "April 11, 2020",
+    "height": "165 cm",
+    "unit": "hololive Indonesia"
+  },
+  "airani-iofifteen": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Airani-Iofifteen_pr-img_01.webp",
+    "profileQuote": "“IOFORIA~! OBISA!” “Pagi semua! I’m your beloved smart alien iofi from hololive Indonesia, nice to meet you!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCAoy6rzhSf4ydcYjJw3WoVg",
+    "xHandle": "@airaniiofifteen",
+    "xUrl": "https://twitter.com/airaniiofifteen",
+    "birthday": "July 15",
+    "debutDate": "April 12, 2020",
+    "height": "150 cm",
+    "unit": "hololive Indonesia"
+  },
+  "kureiji-ollie": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Kureiji-Ollie_pr-img_01.png",
+    "profileQuote": "“ZOMBANWA!! SUPER KAWAII ZOMBIE IDOL, KU KU KU KUREIJI OLLIE DESU~!!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCYz_5n-uDuChHtLo7My1HnQ",
+    "xHandle": "@kureijiollie",
+    "xUrl": "https://twitter.com/kureijiollie",
+    "birthday": "October 13",
+    "debutDate": "December 4, 2020",
+    "height": "162 cm",
+    "unit": "hololive Indonesia"
+  },
+  "anya-melfissa": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Anya-Melfissa_pr-img_01.png",
+    "profileQuote": "“Good day! This is Anya Melfissa from hololive ID 2nd Generation.”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC727SQYUvx5pDDGQpTICNWg",
+    "xHandle": "@anyamelfissa",
+    "xUrl": "https://twitter.com/anyamelfissa",
+    "birthday": "March 12",
+    "debutDate": "December 5, 2020",
+    "height": "147 cm",
+    "unit": "hololive Indonesia"
+  },
+  "pavolia-reine": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Pavolia-Reine_pr-img_01.png",
+    "profileQuote": "“Perhatian, sang putri merak yang tertiup angin, aku Pavolia Reine dari hololive ID.”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UChgTyjG-pdNvxxhdsXfHQ5Q",
+    "xHandle": "@pavoliareine",
+    "xUrl": "https://twitter.com/pavoliareine",
+    "birthday": "September 9",
+    "debutDate": "December 6, 2020",
+    "height": "172 cm",
+    "unit": "hololive Indonesia"
+  },
+  "vestia-zeta": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Vestia-Zeta_pr-img_01.webp",
+    "profileQuote": "“A a a! Mission Sutaato! Aku Vestia Zeta dari holoID gen 3!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCTvHWSfBZgtxE4sILOaurIQ",
+    "xHandle": "@vestiazeta",
+    "xUrl": "https://twitter.com/vestiazeta",
+    "birthday": "November 7",
+    "debutDate": "March 25, 2022",
+    "height": "155 cm",
+    "unit": "hololive Indonesia"
+  },
+  "kaela-kovalskia": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Kaela-Kovalskia_pr-img_01.webp",
+    "profileQuote": "“Aku Kaela, dari holoID gen 3!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCZLZ8Jjx_RN2CXloOmgTHVg",
+    "xHandle": "@kaelakovalskia",
+    "xUrl": "https://twitter.com/kaelakovalskia",
+    "birthday": "August 30",
+    "debutDate": "March 26, 2022",
+    "height": "173 cm",
+    "unit": "hololive Indonesia"
+  },
+  "kobo-kanaeru": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Kobo-Kanaeru_pr-img_01.webp",
+    "profileQuote": "“Bokobokobo Kobo Kanaeru at your service!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCjLEmnpCNeisMxy134KPwWw",
+    "xHandle": "@kobokanaeru",
+    "xUrl": "https://twitter.com/kobokanaeru",
+    "birthday": "December 12",
+    "debutDate": "March 27, 2022",
+    "height": "150 cm",
+    "unit": "hololive Indonesia"
+  },
+  "mori-calliope": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Mori-Calliope_pr-img_01.webp",
+    "profileQuote": "“Dead Beats, listen up! Your Mori's been working hard for you!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCL_qhgtOy0dy1Agp8vkySQg",
+    "xHandle": "@moricalliope",
+    "xUrl": "https://twitter.com/moricalliope",
+    "birthday": "April 4",
+    "debutDate": "September 12, 2020",
+    "height": "167 cm",
+    "unit": "hololive English -Myth-"
+  },
+  "takanashi-kiara": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Takanashi-Kiara_pr-img_01.webp",
+    "profileQuote": "“Kikkeriki!!! Welcome to KFP, are you here to order or to apply for a job?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCHsx4Hqa-1ORjQTh9TYDhww",
+    "xHandle": "@takanashikiara",
+    "xUrl": "https://twitter.com/takanashikiara",
+    "birthday": "July 6",
+    "debutDate": "September 12, 2020",
+    "height": "165 cm",
+    "unit": "hololive English -Myth-"
+  },
+  "ninomae-inanis": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Ninomae-Inanis_pr-img_01.webp",
+    "profileQuote": "“Good morning, afternoon, evening! Hope you're having a WAHnderful day!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCMwGHR0BTZuLsmjY_NT5Pwg",
+    "xHandle": "@ninomaeinanis",
+    "xUrl": "https://twitter.com/ninomaeinanis",
+    "birthday": "May 20",
+    "debutDate": "September 13, 2020",
+    "height": "157 cm",
+    "unit": "hololive English -Myth-"
+  },
+  "watson-amelia": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Watson-Amelia_pr-img_01.png",
+    "profileQuote": "“Test test, Hello~ Amelia Watson! #1 Detective at your service!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCyl1z3jo3XHR1riLFKG5UAg",
+    "xHandle": "@watsonameliaEN",
+    "xUrl": "https://twitter.com/watsonameliaEN",
+    "birthday": "January 6",
+    "debutDate": "September 13, 2020",
+    "height": "150 cm",
+    "unit": "hololive English -Myth-"
+  },
+  "irys": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/IRyS_pr-img_01.webp",
+    "profileQuote": "“HiRyS, it’s IRyS! Your seiso nephilim here to fill the world with hopium!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC8rcEBzJSleTkf_-agPM20g",
+    "xHandle": "@irys_en",
+    "xUrl": "https://twitter.com/irys_en",
+    "birthday": "March 7",
+    "debutDate": "July 11, 2021",
+    "height": "162 cm",
+    "unit": "hololive English -Promise-"
+  },
+  "ouro-kronii": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Ouro-Kronii_pr-img_05.webp",
+    "profileQuote": "“Kroniichiwa! It's me, perfection. Also synonymous for Ouro Kronii!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCmbs8T6MWqUHP1tIQvSgKrg",
+    "xHandle": "@ourokronii",
+    "xUrl": "https://twitter.com/ourokronii",
+    "birthday": "March 14",
+    "debutDate": "August 23, 2021",
+    "height": "168 cm",
+    "unit": "hololive English -Promise-"
+  },
+  "hakos-baelz": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Hakos-Baelz_pr-img_01.png",
+    "profileQuote": "“WAZZUP!! It's your worldwide Rat Idol --- Hakos Baelz!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCgmPnx-EEeOrZSg5Tiw7ZRQ",
+    "xHandle": "@hakosbaelz",
+    "xUrl": "https://twitter.com/hakosbaelz",
+    "birthday": "February 29",
+    "debutDate": "August 23, 2021",
+    "height": "149 cm",
+    "unit": "hololive English -Promise-"
+  },
+  "shiori-novella": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Shiori-Novella_pr-img_01.webp",
+    "profileQuote": "“Don't you think that's a wonderful story?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCgnfPPb9JI3e9A4cXHnWbyg",
+    "xHandle": "@shiorinovella",
+    "xUrl": "https://twitter.com/shiorinovella",
+    "birthday": "May 2",
+    "debutDate": "July 30, 2023",
+    "height": "163 cm",
+    "unit": "hololive English -Advent-"
+  },
+  "koseki-bijou": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Koseki-Bijou_pr-img_01.png",
+    "profileQuote": "“I hope you'll feel my radiance!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC9p_lqQ0FEDz327Vgf5JwqA",
+    "xHandle": "@kosekibijou",
+    "xUrl": "https://twitter.com/kosekibijou",
+    "birthday": "April 14",
+    "debutDate": "July 30, 2023",
+    "height": "140 cm",
+    "unit": "hololive English -Advent-"
+  },
+  "nerissa-ravencroft": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Nerissa-Ravencroft_pr-img_01.webp",
+    "profileQuote": "“Ah, the beautiful resonance of idol songs...”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC_sFNM0z0MWm9A6WlKPuMMg",
+    "xHandle": "@nerissa_en",
+    "xUrl": "https://twitter.com/nerissa_en",
+    "birthday": "November 21",
+    "debutDate": "July 31, 2023",
+    "height": "175 cm",
+    "unit": "hololive English -Advent-"
+  },
+  "fuwawa-abyssgard": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Fuwawa-Abyssgard_pr-img_01.webp",
+    "profileQuote": "“How about we get you all nice and fluffy~?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCt9H_RpQzhxzlyBxFqrdHqA",
+    "xHandle": "@fuwamoco_en",
+    "xUrl": "https://twitter.com/fuwamoco_en",
+    "birthday": "February 1",
+    "debutDate": "July 31, 2023",
+    "height": "155 cm",
+    "unit": "hololive English -Advent-"
+  },
+  "mococo-abyssgard": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Mococo-Abyssgard_pr-img_01.webp",
+    "profileQuote": "“Ehehe, it's play time, whether you're ready or not!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCt9H_RpQzhxzlyBxFqrdHqA",
+    "xHandle": "@fuwamoco_en",
+    "xUrl": "https://twitter.com/fuwamoco_en",
+    "birthday": "February 2",
+    "debutDate": "July 31, 2023",
+    "height": "155 cm",
+    "unit": "hololive English -Advent-"
+  },
+  "elizabeth-rose-bloodflame": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Elizabeth-Rose-Bloodflame_pr-img_01.webp",
+    "profileQuote": "“Let my voice be your strength.”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCW5uhrG1eCBYditmhL0Ykjw",
+    "xHandle": "@ERBloodflame",
+    "xUrl": "https://x.com/ERBloodflame",
+    "birthday": "April 25",
+    "debutDate": "June 22, 2024",
+    "height": "171 cm",
+    "unit": "hololive English -Justice-"
+  },
+  "gigi-murin": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Gigi-Murin_pr-img_01.webp",
+    "profileQuote": "“Huh? But it was funny! Don't get mad at me!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCDHABijvPBnJm7F-KlNME3w",
+    "xHandle": "@gigimurin",
+    "xUrl": "https://x.com/gigimurin",
+    "birthday": "October 18",
+    "debutDate": "June 22, 2024",
+    "height": "153 cm",
+    "unit": "hololive English -Justice-"
+  },
+  "cecilia-immergreen": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Cecilia-Immergreen_pr-img_01.png",
+    "profileQuote": "“I came up with a new melody. Would you like to listen?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCvN5h1ShZtc7nly3pezRayg",
+    "xHandle": "@ceciliaimgreen",
+    "xUrl": "https://x.com/ceciliaimgreen",
+    "birthday": "November 11",
+    "debutDate": "June 23, 2024",
+    "height": "162 cm",
+    "unit": "hololive English -Justice-"
+  },
+  "raora-panthera": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Raora-Panthera_pr-img_01.png",
+    "profileQuote": "“Woah, this place looks delicious! Let's go check it out!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCl69AEx4MdqMZH7Jtsm7Tig",
+    "xHandle": "@raorapanthera",
+    "xUrl": "https://x.com/raorapanthera",
+    "birthday": "May 11",
+    "debutDate": "June 23, 2024",
+    "height": "155 cm",
+    "unit": "hololive English -Justice-"
+  },
+  "otonose-kanade": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Otonose-Kanade_pr-img_01_a.png",
+    "profileQuote": "“Do-Re-Mi-Fa-So-La-Si-Do! From hololive DEV_IS, I am ReGLOSS's aspiring musician, Otonose Kanade!”",
+    "youtubeChannelUrl": "https://youtube.com/@OtonoseKanade",
+    "xHandle": "@otonosekanade",
+    "xUrl": "https://twitter.com/otonosekanade",
+    "birthday": "April 20",
+    "debutDate": "September 9, 2023",
+    "height": "153 cm",
+    "unit": "ReGLOSS"
+  },
+  "ichijou-ririka": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Ichijou-Ririka_pr-img_01_a.png",
+    "profileQuote": "“Cute! Positive! Genius! From hololive DEV_IS, I am ReGLOSS's Ichijou Ririka!”",
+    "youtubeChannelUrl": "https://www.youtube.com/@IchijouRirika",
+    "xHandle": "@ichijouririka",
+    "xUrl": "https://twitter.com/ichijouririka",
+    "birthday": "May 12",
+    "debutDate": "September 9, 2023",
+    "height": "162 cm",
+    "unit": "ReGLOSS"
+  },
+  "juufuutei-raden": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Juufuutei-Raden_pr-img_01_a.webp",
+    "profileQuote": "“Come one, come all! From hololive DEV_IS, I am ReGLOSS's hype squad and jokester, and the Juufuutei Group's curtain raiser and apprentice, Juufuutei Raden!”",
+    "youtubeChannelUrl": "https://youtube.com/@JuufuuteiRaden",
+    "xHandle": "@juufuuteiraden",
+    "xUrl": "https://twitter.com/juufuuteiraden",
+    "birthday": "February 4",
+    "debutDate": "September 10, 2023",
+    "height": "159 cm",
+    "unit": "ReGLOSS"
+  },
+  "todoroki-hajime": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Todoroki-Hajime_pr-img_01_a.png",
+    "profileQuote": "“Vroom, vroom, vroom! From hololive DEV_IS, I am ReGLOSS's Nresident badass, Todoroki Hajime!”",
+    "youtubeChannelUrl": "https://www.youtube.com/@TodorokiHajime",
+    "xHandle": "@todoroki_hajime",
+    "xUrl": "https://twitter.com/todoroki_hajime",
+    "birthday": "June 7",
+    "debutDate": "September 10, 2023",
+    "height": "155 cm",
+    "unit": "ReGLOSS"
+  },
+  "isaki-riona": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Isaki-Riona_pr-img_01_a.png",
+    "profileQuote": "“I'll do what I like and live how I want to!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC9LSiN9hXI55svYEBrrK-tw",
+    "xHandle": "@isakiriona",
+    "xUrl": "https://x.com/isakiriona",
+    "birthday": "May 29",
+    "debutDate": "November 9, 2024",
+    "height": "160 cm",
+    "unit": "FLOW GLOW"
+  },
+  "koganei-niko": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Koganei-Niko_pr-img_01_a.png",
+    "profileQuote": "“If you can't bring yourself to a smile, just say my name!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCuI_opAVX6qbxZY-a-AxFuQ",
+    "xHandle": "@koganeiniko",
+    "xUrl": "https://x.com/koganeiniko",
+    "birthday": "July 25",
+    "debutDate": "November 9, 2024",
+    "height": "172 cm",
+    "unit": "FLOW GLOW"
+  },
+  "mizumiya-su": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Mizumiya-Su_pr-img_01_a.png",
+    "profileQuote": "“Is your Su-charge at 100%?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCjk2nKmHzgH5Xy-C5qYRd5A",
+    "xHandle": "@mizumiya_su",
+    "xUrl": "https://x.com/mizumiya_su",
+    "birthday": "June 16",
+    "debutDate": "November 9, 2024",
+    "height": "145 cm",
+    "unit": "FLOW GLOW"
+  },
+  "rindo-chihaya": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Rindo-Chihaya_pr-img_01_a.png",
+    "profileQuote": "“Won't you come with me to chase greater heights and see the scenery from high above?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCKMWFR6lAstLa7Vbf5dH7ig",
+    "xHandle": "@rindochihaya",
+    "xUrl": "https://x.com/rindochihaya",
+    "birthday": "July 8",
+    "debutDate": "November 9, 2024",
+    "height": "168 cm",
+    "unit": "FLOW GLOW"
+  },
+  "kikirara-vivi": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Kikirara-Vivi_pr-img_01_a.png",
+    "profileQuote": "“Hol'up, 'cus you're in for a transformation!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCGzTVXqMQHa4AgJVJIVvtDQ",
+    "xHandle": "@kikiraravivi",
+    "xUrl": "https://x.com/kikiraravivi",
+    "birthday": "August 27",
+    "debutDate": "November 9, 2024",
+    "height": "161 cm",
+    "unit": "FLOW GLOW"
+  },
+  "minato-aqua": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Minato-Aqua_pr-img_01.png",
+    "profileQuote": "“Kon-aqua to all! I'm Minato Aqua!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC1opHUrw8rvnsadT-iGp7Cg",
+    "xHandle": "@minatoaqua",
+    "xUrl": "https://twitter.com/minatoaqua",
+    "birthday": "December 1",
+    "debutDate": "August 8, 2018",
+    "height": "148 cm",
+    "unit": "hololive 2nd Generation"
+  },
+  "murasaki-shion": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Murasaki-Shion_pr-img_01.png",
+    "profileQuote": "“Hellshio! Murasaki Shion here!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCXTpFs_3PqI41qX2d9tL2Rw",
+    "xHandle": "@murasakishionch",
+    "xUrl": "https://twitter.com/murasakishionch",
+    "birthday": "December 8",
+    "debutDate": "August 17, 2018",
+    "height": "145 cm",
+    "unit": "hololive 2nd Generation"
+  },
+  "amane-kanata": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/07/Amane-Kanata_pr-img_01.png",
+    "profileQuote": "“Hey, you all came, ta!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCZlDXzGoo7d44bwdNObFacg",
+    "xHandle": "@amanekanatach",
+    "xUrl": "https://twitter.com/amanekanatach",
+    "birthday": "April 22",
+    "debutDate": "December 27, 2019",
+    "height": "149 cm",
+    "unit": "hololive 4th Generation"
+  },
+  "kiryu-coco": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Kiryu-Coco_pr-img_01.png",
+    "profileQuote": "“Good morning, everyone! Wake up, wake up, wake up!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCS9uQI-jC3DE0L4IpXyvr6w",
+    "xHandle": "@kiryucoco",
+    "xUrl": "https://twitter.com/kiryucoco",
+    "birthday": "June 17",
+    "debutDate": "December 28, 2019",
+    "height": "180 cm (7 m in dragon form)",
+    "unit": "hololive 4th Generation"
+  },
+  "gawr-gura": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/05/Gawr-Gura_pr-img_01.png",
+    "profileQuote": "“Domo!! Sa-me desu!! Have you had shark thoughts today?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCoSrY_IQQVpmIRZ9Xf-y93g",
+    "xHandle": "@gawrgura",
+    "xUrl": "https://twitter.com/gawrgura",
+    "birthday": "June 20",
+    "debutDate": "September 13, 2020",
+    "height": "141 cm",
+    "unit": "hololive English -Myth-"
+  },
+  "tsukumo-sana": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Tsukumo-Sana_pr-img_01.png",
+    "profileQuote": "Speaker of “Space”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCsUj0dszADCGbF3gNrQEuSQ",
+    "xHandle": "@tsukumosana",
+    "xUrl": "https://twitter.com/tsukumosana",
+    "birthday": "June 10",
+    "debutDate": "August 23, 2021",
+    "height": "169cm (With limiter, and without limiter 1697 840 000 000)",
+    "unit": "hololive English -Council-"
+  },
+  "ceres-fauna": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/10/Ceres-Fauna_pr-img_01.png",
+    "profileQuote": "“Konfauna~ Your gaming idol kirin Ceres Fauna is here!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCO_aKKYxn4tvrqPjcTzZ6EQ",
+    "xHandle": "@ceresfauna",
+    "xUrl": "https://twitter.com/ceresfauna",
+    "birthday": "March 21",
+    "debutDate": "August 23, 2021",
+    "height": "164 cm",
+    "unit": "hololive English -Promise-"
+  },
+  "nanashi-mumei": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/10/Nanashi-Mumei_pr-img_01.png",
+    "profileQuote": "“Oh hi! Hoo’s this? Nanashi Mumei!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC3n5uGu18FoCy23ggWWp8tA",
+    "xHandle": "@nanashimumei_en",
+    "xUrl": "https://twitter.com/nanashimumei_en",
+    "birthday": "August 4",
+    "debutDate": "August 23, 2021",
+    "height": "156 cm",
+    "unit": "hololive English -Promise-"
+  },
+  "hiodoshi-ao": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Hiodoshi-Ao_pr-img_01_a.png",
+    "profileQuote": "“Did you mistake me for some cutesy girl? Too bad! It was me, Ao-kun! From hololive DEV_IS, I'm ReGLOSS's resident tomboy, Hiodoshi Ao!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCMGfV7TVTmHhEErVJg1oHBQ",
+    "xHandle": "@hiodoshiao",
+    "xUrl": "https://twitter.com/hiodoshiao",
+    "birthday": "February 27",
+    "debutDate": "September 9, 2023",
+    "height": "171 cm",
+    "unit": "ReGLOSS"
+  }
+};

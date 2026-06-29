@@ -1,0 +1,13 @@
+Holoshelf Notice And License Summary
+
+Holoshelf is source-available freeware for personal, educational, and noncommercial use. It is provided at no charge and may not be sold, bundled with paid products or services, or used as part of a revenue-generating service without prior written permission from the copyright holders.
+
+Holoshelf is an unofficial fan project. It is not affiliated with, endorsed by, sponsored by, or approved by COVER Corporation, Hololive Production, Holodex, YouTube, or Google. Hololive names, talent names, images, channel metadata, music metadata, YouTube data, trademarks, APIs, and services belong to their respective owners.
+
+Holoshelf may include a bundled starter dataset derived from Holodex metadata, YouTube/YouTube Data API metadata and statistics, and cached Hololive talent images. Users can refresh their own local data from inside the app when they provide optional API keys in Settings.
+
+The Holoshelf bracket feature was inspired by Quizei: https://quizei.com/
+
+Uninstalling Holoshelf removes the installed app files. It does not delete your local user data at %APPDATA%\Holoshelf\data. This protects your ratings, playlists, tier boards, brackets, custom talents, API keys, and other personal state from accidental loss.
+
+Holoshelf is provided "as is", without warranty of any kind. See LICENSE.md and NOTICE.md in the project repository for the full license terms and notices.
