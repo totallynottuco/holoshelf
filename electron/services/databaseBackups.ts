@@ -12,6 +12,17 @@ export interface RollingDatabaseBackupResult {
   skippedReason?: string;
 }
 
+export interface RollingDatabaseBackupOptions {
+  force?: boolean;
+}
+
+export interface TimestampedDatabaseBackupResult {
+  created: boolean;
+  filePath: string | null;
+  reason: string;
+  skippedReason?: string;
+}
+
 const BACKUP_SLOTS = 3;
 
 function isValidSqliteDatabase(SQL: SqlJsApi, bytes: Buffer): boolean {
@@ -32,14 +43,51 @@ function isValidSqliteDatabase(SQL: SqlJsApi, bytes: Buffer): boolean {
   }
 }
 
+export function validateSqliteDatabaseFile(filePath: string, SQL: SqlJsApi): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  return isValidSqliteDatabase(SQL, fs.readFileSync(filePath));
+}
+
+function timestampForBackupName(date = new Date()): string {
+  return date
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z")
+    .replace(/[-:]/g, "")
+    .replace("T", "-")
+    .replace("Z", "");
+}
+
+function sanitizeBackupReason(reason: string): string {
+  return (
+    reason
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "manual"
+  );
+}
+
 export function createRollingDatabaseBackup(
   databasePath: string,
   backupDirectory: string,
   SQL: SqlJsApi,
-  reason: string
+  reason: string,
+  options: RollingDatabaseBackupOptions = {}
 ): RollingDatabaseBackupResult {
   if (!fs.existsSync(databasePath)) {
     return { created: false, filePath: null, reason, skippedReason: "database-missing" };
+  }
+
+  const newestBackup = path.join(backupDirectory, "holoshelf.autosave.1.sqlite");
+  if (!options.force && fs.existsSync(newestBackup)) {
+    const databaseStats = fs.statSync(databasePath);
+    const backupStats = fs.statSync(newestBackup);
+    if (backupStats.size === databaseStats.size && backupStats.mtimeMs >= databaseStats.mtimeMs) {
+      return { created: false, filePath: newestBackup, reason, skippedReason: "backup-current" };
+    }
   }
 
   const bytes = fs.readFileSync(databasePath);
@@ -62,8 +110,36 @@ export function createRollingDatabaseBackup(
     }
   }
 
-  const newestBackup = path.join(backupDirectory, "holoshelf.autosave.1.sqlite");
   fs.writeFileSync(newestBackup, bytes);
 
   return { created: true, filePath: newestBackup, reason };
+}
+
+export function createTimestampedDatabaseBackup(
+  databasePath: string,
+  backupDirectory: string,
+  SQL: SqlJsApi,
+  reason: string
+): TimestampedDatabaseBackupResult {
+  if (!fs.existsSync(databasePath)) {
+    return { created: false, filePath: null, reason, skippedReason: "database-missing" };
+  }
+
+  const bytes = fs.readFileSync(databasePath);
+  if (!isValidSqliteDatabase(SQL, bytes)) {
+    return { created: false, filePath: null, reason, skippedReason: "integrity-check-failed" };
+  }
+
+  fs.mkdirSync(backupDirectory, { recursive: true });
+
+  const baseName = `holoshelf.${sanitizeBackupReason(reason)}.${timestampForBackupName()}`;
+  let filePath = path.join(backupDirectory, `${baseName}.sqlite`);
+  let suffix = 2;
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(backupDirectory, `${baseName}-${suffix}.sqlite`);
+    suffix += 1;
+  }
+
+  fs.writeFileSync(filePath, bytes);
+  return { created: true, filePath, reason };
 }

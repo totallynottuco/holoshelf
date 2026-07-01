@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol, session, shell } from "electron";
+import { app, BrowserWindow, Menu, protocol, session, shell } from "electron";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -42,7 +42,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function resolveWindowIcon(): string {
-  return app.isPackaged ? path.join(process.resourcesPath, "icon.ico") : path.join(process.cwd(), "icon.ico");
+  return app.isPackaged ? path.join(process.resourcesPath, "ico.ico") : path.join(process.cwd(), "ico.ico");
 }
 
 function resolveRendererRoot(): string {
@@ -82,6 +82,25 @@ function registerAppProtocol(): void {
 
   protocol.handle("app", async (request) => {
     const url = new URL(request.url);
+
+    if (url.hostname === "holoshelf-assets") {
+      const assetName = path.basename(decodeURIComponent(url.pathname).replace(/^\/+/, ""));
+      if (assetName !== "ico.ico") {
+        return new Response("Not found", { status: 404 });
+      }
+
+      const iconPath = resolveWindowIcon();
+      try {
+        const contents = await fsp.readFile(iconPath);
+        return new Response(contents, {
+          headers: {
+            "content-type": getMimeType(iconPath)
+          }
+        });
+      } catch {
+        return new Response("Not found", { status: 404 });
+      }
+    }
 
     if (url.hostname === "holoshelf-data") {
       const relativeRequestPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
@@ -175,50 +194,8 @@ function shouldLogRendererConsole(level: number, message: string, sourceId: stri
   return true;
 }
 
-async function createMainWindow(): Promise<void> {
-  const paths = getAppPaths(app);
-  ensureAppPaths(paths);
-  writeAppLog(
-    `resolved paths dataDirectory=${paths.dataDirectory} databasePath=${paths.databasePath} backupDirectory=${paths.backupDirectory} dataLocationKind=${paths.dataLocationKind}`
-  );
-
-  const database = new DatabaseService(paths.databasePath, paths.backupDirectory);
-  await database.init();
-  database.upsertModuleManifests(trackerModules);
-  if (app.isPackaged) {
-    try {
-      await mergeBundledOfficialData({
-        database,
-        paths,
-        isPackaged: app.isPackaged,
-        log: writeAppLog
-      });
-    } catch (error) {
-      writeAppLog(
-        `[official-data] merge failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
-      );
-    }
-  }
-
-  const fetchScheduler = new FetchScheduler(database, createSourceAdapters());
-  const holodexMusicService = new HolodexMusicService(database);
-  const youtubeVideoStatsService = new YouTubeVideoStatsService(database);
-  const updateService = new UpdateService({ isPackaged: app.isPackaged });
-  installIpcHandlers({
-    appName: "Holoshelf",
-    dataDirectory: paths.dataDirectory,
-    databasePath: paths.databasePath,
-    backupDirectory: paths.backupDirectory,
-    dataLocationKind: paths.dataLocationKind,
-    hololiveImageDirectory: paths.hololiveImageDirectory,
-    database,
-    fetchScheduler,
-    holodexMusicService,
-    youtubeVideoStatsService,
-    updateService
-  });
-
-  mainWindow = new BrowserWindow({
+function createHoloshelfWindow(): BrowserWindow {
+  const window = new BrowserWindow({
     width: 1600,
     height: 900,
     minWidth: 1120,
@@ -226,6 +203,13 @@ async function createMainWindow(): Promise<void> {
     title: "Holoshelf",
     icon: resolveWindowIcon(),
     backgroundColor: "#101318",
+    autoHideMenuBar: true,
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#101318",
+      symbolColor: "#d7f4ff",
+      height: 28
+    },
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -233,16 +217,14 @@ async function createMainWindow(): Promise<void> {
       sandbox: true
     }
   });
-  const createdWindow = mainWindow;
+  const createdWindow = window;
   createdWindow.on("closed", () => {
     if (mainWindow === createdWindow) {
       mainWindow = null;
     }
   });
-  updateService.attachWindow(mainWindow);
-  updateService.initialize();
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
       if (parsed.protocol === "https:" || parsed.protocol === "http:") {
@@ -255,26 +237,130 @@ async function createMainWindow(): Promise<void> {
     return { action: "deny" };
   });
 
-  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+  createdWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     if (shouldLogRendererConsole(level, message, sourceId)) {
       writeAppLog(`renderer console level=${level} source=${sourceId}:${line} message=${message}`);
     }
   });
 
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+  createdWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     writeAppLog(`did-fail-load code=${errorCode} description=${errorDescription} url=${validatedURL}`);
   });
 
-  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     writeAppLog(`preload-error path=${preloadPath} error=${error.stack ?? error.message}`);
   });
 
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+  createdWindow.webContents.on("render-process-gone", (_event, details) => {
     writeAppLog(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
   });
 
+  return window;
+}
+
+async function loadStartupScreen(window: BrowserWindow): Promise<void> {
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Holoshelf</title>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: #101318;
+      color: #dff6ff;
+      font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      display: grid;
+      place-items: center;
+    }
+    .boot {
+      display: grid;
+      gap: 8px;
+      text-align: center;
+    }
+    strong {
+      font-size: 14px;
+      font-weight: 850;
+    }
+    span {
+      color: #8fcde0;
+      font-weight: 720;
+    }
+  </style>
+</head>
+<body>
+  <div class="boot">
+    <strong>Holoshelf</strong>
+    <span>Starting up</span>
+  </div>
+</body>
+</html>`;
+  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
+function scheduleBundledOfficialDataMerge(database: DatabaseService, paths: ReturnType<typeof getAppPaths>): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  setTimeout(() => {
+    void mergeBundledOfficialData({
+      database,
+      paths,
+      isPackaged: app.isPackaged,
+      log: writeAppLog
+    }).catch((error) => {
+      writeAppLog(`[official-data] merge failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    });
+  }, 1500);
+}
+
+async function createMainWindow(): Promise<void> {
+  const paths = getAppPaths(app);
+  mainWindow = createHoloshelfWindow();
+  await loadStartupScreen(mainWindow);
+
+  ensureAppPaths(paths);
+  writeAppLog(
+    `resolved paths dataDirectory=${paths.dataDirectory} databasePath=${paths.databasePath} backupDirectory=${paths.backupDirectory} dataLocationKind=${paths.dataLocationKind}`
+  );
+
+  const database = new DatabaseService(paths.databasePath, paths.backupDirectory);
+  await database.init();
+  database.upsertModuleManifests(trackerModules);
+
+  const fetchScheduler = new FetchScheduler(database, createSourceAdapters());
+  const holodexMusicService = new HolodexMusicService(database);
+  const youtubeVideoStatsService = new YouTubeVideoStatsService(database);
+  const updateService = new UpdateService({ isPackaged: app.isPackaged });
+  installIpcHandlers({
+    appName: "Holoshelf",
+    dataDirectory: paths.dataDirectory,
+    databasePath: paths.databasePath,
+    backupDirectory: paths.backupDirectory,
+    dataLocationKind: paths.dataLocationKind,
+    hololiveImageDirectory: paths.hololiveImageDirectory,
+    seedDirectory: paths.seedDirectory,
+    database,
+    fetchScheduler,
+    holodexMusicService,
+    youtubeVideoStatsService,
+    updateService,
+    restartApp() {
+      app.relaunch();
+      app.exit(0);
+    }
+  });
+  updateService.attachWindow(mainWindow);
+  updateService.initialize();
+
   if (app.isPackaged) {
     await mainWindow.loadURL("app://holoshelf/index.html");
+    scheduleBundledOfficialDataMerge(database, paths);
     void updateService.checkForUpdates();
   } else {
     await mainWindow.loadURL("http://127.0.0.1:5173");
@@ -283,6 +369,7 @@ async function createMainWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId("app.holoshelf");
+  Menu.setApplicationMenu(null);
   registerAppProtocol();
   registerYouTubeEmbedHeaders();
   await createMainWindow();

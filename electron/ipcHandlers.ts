@@ -10,7 +10,13 @@ import type {
   HololiveMusicVideoStatsRefreshResult,
   HololiveTierListData
 } from "../src/shared/contracts";
-import type { HololiveIconsRefreshResponse, HololiveRefreshProgressEvent, IpcChannelMap } from "../src/shared/ipc";
+import type {
+  HololiveIconsRefreshResponse,
+  HololiveRefreshProgressEvent,
+  HololiveUndoKind,
+  IpcChannelMap,
+  UndoableResponse
+} from "../src/shared/ipc";
 import { trackerModules } from "../src/modules/registry";
 import type { DatabaseService } from "./services/database";
 import type { FetchScheduler } from "./services/fetchScheduler";
@@ -205,6 +211,9 @@ const hololiveMusicLibrarySchema = z
     query: z.string().optional().nullable(),
     topicId: z.enum(["Original_Song", "Music_Cover"]).optional().nullable(),
     marker: z.enum(["favorite", "like", "neutral", "dislike"]).optional().nullable(),
+    sort: z.enum(["newest", "oldest", "views_desc", "views_asc"]).optional().nullable(),
+    talentId: z.string().trim().min(1).optional().nullable(),
+    collabScope: z.enum(["all", "solo"]).optional().nullable(),
     offset: z.number().int().min(0).optional().nullable(),
     limit: z.number().int().positive().max(100).optional().nullable()
   })
@@ -219,6 +228,13 @@ const hololiveMusicExcludeSchema = z.object({
   youtubeVideoId: z.string().trim().min(1),
   title: z.string().optional().nullable(),
   sourceUrl: z.string().optional().nullable()
+});
+
+const hololiveMusicUnavailableSchema = z.object({
+  youtubeVideoId: z.string().trim().min(1),
+  title: z.string().optional().nullable(),
+  sourceUrl: z.string().optional().nullable(),
+  reason: z.string().optional().nullable()
 });
 
 const hololiveChannelsListSchema = z
@@ -280,6 +296,11 @@ const hololivePlayerPlaylistItemAddSchema = z.object({
   position: z.number().int().min(0).optional().nullable()
 });
 
+const hololivePlayerPlaylistItemsAddSchema = z.object({
+  playlistId: z.string().trim().min(1),
+  youtubeVideoIds: z.array(z.string().trim().min(1)).min(1).max(100)
+});
+
 const hololivePlayerPlaylistItemRemoveSchema = z.object({
   itemId: z.string().trim().min(1)
 });
@@ -301,6 +322,15 @@ const hololivePlayerPlayVideoSchema = z.object({
 const hololivePlayerQueueAddSchema = z.object({
   youtubeVideoId: z.string().trim().min(1),
   placement: z.enum(["now", "next", "end"])
+});
+
+const hololivePlayerQueueBulkAddSchema = z.object({
+  youtubeVideoIds: z.array(z.string().trim().min(1)).min(1).max(100),
+  placement: z.enum(["now", "next", "end"])
+});
+
+const hololivePlayerVisiblePlaySchema = z.object({
+  youtubeVideoIds: z.array(z.string().trim().min(1)).min(1).max(100)
 });
 
 const hololivePlayerQueueRemoveSchema = z.object({
@@ -329,9 +359,12 @@ const hololivePlayerStateUpdateSchema = z.object({
 const hololiveBracketSizeSchema = z.enum(["RO16", "RO32", "RO64", "RO128", "RO256"]);
 const hololiveBracketGenerationStyleSchema = z.enum(["top_songs", "random_songs"]);
 const hololiveMusicTopicSchema = z.enum(["Original_Song", "Music_Cover"]);
+const hololiveBracketRatingBucketSchema = z.enum(["unrated", "favorite", "like", "neutral", "dislike"]);
 const hololiveBracketGenerationFiltersSchema = z.object({
   excludeDisliked: z.boolean().optional(),
   excludeRated: z.boolean().optional(),
+  ratingBuckets: z.array(hololiveBracketRatingBucketSchema).optional(),
+  includedTalentIds: z.array(z.string().trim().min(1)).optional(),
   excludeTopViewedPerTalent: z.boolean().optional(),
   excludePreviousChampions: z.boolean().optional(),
   excludePreviousFinalists: z.boolean().optional(),
@@ -377,6 +410,10 @@ const hololiveBracketArchiveDeleteSchema = z.object({
   archiveId: z.string().trim().min(1)
 });
 
+const hololiveUndoApplySchema = z.object({
+  token: z.string().trim().min(1)
+});
+
 export interface IpcContext {
   appName: string;
   dataDirectory: string;
@@ -384,11 +421,13 @@ export interface IpcContext {
   backupDirectory: string;
   dataLocationKind: "appData" | "dev" | "custom";
   hololiveImageDirectory: string;
+  seedDirectory: string | null;
   database: DatabaseService;
   fetchScheduler: FetchScheduler;
   holodexMusicService: HolodexMusicService;
   youtubeVideoStatsService: YouTubeVideoStatsService;
   updateService: UpdateService;
+  restartApp: () => void;
 }
 
 function collectHololiveMusicVideoIdsForIdols(context: IpcContext, idolIds: string[]): string[] {
@@ -409,6 +448,7 @@ function emptyVideoStatsRefresh(): HololiveMusicVideoStatsRefreshResult {
     requestedVideos: 0,
     updatedVideos: 0,
     missingVideos: 0,
+    unavailableVideos: 0,
     failedBatches: 0,
     batches: 0,
     fetchedAt: new Date().toISOString()
@@ -456,6 +496,30 @@ function safePngFileName(fileName: string): string {
   return `${withoutExtension}.png`;
 }
 
+function withUndo<TData>(context: IpcContext, kind: HololiveUndoKind, data: TData): UndoableResponse<TData> {
+  const undo = context.database.consumeLatestHololiveUndo(kind);
+  return {
+    data,
+    undoToken: undo?.undoToken ?? null,
+    undoLabel: undo?.undoLabel ?? null
+  };
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restartAfterDataChange(context: IpcContext): void {
+  setTimeout(() => {
+    context.restartApp();
+  }, 250);
+}
+
 export function installIpcHandlers(context: IpcContext): void {
   handle("app:bootstrap", async (): Promise<AppBootstrap> => ({
     appName: context.appName,
@@ -464,8 +528,13 @@ export function installIpcHandlers(context: IpcContext): void {
     backupDirectory: context.backupDirectory,
     dataLocationKind: context.dataLocationKind,
     modules: trackerModules,
-    sourceHealth: context.database.getSourceHealth(),
-    stats: context.database.getStats()
+    sourceHealth: [],
+    stats: {
+      catalogItems: 0,
+      trackedEntries: 0,
+      fetchJobsQueued: 0,
+      coversCached: 0
+    }
   }));
 
   handle("settings:get", async () => context.database.getSettings());
@@ -506,6 +575,46 @@ export function installIpcHandlers(context: IpcContext): void {
       throw new Error(openError);
     }
     return { opened: true };
+  });
+
+  handle("app:data-backup:create", async () => context.database.createManualDatabaseBackup("manual"));
+
+  handle("app:data-backup:restore", async () => {
+    const result = await dialog.showOpenDialog({
+      title: "Restore Holoshelf Backup",
+      defaultPath: context.backupDirectory,
+      filters: [{ name: "SQLite databases", extensions: ["sqlite", "db"] }],
+      properties: ["openFile"]
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { restored: false, backupFilePath: null, restoredFromPath: null, requiresRestart: false };
+    }
+
+    const restoredFromPath = result.filePaths[0];
+    const replacement = context.database.replaceDatabaseFromFile(restoredFromPath, "restore");
+    restartAfterDataChange(context);
+    return {
+      restored: true,
+      backupFilePath: replacement.backup.filePath,
+      restoredFromPath,
+      requiresRestart: true
+    };
+  });
+
+  handle("app:data:reset", async () => {
+    const seedDatabasePath = context.seedDirectory ? path.join(context.seedDirectory, "holoshelf-template.sqlite") : "";
+    if (!seedDatabasePath || !(await pathExists(seedDatabasePath))) {
+      throw new Error("Bundled seed database is missing.");
+    }
+
+    const replacement = context.database.replaceDatabaseFromFile(seedDatabasePath, "reset");
+    restartAfterDataChange(context);
+    return {
+      reset: true,
+      backupFilePath: replacement.backup.filePath,
+      requiresRestart: true
+    };
   });
 
   handle("catalog:list", async (_event, payload) => {
@@ -577,13 +686,13 @@ export function installIpcHandlers(context: IpcContext): void {
   handle("hololive:board:delete", async (_event, payload) => {
     const input = hololiveBoardDeleteSchema.parse(payload);
     const fallbackBoardId = context.database.deleteHololiveTierBoard(input.boardId);
-    return getHololiveTierData(context, fallbackBoardId);
+    return withUndo(context, "tier-board-delete", getHololiveTierData(context, fallbackBoardId));
   });
 
   handle("hololive:board:clear", async (_event, payload) => {
     const input = hololiveBoardClearSchema.parse(payload);
     context.database.clearHololiveTierBoard(input.boardId);
-    return getHololiveTierData(context, input.boardId);
+    return withUndo(context, "tier-board-clear", getHololiveTierData(context, input.boardId));
   });
 
   handle("hololive:tier:create", async (_event, payload) => {
@@ -756,7 +865,12 @@ export function installIpcHandlers(context: IpcContext): void {
 
   handle("hololive:music:exclude", async (_event, payload) => {
     const input = hololiveMusicExcludeSchema.parse(payload);
-    return context.database.excludeHololiveMusicVideo(input);
+    return withUndo(context, "music-exclusion", context.database.excludeHololiveMusicVideo(input));
+  });
+
+  handle("hololive:music:mark-unavailable", async (_event, payload) => {
+    const input = hololiveMusicUnavailableSchema.parse(payload);
+    return context.database.markHololiveMusicVideoUnavailable(input);
   });
 
   handle("hololive:channels:refresh", async () => context.holodexMusicService.refreshChannels());
@@ -869,9 +983,14 @@ export function installIpcHandlers(context: IpcContext): void {
     return context.database.addHololiveMusicPlaylistItem(input);
   });
 
+  handle("hololive:player:playlist-items:add", async (_event, payload) => {
+    const input = hololivePlayerPlaylistItemsAddSchema.parse(payload);
+    return context.database.addHololiveMusicPlaylistItems(input);
+  });
+
   handle("hololive:player:playlist-item:remove", async (_event, payload) => {
     const input = hololivePlayerPlaylistItemRemoveSchema.parse(payload);
-    return context.database.removeHololiveMusicPlaylistItem(input.itemId);
+    return withUndo(context, "playlist-item-remove", context.database.removeHololiveMusicPlaylistItem(input.itemId));
   });
 
   handle("hololive:player:playlist-item:reorder", async (_event, payload) => {
@@ -894,9 +1013,19 @@ export function installIpcHandlers(context: IpcContext): void {
     return context.database.addHololiveMusicQueueItem(input);
   });
 
+  handle("hololive:player:queue:bulk-add", async (_event, payload) => {
+    const input = hololivePlayerQueueBulkAddSchema.parse(payload);
+    return context.database.addHololiveMusicQueueItems(input);
+  });
+
+  handle("hololive:player:visible:play", async (_event, payload) => {
+    const input = hololivePlayerVisiblePlaySchema.parse(payload);
+    return context.database.playHololiveMusicVisibleVideos(input.youtubeVideoIds);
+  });
+
   handle("hololive:player:queue:remove", async (_event, payload) => {
     const input = hololivePlayerQueueRemoveSchema.parse(payload);
-    return context.database.removeHololiveMusicQueueItem(input.itemId);
+    return withUndo(context, "queue-item-remove", context.database.removeHololiveMusicQueueItem(input.itemId));
   });
 
   handle("hololive:player:queue:reorder", async (_event, payload) => {
@@ -952,7 +1081,12 @@ export function installIpcHandlers(context: IpcContext): void {
 
   handle("hololive:brackets:archives:delete", async (_event, payload) => {
     const input = hololiveBracketArchiveDeleteSchema.parse(payload);
-    return context.database.deleteHololiveBracketArchive(input.archiveId);
+    return withUndo(context, "bracket-archive-delete", context.database.deleteHololiveBracketArchive(input.archiveId));
+  });
+
+  handle("hololive:undo:apply", async (_event, payload) => {
+    const input = hololiveUndoApplySchema.parse(payload);
+    return context.database.applyHololiveUndo(input.token);
   });
 
   handle("hololive:brackets:stats", async () => context.database.getHololiveBracketStatsOverview());

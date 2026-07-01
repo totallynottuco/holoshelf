@@ -173,6 +173,121 @@ describe("DatabaseService", () => {
     ).toEqual([{ name: "hololive_bracket_archive_matches" }]);
   });
 
+  it("sorts the Hololive music library before pagination", async () => {
+    const database = await createTempDatabase();
+    const seedSong = (suffix: string, publishedAt: string, viewCount: number) => {
+      seedHololiveBracketSong(database, {
+        idolId: `sort-${suffix}`,
+        idolName: `Sort ${suffix}`,
+        channelId: `sort-channel-${suffix}`,
+        topicId: "Original_Song",
+        suffix,
+        viewCount,
+        publishedAt
+      });
+      return `sort-${suffix}-${suffix}`;
+    };
+    const older = seedSong("older", "2024-01-01T00:00:00.000Z", 500);
+    const newest = seedSong("newest", "2026-01-01T00:00:00.000Z", 100);
+    const middle = seedSong("middle", "2025-01-01T00:00:00.000Z", 1_000);
+    const missingDate = seedSong("missing-date", "2027-01-01T00:00:00.000Z", 700);
+    const missingViews = seedSong("missing-views", "2023-01-01T00:00:00.000Z", 2_000);
+    database.run("UPDATE hololive_music_videos SET published_at = NULL WHERE youtube_video_id = ?", [missingDate]);
+    database.run("DELETE FROM hololive_music_video_stats WHERE youtube_video_id = ?", [missingViews]);
+
+    const videoIds = (sort?: "newest" | "oldest" | "views_desc" | "views_asc", offset = 0, limit = 10) =>
+      database.listHololiveMusicLibrary({ sort, offset, limit }).rows.map((row) => row.youtubeVideoId);
+
+    expect(videoIds()).toEqual([newest, middle, older, missingViews, missingDate]);
+    expect(videoIds("oldest")).toEqual([missingViews, older, middle, newest, missingDate]);
+    expect(videoIds("views_desc")).toEqual([middle, missingDate, older, newest, missingViews]);
+    expect(videoIds("views_asc")).toEqual([newest, older, missingDate, middle, missingViews]);
+    expect(videoIds("views_desc", 1, 2)).toEqual([missingDate, older]);
+  });
+
+  it("filters the Hololive music library by talent appearance and collaboration scope before pagination", async () => {
+    const database = await createTempDatabase();
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "solo",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z"
+    });
+    seedHololiveBracketSong(database, {
+      idolId: "gawr-gura",
+      idolName: "Gawr Gura",
+      channelId: "gura-channel",
+      topicId: "Original_Song",
+      suffix: "featured",
+      viewCount: 90,
+      publishedAt: "2026-01-02T00:00:00.000Z"
+    });
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "group-channel",
+      topicId: "Music_Cover",
+      suffix: "group",
+      viewCount: 80,
+      publishedAt: "2026-01-03T00:00:00.000Z"
+    });
+    database.run(
+      `INSERT OR REPLACE INTO hololive_channels
+         (id, name, english_name, type, org, group_name, photo_url, twitter, video_count, subscriber_count, clip_count,
+          published_at, inactive, kind, main_idol_ids_json, topic_idol_ids_json, linked_idol_ids_json, updated_at)
+       VALUES ('group-channel', 'Group Channel', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          NULL, 0, 'group', '[]', '[]', '[]', ?)`,
+      [new Date().toISOString()]
+    );
+    database.run(
+      `UPDATE hololive_music_videos
+       SET participants_json = ?, participant_idol_ids_json = ?, featured_idol_ids_json = ?
+       WHERE youtube_video_id = ?`,
+      [
+        JSON.stringify([
+          { idolId: "gawr-gura", role: "primary", channelId: "gura-channel" },
+          { idolId: "tokino-sora", role: "collab", channelId: "sora-channel" }
+        ]),
+        JSON.stringify(["gawr-gura", "tokino-sora"]),
+        JSON.stringify(["tokino-sora"]),
+        "gawr-gura-featured"
+      ]
+    );
+
+    const ids = (collabScope?: "all" | "solo") =>
+      database
+        .listHololiveMusicLibrary({ talentId: "tokino-sora", collabScope, sort: "oldest", limit: 10 })
+        .rows.map((row) => row.youtubeVideoId);
+
+    expect(ids()).toEqual(["tokino-sora-solo", "gawr-gura-featured", "tokino-sora-group"]);
+    expect(ids("solo")).toEqual(["tokino-sora-solo"]);
+  });
+
+  it("creates manual backups and replaces the database only from valid SQLite files", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-manual-backup-"));
+    const databasePath = path.join(dir, "test.sqlite");
+    const replacementPath = path.join(dir, "replacement.sqlite");
+    const database = await createTempDatabaseAt(databasePath);
+    database.setSetting("data-safety.test", "original");
+
+    const backup = database.createManualDatabaseBackup("manual");
+    expect(backup.created).toBe(true);
+    expect(backup.filePath ? fs.existsSync(backup.filePath) : false).toBe(true);
+
+    const replacement = await createTempDatabaseAt(replacementPath);
+    replacement.setSetting("data-safety.test", "replacement");
+    database.replaceDatabaseFromFile(replacementPath, "restore");
+
+    const reopened = await createTempDatabaseAt(databasePath);
+    expect(reopened.getSettings()["data-safety.test"]).toBe("replacement");
+    expect(() => reopened.replaceDatabaseFromFile(path.join(dir, "missing.sqlite"), "restore")).toThrow(
+      "The selected file is not a valid Holoshelf SQLite database."
+    );
+  });
+
   it("creates a rolling autosave before startup migration work when a database already exists", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-startup-backup-"));
     const databasePath = path.join(dir, "test.sqlite");
@@ -351,7 +466,13 @@ describe("DatabaseService", () => {
       top8Count: 1,
       top16Count: 1
     });
+    expect(stats.topSongsByFinalsWithoutTitle[0]).toMatchObject({
+      finalistCount: 1,
+      championCount: 0
+    });
+    expect(stats.topSongsByFirstRoundEliminations[0]?.firstRoundEliminations).toBe(1);
     expect(stats.topTalents[0]?.wins).toBeGreaterThan(0);
+    expect(stats.topTalentsByTop4[0]?.top4Count).toBeGreaterThan(0);
 
     const reset = database.resetHololiveBracket(bracket.id);
     const recompleted = completeBracket(database, reset);
@@ -364,6 +485,8 @@ describe("DatabaseService", () => {
     expect(database.getHololiveBracketStatsOverview().totals.completedBrackets).toBe(1);
 
     expect(database.deleteHololiveBracketArchive(archives[0].id)).toEqual([]);
+    const archiveUndo = database.consumeLatestHololiveUndo("bracket-archive-delete");
+    expect(archiveUndo?.undoToken).toBeTruthy();
     expect(
       database.select<{ count: number }>(
         "SELECT COUNT(*) AS count FROM hololive_bracket_archive_entries WHERE archive_id = ?",
@@ -381,6 +504,214 @@ describe("DatabaseService", () => {
       totalMatches: 0,
       uniqueSongs: 0,
       uniqueTalents: 0
+    });
+
+    database.applyHololiveUndo(archiveUndo?.undoToken ?? "");
+    expect(database.listHololiveBracketArchives()).toHaveLength(1);
+    expect(database.getHololiveBracketStatsOverview().totals.completedBrackets).toBe(1);
+  });
+
+  it("tracks bracket upset, revenge, giant killer, and rivalry stats", async () => {
+    const database = await createTempDatabase();
+    const insertArchive = (input: {
+      id: string;
+      sourceBracketId: string;
+      archivedAt: string;
+      winnerVideoId: string;
+      loserVideoId: string;
+      winnerTitle: string;
+      loserTitle: string;
+      winnerIdolId: string;
+      winnerIdolName: string;
+      loserIdolId: string;
+      loserIdolName: string;
+      winnerViews: number;
+      loserViews: number;
+    }) => {
+      database.run(
+        `INSERT INTO hololive_bracket_archives
+           (id, source_bracket_id, name, size, generation_style, generation_filters_json, seed,
+            total_entries, total_matches, completed_matches,
+            champion_youtube_video_id, champion_title, champion_idol_id, champion_idol_name,
+            created_at, completed_at, archived_at, updated_at)
+         VALUES (?, ?, ?, 'RO16', 'top_songs', '{}', ?, 2, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.id,
+          input.sourceBracketId,
+          `Stats ${input.id}`,
+          input.id,
+          input.winnerVideoId,
+          input.winnerTitle,
+          input.winnerIdolId,
+          input.winnerIdolName,
+          input.archivedAt,
+          input.archivedAt,
+          input.archivedAt,
+          input.archivedAt
+        ]
+      );
+      for (const entry of [
+        {
+          videoId: input.winnerVideoId,
+          title: input.winnerTitle,
+          idolId: input.winnerIdolId,
+          idolName: input.winnerIdolName,
+          views: input.winnerViews,
+          slotIndex: 0,
+          wins: 1,
+          losses: 0,
+          isChampion: 1
+        },
+        {
+          videoId: input.loserVideoId,
+          title: input.loserTitle,
+          idolId: input.loserIdolId,
+          idolName: input.loserIdolName,
+          views: input.loserViews,
+          slotIndex: 1,
+          wins: 0,
+          losses: 1,
+          isChampion: 0
+        }
+      ]) {
+        database.run(
+          `INSERT INTO hololive_bracket_archive_entries
+             (id, archive_id, source_entry_id, slot_index, youtube_video_id, title_snapshot, song_name_snapshot,
+              topic_id, youtube_url_snapshot, channel_name_snapshot, idol_id_snapshot, idol_name_snapshot,
+              canonical_performance_key, view_count_snapshot, published_at_snapshot, duration_seconds_snapshot,
+              wins, losses, final_rank, eliminated_round_index, eliminated_by_youtube_video_id,
+              first_round_eliminated, is_champion, is_finalist, is_top4, is_top8, is_top16)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'Original_Song', ?, ?, ?, ?, ?, ?, ?, 210, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0)`,
+          [
+            `${input.id}:entry:${entry.slotIndex}`,
+            input.id,
+            `${input.id}:source:${entry.slotIndex}`,
+            entry.slotIndex,
+            entry.videoId,
+            entry.title,
+            entry.title,
+            `https://www.youtube.com/watch?v=${entry.videoId}`,
+            `${entry.idolName} Channel`,
+            entry.idolId,
+            entry.idolName,
+            `${entry.idolId}:${entry.videoId}`,
+            entry.views,
+            input.archivedAt,
+            entry.wins,
+            entry.losses,
+            entry.isChampion ? 1 : 2,
+            entry.isChampion ? null : 0,
+            entry.isChampion ? null : input.winnerVideoId,
+            entry.isChampion ? 0 : 1,
+            entry.isChampion
+          ]
+        );
+      }
+      database.run(
+        `INSERT INTO hololive_bracket_archive_matches
+           (id, archive_id, source_match_id, round_index, match_index,
+            entry_a_youtube_video_id, entry_b_youtube_video_id, winner_youtube_video_id, loser_youtube_video_id,
+            completed_at, updated_at)
+         VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
+        [
+          `${input.id}:match:0`,
+          input.id,
+          `${input.id}:source-match:0`,
+          input.winnerVideoId,
+          input.loserVideoId,
+          input.winnerVideoId,
+          input.loserVideoId,
+          input.archivedAt,
+          input.archivedAt
+        ]
+      );
+    };
+
+    insertArchive({
+      id: "stats-archive-1",
+      sourceBracketId: "stats-bracket-1",
+      archivedAt: "2025-01-01T00:00:00.000Z",
+      winnerVideoId: "high-view-song",
+      loserVideoId: "low-view-song",
+      winnerTitle: "High View Song",
+      loserTitle: "Low View Song",
+      winnerIdolId: "idol-high",
+      winnerIdolName: "High Talent",
+      loserIdolId: "idol-low",
+      loserIdolName: "Low Talent",
+      winnerViews: 1_000_000,
+      loserViews: 100_000
+    });
+    insertArchive({
+      id: "stats-archive-2",
+      sourceBracketId: "stats-bracket-2",
+      archivedAt: "2025-01-02T00:00:00.000Z",
+      winnerVideoId: "low-view-song",
+      loserVideoId: "high-view-song",
+      winnerTitle: "Low View Song",
+      loserTitle: "High View Song",
+      winnerIdolId: "idol-low",
+      winnerIdolName: "Low Talent",
+      loserIdolId: "idol-high",
+      loserIdolName: "High Talent",
+      winnerViews: 100_000,
+      loserViews: 1_000_000
+    });
+    insertArchive({
+      id: "stats-archive-3",
+      sourceBracketId: "stats-bracket-3",
+      archivedAt: "2025-01-03T00:00:00.000Z",
+      winnerVideoId: "steady-upset-song",
+      loserVideoId: "big-target-song-a",
+      winnerTitle: "Steady Upset Song",
+      loserTitle: "Big Target Song A",
+      winnerIdolId: "idol-steady",
+      winnerIdolName: "Steady Talent",
+      loserIdolId: "idol-big-a",
+      loserIdolName: "Big Talent A",
+      winnerViews: 500_000,
+      loserViews: 1_100_000
+    });
+    insertArchive({
+      id: "stats-archive-4",
+      sourceBracketId: "stats-bracket-4",
+      archivedAt: "2025-01-04T00:00:00.000Z",
+      winnerVideoId: "steady-upset-song",
+      loserVideoId: "big-target-song-b",
+      winnerTitle: "Steady Upset Song",
+      loserTitle: "Big Target Song B",
+      winnerIdolId: "idol-steady",
+      winnerIdolName: "Steady Talent",
+      loserIdolId: "idol-big-b",
+      loserIdolName: "Big Talent B",
+      winnerViews: 500_000,
+      loserViews: 1_100_000
+    });
+
+    const stats = database.getHololiveBracketStatsOverview();
+    expect(stats.topSongsByUpsetWins[0]).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      upsetWins: 2,
+      giantKillerScore: 1_200_000
+    });
+    expect(stats.topSongsByRevengeWins[0]).toMatchObject({
+      youtubeVideoId: "low-view-song",
+      revengeWins: 1
+    });
+    expect(stats.topSongsByGiantKillerScore[0]).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      giantKillerScore: 1_200_000
+    });
+    expect(stats.topSongsByGiantKillerAverage[0]).toMatchObject({
+      youtubeVideoId: "low-view-song",
+      giantKillerScore: 900_000
+    });
+    expect(stats.topRivalries[0]).toMatchObject({
+      leftIdolName: "High Talent",
+      rightIdolName: "Low Talent",
+      matches: 2,
+      leftWins: 1,
+      rightWins: 1
     });
   });
 
@@ -601,6 +932,181 @@ describe("DatabaseService", () => {
     expectNoFirstRoundSameTalent(bracket);
   });
 
+  it("limits bracket generation to selected official talents", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 10);
+    const includedIdols = officialIdols.slice(0, 8);
+    const excludedIdols = officialIdols.slice(8);
+
+    includedIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "included-original",
+        viewCount: 1_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "included-cover",
+        viewCount: 900_000 - index
+      });
+    });
+    excludedIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "excluded-original",
+        viewCount: 10_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "excluded-cover",
+        viewCount: 9_000_000 - index
+      });
+    });
+
+    const bracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        includedTalentIds: includedIdols.map((idol) => idol.id)
+      }
+    });
+
+    expect(bracket.generationFilters.includedTalentIds).toEqual(includedIdols.map((idol) => idol.id));
+    expect(bracket.entries).toHaveLength(16);
+    expect(new Set(bracket.entries.map((entry) => entry.idolId))).toEqual(new Set(includedIdols.map((idol) => idol.id)));
+    expect(bracket.entries.some((entry) => excludedIdols.some((idol) => entry.idolId === idol.id))).toBe(false);
+    expectNoFirstRoundSameTalent(bracket);
+  });
+
+  it("treats an explicit empty talent filter as no selected talents", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 8);
+
+    officialIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "empty-talent-original",
+        viewCount: 1_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "empty-talent-cover",
+        viewCount: 900_000 - index
+      });
+    });
+
+    expect(() =>
+      database.createHololiveBracket({
+        size: "RO16",
+        filters: {
+          includedTalentIds: []
+        }
+      })
+    ).toThrow(/Only 0 eligible official Hololive songs/);
+  });
+
+  it("supports rating buckets while preserving legacy bracket rating filters", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 24);
+
+    officialIdols.forEach((idol, index) => {
+      const common = {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`
+      };
+      seedHololiveBracketSong(database, {
+        ...common,
+        topicId: "Original_Song",
+        suffix: "rating-disliked",
+        viewCount: 5_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        ...common,
+        topicId: "Music_Cover",
+        suffix: "rating-unrated",
+        viewCount: 4_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        ...common,
+        topicId: "Original_Song",
+        suffix: "rating-favorite",
+        viewCount: 3_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        ...common,
+        topicId: "Music_Cover",
+        suffix: "rating-like",
+        viewCount: 2_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        ...common,
+        topicId: "Original_Song",
+        suffix: "rating-neutral",
+        viewCount: 1_000_000 - index
+      });
+
+      database.setHololiveMusicMarker({ youtubeVideoId: `${idol.id}-rating-disliked`, marker: "dislike" });
+      database.setHololiveMusicMarker({ youtubeVideoId: `${idol.id}-rating-favorite`, marker: "favorite" });
+      database.setHololiveMusicMarker({ youtubeVideoId: `${idol.id}-rating-like`, marker: "like" });
+      database.setHololiveMusicMarker({ youtubeVideoId: `${idol.id}-rating-neutral`, marker: "neutral" });
+    });
+
+    const legacyUnratedOnly = database.createHololiveBracket({
+      size: "RO16",
+      filters: { excludeRated: true }
+    });
+    expect(legacyUnratedOnly.entries).toHaveLength(16);
+    expect(legacyUnratedOnly.entries.every((entry) => entry.youtubeVideoId.endsWith("-rating-unrated"))).toBe(true);
+    expectNoFirstRoundSameTalent(legacyUnratedOnly);
+
+    const legacyWithoutDisliked = database.createHololiveBracket({
+      size: "RO16",
+      filters: { excludeDisliked: true }
+    });
+    expect(legacyWithoutDisliked.entries).toHaveLength(16);
+    expect(legacyWithoutDisliked.entries.some((entry) => entry.youtubeVideoId.endsWith("-rating-disliked"))).toBe(false);
+    expectNoFirstRoundSameTalent(legacyWithoutDisliked);
+
+    const bucketFiltered = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        ratingBuckets: ["favorite", "like"],
+        excludeRated: true,
+        excludeDisliked: true
+      }
+    });
+    expect(bucketFiltered.generationFilters).toMatchObject({
+      ratingBuckets: ["favorite", "like"],
+      excludeRated: false,
+      excludeDisliked: false
+    });
+    expect(bucketFiltered.entries).toHaveLength(16);
+    expect(
+      bucketFiltered.entries.every(
+        (entry) => entry.youtubeVideoId.endsWith("-rating-favorite") || entry.youtubeVideoId.endsWith("-rating-like")
+      )
+    ).toBe(true);
+    expectNoFirstRoundSameTalent(bucketFiltered);
+  });
+
   it("can exclude each selected talent's top viewed song from bracket generation", async () => {
     const database = await createTempDatabase();
     const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 16);
@@ -780,6 +1286,26 @@ describe("DatabaseService", () => {
     expect(data.activeBoard.tileSize).toBe(64);
     expect(data.activeBoard.placements).toHaveLength(HOLOLIVE_IDOLS.length);
     expect(data.activeBoard.placements.every((placement) => placement.tierId === null)).toBe(true);
+
+    const unrankedIds = data.activeBoard.placements
+      .filter((placement) => placement.tierId === null)
+      .sort((left, right) => left.position - right.position)
+      .map((placement) => placement.idolId);
+    expect(unrankedIds.slice(0, 4)).toEqual(["tokino-sora", "roboco-san", "aki-rosenthal", "akai-haato"]);
+    expect(unrankedIds.indexOf("sakamata-chloe")).toBeGreaterThan(unrankedIds.indexOf("kikirara-vivi"));
+    expect(unrankedIds.slice(-11)).toEqual([
+      "sakamata-chloe",
+      "watson-amelia",
+      "minato-aqua",
+      "murasaki-shion",
+      "amane-kanata",
+      "kiryu-coco",
+      "gawr-gura",
+      "tsukumo-sana",
+      "ceres-fauna",
+      "nanashi-mumei",
+      "hiodoshi-ao"
+    ]);
   });
 
   it("adds custom talents to every tier board without resetting saved rankings", async () => {
@@ -823,7 +1349,13 @@ describe("DatabaseService", () => {
       kind: "idol",
       mainIdolIds: ["custom-soraduki-tyra"]
     });
+    const defaultUnrankedIds = defaultData.activeBoard.placements
+      .filter((placement) => placement.tierId === null)
+      .sort((left, right) => left.position - right.position)
+      .map((placement) => placement.idolId);
     expect(defaultData.idols.at(-1)).toMatchObject({ id: "custom-soraduki-tyra", source: "custom" });
+    expect(defaultUnrankedIds.at(-2)).toBe("hiodoshi-ao");
+    expect(defaultUnrankedIds.at(-1)).toBe("custom-soraduki-tyra");
     expect(defaultData.activeBoard.placements.find((placement) => placement.idolId === "tokino-sora")?.tierId).toBe(rankedTierId);
     expect(defaultData.activeBoard.placements.find((placement) => placement.idolId === "custom-soraduki-tyra")?.tierId).toBeNull();
     expect(secondData.activeBoard.placements.find((placement) => placement.idolId === "custom-soraduki-tyra")?.tierId).toBeNull();
@@ -1019,6 +1551,29 @@ describe("DatabaseService", () => {
     expect(secondBoard.placements.every((placement) => placement.tierId === null)).toBe(true);
   });
 
+  it("undoes Hololive tier board clear and delete actions", async () => {
+    const database = await createTempDatabase();
+    const defaultData = database.getHololiveTierListData();
+    const defaultBoardId = defaultData.activeBoard.id;
+    const defaultTierId = defaultData.activeBoard.tiers[0].id;
+    database.moveHololiveIdol({ boardId: defaultBoardId, idolId: "tokino-sora", tierId: defaultTierId, index: 0 });
+
+    database.clearHololiveTierBoard(defaultBoardId);
+    const clearUndo = database.consumeLatestHololiveUndo("tier-board-clear");
+    expect(database.getHololiveTierListData(defaultBoardId).activeBoard.placements.find((placement) => placement.idolId === "tokino-sora")?.tierId).toBeNull();
+    database.applyHololiveUndo(clearUndo?.undoToken ?? "");
+    expect(
+      database.getHololiveTierListData(defaultBoardId).activeBoard.placements.find((placement) => placement.idolId === "tokino-sora")?.tierId
+    ).toBe(defaultTierId);
+
+    const secondBoardId = database.createHololiveTierBoard("Undo Delete");
+    database.deleteHololiveTierBoard(secondBoardId);
+    const deleteUndo = database.consumeLatestHololiveUndo("tier-board-delete");
+    expect(database.getHololiveTierListData().boards.some((board) => board.id === secondBoardId)).toBe(false);
+    database.applyHololiveUndo(deleteUndo?.undoToken ?? "");
+    expect(database.getHololiveTierListData(secondBoardId).activeBoard.name).toBe("Undo Delete");
+  });
+
   it("persists every board placement and restores only the last active board pointer after reopening", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-active-board-"));
     const databasePath = path.join(dir, "test.sqlite");
@@ -1134,11 +1689,24 @@ describe("DatabaseService", () => {
     const unranked = sorted
       .filter((placement) => placement.tierId === null)
       .sort((left, right) => left.position - right.position)
-      .slice(0, 4)
       .map((placement) => placement.idolId);
 
     expect(ranked?.tierId).toBe(tierId);
-    expect(unranked).toEqual(["tokino-sora", "aki-rosenthal", "akai-haato", "shirakami-fubuki"]);
+    expect(unranked.slice(0, 4)).toEqual(["tokino-sora", "aki-rosenthal", "akai-haato", "shirakami-fubuki"]);
+    expect(unranked.indexOf("sakamata-chloe")).toBeGreaterThan(unranked.indexOf("kikirara-vivi"));
+    expect(unranked.slice(-11)).toEqual([
+      "sakamata-chloe",
+      "watson-amelia",
+      "minato-aqua",
+      "murasaki-shion",
+      "amane-kanata",
+      "kiryu-coco",
+      "gawr-gura",
+      "tsukumo-sana",
+      "ceres-fauna",
+      "nanashi-mumei",
+      "hiodoshi-ao"
+    ]);
   });
 
   it("clears a Hololive tier board while preserving board and tier settings", async () => {
@@ -1733,13 +2301,19 @@ describe("DatabaseService", () => {
     database.importHolodexMusicArtifacts(bundle, "live");
     const fetcher = (async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
-      expect(url.searchParams.get("part")).toBe("statistics");
-      expect(url.searchParams.get("fields")).toBe("items(id,statistics(viewCount))");
+      expect(url.searchParams.get("part")).toBe("statistics,status");
+      expect(url.searchParams.get("fields")).toBe("items(id,statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))");
       expect(url.searchParams.get("id")).toBe("sora-stats-song");
       expect(url.searchParams.get("key")).toBe("test-youtube-key");
       return new Response(
         JSON.stringify({
-          items: [{ id: "sora-stats-song", statistics: { viewCount: "1234567" } }]
+          items: [
+            {
+              id: "sora-stats-song",
+              statistics: { viewCount: "1234567" },
+              status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+            }
+          ]
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
@@ -1787,7 +2361,13 @@ describe("DatabaseService", () => {
       expect(url.searchParams.get("key")).toBe("settings-youtube-key");
       return new Response(
         JSON.stringify({
-          items: [{ id: "sora-stats-song", statistics: { viewCount: "7654321" } }]
+          items: [
+            {
+              id: "sora-stats-song",
+              statistics: { viewCount: "7654321" },
+              status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+            }
+          ]
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
@@ -1798,6 +2378,84 @@ describe("DatabaseService", () => {
 
     await settingsService.refreshViewCounts({ youtubeVideoIds: ["sora-stats-song"] });
     expect(database.listHololiveMusicRows({ query: "Sora Stats Song Updated" })[0].viewCount).toBe(7654321);
+  });
+
+  it("excludes YouTube-unavailable Hololive music rows during stats refresh and swaps to an alternate", async () => {
+    const database = await createTempDatabase();
+    const canonicalPerformanceKey = "Original_Song:stats-unavailable-song:tokino-sora";
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "stats-unavailable-bad",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+      canonicalPerformanceKey
+    });
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "stats-unavailable-alt",
+      viewCount: 90,
+      publishedAt: "2026-01-02T00:00:00.000Z",
+      canonicalPerformanceKey
+    });
+    database.createHololiveMusicPlaylist("Stats Unavailable");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+    database.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: "tokino-sora-stats-unavailable-bad" });
+    database.addHololiveMusicQueueItem({ youtubeVideoId: "tokino-sora-stats-unavailable-bad", placement: "now" });
+
+    const fetcher = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      expect(new Set(url.searchParams.get("id")?.split(",") ?? [])).toEqual(
+        new Set(["tokino-sora-stats-unavailable-bad", "tokino-sora-stats-unavailable-alt"])
+      );
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "tokino-sora-stats-unavailable-alt",
+              statistics: { viewCount: "2222" },
+              status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+    const service = new YouTubeVideoStatsService(database, {
+      apiKey: "test-youtube-key",
+      fetcher
+    });
+
+    const result = await service.refreshViewCounts({
+      youtubeVideoIds: ["tokino-sora-stats-unavailable-bad", "tokino-sora-stats-unavailable-alt"]
+    });
+    const playerData = database.getHololiveMusicPlayerData();
+
+    expect(result).toMatchObject({
+      requestedVideos: 2,
+      updatedVideos: 1,
+      missingVideos: 1,
+      unavailableVideos: 1,
+      failedBatches: 0
+    });
+    expect(database.listHololiveMusicRows({ query: "stats-unavailable-bad" })).toHaveLength(0);
+    expect(database.listHololiveMusicRows({ query: "stats-unavailable-alt" })[0]).toMatchObject({
+      youtubeVideoId: "tokino-sora-stats-unavailable-alt",
+      viewCount: 2222
+    });
+    expect(playerData.playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)).toEqual([
+      "tokino-sora-stats-unavailable-alt"
+    ]);
+    expect(playerData.queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-stats-unavailable-alt"]);
+    expect(playerData.currentItem?.youtubeVideoId).toBe("tokino-sora-stats-unavailable-alt");
   });
 
   it("permanently excludes Hololive music rows without touching channel stats", async () => {
@@ -2109,6 +2767,197 @@ describe("DatabaseService", () => {
         [playlistId, "toggle-playlist-song"]
       )[0]?.count
     ).toBe(1);
+  });
+
+  it("bulk adds visible songs to playlists and queue in order", async () => {
+    const database = await createTempDatabase();
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "bulk-a",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z"
+    });
+    seedHololiveBracketSong(database, {
+      idolId: "gawr-gura",
+      idolName: "Gawr Gura",
+      channelId: "gura-channel",
+      topicId: "Music_Cover",
+      suffix: "bulk-b",
+      viewCount: 90,
+      publishedAt: "2026-01-02T00:00:00.000Z"
+    });
+
+    database.createHololiveMusicPlaylist("Bulk Test");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+
+    const playlistData = database.addHololiveMusicPlaylistItems({
+      playlistId,
+      youtubeVideoIds: ["tokino-sora-bulk-a", "gawr-gura-bulk-b", "tokino-sora-bulk-a"]
+    });
+    expect(playlistData.playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)).toEqual([
+      "tokino-sora-bulk-a",
+      "gawr-gura-bulk-b"
+    ]);
+    expect(
+      database.addHololiveMusicPlaylistItems({
+        playlistId,
+        youtubeVideoIds: ["tokino-sora-bulk-a", "gawr-gura-bulk-b"]
+      }).playlists.find((playlist) => playlist.id === playlistId)?.items
+    ).toHaveLength(2);
+
+    const queued = database.addHololiveMusicQueueItems({
+      youtubeVideoIds: ["tokino-sora-bulk-a", "gawr-gura-bulk-b"],
+      placement: "end"
+    });
+    expect(queued.queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-bulk-a", "gawr-gura-bulk-b"]);
+
+    const playing = database.playHololiveMusicVisibleVideos(["gawr-gura-bulk-b", "tokino-sora-bulk-a"]);
+    expect(playing.state.currentYoutubeVideoId).toBe("gawr-gura-bulk-b");
+    expect(playing.currentItem?.youtubeVideoId).toBe("gawr-gura-bulk-b");
+  });
+
+  it("undoes playlist and queue item removal with action tokens", async () => {
+    const database = await createTempDatabase();
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "undo-remove",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z"
+    });
+    database.createHololiveMusicPlaylist("Undo Test");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+    const playlistItem = database.addHololiveMusicPlaylistItem({
+      playlistId,
+      youtubeVideoId: "tokino-sora-undo-remove"
+    }).playlists.find((playlist) => playlist.id === playlistId)?.items?.[0];
+    const queueItem = database.addHololiveMusicQueueItem({
+      youtubeVideoId: "tokino-sora-undo-remove",
+      placement: "now"
+    }).queue[0];
+    if (!playlistItem || !queueItem) {
+      throw new Error("Expected player items");
+    }
+
+    database.removeHololiveMusicPlaylistItem(playlistItem.id);
+    const playlistUndo = database.consumeLatestHololiveUndo("playlist-item-remove");
+    expect(playlistUndo?.undoToken).toBeTruthy();
+    database.applyHololiveUndo(playlistUndo?.undoToken ?? "");
+    expect(database.getHololiveMusicPlayerData().playlists.find((playlist) => playlist.id === playlistId)?.items).toHaveLength(1);
+
+    database.removeHololiveMusicQueueItem(queueItem.id);
+    const queueUndo = database.consumeLatestHololiveUndo("queue-item-remove");
+    expect(queueUndo?.undoToken).toBeTruthy();
+    database.applyHololiveUndo(queueUndo?.undoToken ?? "");
+    expect(database.getHololiveMusicPlayerData().queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-undo-remove"]);
+  });
+
+  it("undoes Hololive song exclusion without losing playlist and queue references", async () => {
+    const database = await createTempDatabase();
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "undo-exclude",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z"
+    });
+    database.createHololiveMusicPlaylist("Undo Exclude");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+    database.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: "tokino-sora-undo-exclude" });
+    database.addHololiveMusicQueueItem({ youtubeVideoId: "tokino-sora-undo-exclude", placement: "now" });
+    database.setHololiveMusicMarker({ youtubeVideoId: "tokino-sora-undo-exclude", marker: "favorite" });
+
+    database.excludeHololiveMusicVideo({ youtubeVideoId: "tokino-sora-undo-exclude" });
+    expect(database.listHololiveMusicLibrary({ query: "undo-exclude" }).rows).toHaveLength(0);
+    const undo = database.consumeLatestHololiveUndo("music-exclusion");
+    expect(undo?.undoToken).toBeTruthy();
+
+    database.applyHololiveUndo(undo?.undoToken ?? "");
+    expect(database.listHololiveMusicLibrary({ query: "undo-exclude" }).rows.map((row) => row.youtubeVideoId)).toEqual([
+      "tokino-sora-undo-exclude"
+    ]);
+    const playerData = database.getHololiveMusicPlayerData();
+    expect(playerData.playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)).toEqual([
+      "tokino-sora-undo-exclude"
+    ]);
+    expect(playerData.queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-undo-exclude"]);
+    expect(playerData.playlists.find((playlist) => playlist.systemId === "favorites")?.items).toHaveLength(1);
+  });
+
+  it("marks permanently unavailable Hololive videos unplayable and swaps player references to an alternate", async () => {
+    const database = await createTempDatabase();
+    const canonicalPerformanceKey = "Original_Song:unavailable-song:tokino-sora";
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "unavailable-bad",
+      viewCount: 100,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+      canonicalPerformanceKey
+    });
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "sora-channel",
+      topicId: "Original_Song",
+      suffix: "unavailable-alt",
+      viewCount: 90,
+      publishedAt: "2026-01-02T00:00:00.000Z",
+      canonicalPerformanceKey
+    });
+    database.createHololiveMusicPlaylist("Unavailable Swap");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+    database.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: "tokino-sora-unavailable-bad" });
+    database.addHololiveMusicQueueItem({ youtubeVideoId: "tokino-sora-unavailable-bad", placement: "now" });
+    database.setHololiveMusicMarker({ youtubeVideoId: "tokino-sora-unavailable-bad", marker: "favorite" });
+
+    const response = database.markHololiveMusicVideoUnavailable({
+      youtubeVideoId: "tokino-sora-unavailable-bad",
+      reason: "Error 150."
+    });
+    const playerData = response.data;
+
+    expect(response).toMatchObject({
+      removedYoutubeVideoId: "tokino-sora-unavailable-bad",
+      replacementYoutubeVideoId: "tokino-sora-unavailable-alt"
+    });
+    expect(database.listHololiveMusicRows({ query: "unavailable-bad" })).toHaveLength(0);
+    expect(database.listHololiveMusicRows({ query: "unavailable-alt" })[0]).toMatchObject({
+      youtubeVideoId: "tokino-sora-unavailable-alt",
+      marker: "favorite"
+    });
+    expect(playerData.playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)).toEqual([
+      "tokino-sora-unavailable-alt"
+    ]);
+    expect(playerData.queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-unavailable-alt"]);
+    expect(playerData.currentItem?.youtubeVideoId).toBe("tokino-sora-unavailable-alt");
+    expect(
+      database.select<{ youtube_video_id: string }>(
+        "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
+        ["tokino-sora-unavailable-bad"]
+      )
+    ).toEqual([{ youtube_video_id: "tokino-sora-unavailable-bad" }]);
   });
 
   it("persists manual Favorites playlist ordering without converting it into a user playlist", async () => {
@@ -2819,6 +3668,132 @@ describe("DatabaseService", () => {
 
     database.setHololiveMusicMarker({ youtubeVideoId: "official-duplicate-song", marker: null });
     expect(database.listHololiveMusicRows({ query: "Duplicate Song", limit: 10 })[0].marker).toBeNull();
+  });
+
+  it("purges provider topic mirrors by song and participant overlap on startup", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-"));
+    const databasePath = path.join(dir, "test.sqlite");
+    const database = await createTempDatabaseAt(databasePath);
+    const officialVideoId = "kPqmld3_lSs";
+    const topicVideoId = "Hew0tgd9Ipg";
+    const officialChannelId = "UC5CwaMl1eIgY8h02uZw7u8A";
+    const groupChannelId = "UCJFZiqLMntJufDCHc6bQixg";
+    const now = new Date().toISOString();
+    const officialBundle: HolodexArtifactBundle = {
+      rows: [
+        {
+          youtubeVideoId: officialVideoId,
+          youtubeUrl: `https://www.youtube.com/watch?v=${officialVideoId}`,
+          title: "BEEP BEEP / Hoshimatic Project (official)",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: officialChannelId,
+          channelName: "Suisei Channel",
+          publishedAt: "2026-04-17T12:00:06.000Z"
+        }
+      ],
+      detailCache: {
+        [officialVideoId]: normalizeVideoDetail(officialVideoId, {
+          youtubeVideoId: officialVideoId,
+          channelId: officialChannelId,
+          duration: 209,
+          songNames: ["BEEP BEEP"],
+          mentions: [{ channelId: officialChannelId, name: "Hoshimachi Suisei", englishName: "", type: "vtuber", photoUrl: "", org: "Hololive" }],
+          relationshipsLoaded: true
+        })
+      },
+      duplicateRemovals: []
+    };
+
+    database.importHolodexMusicArtifacts(officialBundle, "live");
+    database.run(
+      `INSERT INTO catalog_items (id, module_id, kind, title, subtitle, source_url, created_at, updated_at)
+       VALUES (?, 'hololive', 'music', 'BEEP BEEP', 'hololive ホロライブ - VTuber Group', ?, ?, ?)`,
+      [`holodex:${topicVideoId}`, `https://www.youtube.com/watch?v=${topicVideoId}`, now, now]
+    );
+    database.run(
+      `INSERT INTO source_refs (id, item_id, source_id, source_key, detail_url, cover_url, created_at, updated_at)
+       VALUES (?, ?, 'holodex', ?, ?, NULL, ?, ?)`,
+      [
+        `holodex:${topicVideoId}`,
+        `holodex:${topicVideoId}`,
+        topicVideoId,
+        `https://www.youtube.com/watch?v=${topicVideoId}`,
+        now,
+        now
+      ]
+    );
+    database.run(
+      `INSERT INTO hololive_music_detail_cache
+         (youtube_video_id, channel_id, duration_seconds, original_channel_id, provided_to_youtube,
+          song_names_json, mentions_json, collab_channel_ids_json, relationships_loaded, updated_at)
+       VALUES (?, ?, 193, 'UCSizuuBcBPqwLMrVFTuIfVg', 1, '["BEEP BEEP"]', ?, ?, 1, ?)`,
+      [
+        topicVideoId,
+        groupChannelId,
+        JSON.stringify([{ channelId: officialChannelId, name: "Hoshimachi Suisei", englishName: "", type: "vtuber", photoUrl: "", org: "Hololive" }]),
+        JSON.stringify([officialChannelId]),
+        now
+      ]
+    );
+    database.run(
+      `INSERT INTO hololive_music_videos
+         (youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id, channel_id, channel_name,
+          published_at, duration_seconds, song_name, original_channel_id, provided_to_youtube,
+          participants_json, participant_idol_ids_json, source_run_id, updated_at,
+          canonical_song_key, canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json)
+       VALUES (?, ?, 'hoshimachi-suisei', ?, 'BEEP BEEP', 'past', 'Original_Song', ?, 'hololive ホロライブ - VTuber Group',
+          '2026-04-17T15:01:10.000Z', 193, 'BEEP BEEP', 'UCSizuuBcBPqwLMrVFTuIfVg', 1,
+          ?, ?, NULL, ?, 'beep beep', ?, '[]', ?)`,
+      [
+        topicVideoId,
+        `holodex:${topicVideoId}`,
+        `https://www.youtube.com/watch?v=${topicVideoId}`,
+        groupChannelId,
+        JSON.stringify([
+          { idolId: "hoshimachi-suisei", role: "mentioned", channelId: officialChannelId },
+          { idolId: "hoshimachi-suisei", role: "collab", channelId: officialChannelId }
+        ]),
+        JSON.stringify(["hoshimachi-suisei"]),
+        now,
+        `Original_Song:beep beep:unowned:${topicVideoId}`,
+        JSON.stringify(["hoshimachi-suisei"])
+      ]
+    );
+
+    database.setHololiveMusicMarker({ youtubeVideoId: topicVideoId, marker: "favorite" });
+    database.createHololiveMusicPlaylist("BEEP BEEP");
+    const playlistId = database.getHololiveMusicPlayerData().playlists.find((playlist) => !playlist.systemId)?.id;
+    if (!playlistId) {
+      throw new Error("Expected a user playlist");
+    }
+    database.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: topicVideoId });
+    database.addHololiveMusicQueueItem({ youtubeVideoId: topicVideoId, placement: "now" });
+    database.flush();
+
+    const reopened = await createTempDatabaseAt(databasePath);
+    const rows = reopened.listHololiveMusicRows({ query: "BEEP BEEP", limit: 10 });
+    const removals = reopened.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string; reason: string }>(
+      `SELECT removed_youtube_video_id, kept_youtube_video_id, reason
+       FROM hololive_music_duplicate_removals
+       WHERE removed_youtube_video_id = ?`,
+      [topicVideoId]
+    );
+    const playerData = reopened.getHololiveMusicPlayerData();
+    const userPlaylist = playerData.playlists.find((playlist) => !playlist.systemId);
+
+    expect(rows.map((row) => row.youtubeVideoId)).toEqual([officialVideoId]);
+    expect(rows[0]).toMatchObject({ youtubeVideoId: officialVideoId, marker: "favorite" });
+    expect(removals).toEqual([
+      {
+        removed_youtube_video_id: topicVideoId,
+        kept_youtube_video_id: officialVideoId,
+        reason: "canonical_topic_duplicate_of_non_topic"
+      }
+    ]);
+    expect(userPlaylist?.items?.map((item) => item.youtubeVideoId)).toEqual([officialVideoId]);
+    expect(playerData.queue.map((item) => item.youtubeVideoId)).toEqual([officialVideoId]);
+    expect(playerData.currentItem?.youtubeVideoId).toBe(officialVideoId);
   });
 
   it("prefers full/plain official rows over TV-size and language version variants", async () => {

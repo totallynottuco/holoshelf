@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   BarChart3,
-  Ban,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -15,8 +14,7 @@ import {
   Swords,
   Trash2,
   Trophy,
-  Undo2,
-  X
+  Undo2
 } from "lucide-react";
 import type {
   HololiveBracket,
@@ -24,17 +22,21 @@ import type {
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketMatch,
+  HololiveBracketRatingBucket,
   HololiveBracketRound,
+  HololiveBracketRivalryStats,
   HololiveBracketSize,
   HololiveBracketStatsOverview,
   HololiveBracketSummary,
   HololiveBracketArchiveSummary,
   HololiveBracketSongStats,
   HololiveBracketTalentStats,
+  HololiveIdol,
   HololiveMusicMarker,
   HololiveMusicPlayerData,
   HololiveMusicTopic
 } from "../../shared/contracts";
+import { displayHololiveBracketRoundLabel } from "../../shared/hololiveBracketLabels";
 import { api } from "../api";
 import {
   formatHololiveDuration,
@@ -46,12 +48,21 @@ import { HololiveMusicMarkerMenu } from "../components/HololiveMusicMarkerMenu";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
 import { CompactSelect } from "../components/CompactSelect";
 import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
+import { useHololiveActionToast } from "../components/HololiveActionToast";
 import { renderHololiveBracketExportPng } from "../lib/hololiveBracketExport";
 
 const BRACKET_SIZES: HololiveBracketSize[] = ["RO16", "RO32", "RO64", "RO128", "RO256"];
 const BRACKET_GENERATION_STYLES: Array<{ value: HololiveBracketGenerationStyle; label: string }> = [
   { value: "top_songs", label: "Top Songs" },
   { value: "random_songs", label: "Random Songs" }
+];
+const BRACKET_TOPIC_VALUES: HololiveMusicTopic[] = ["Original_Song", "Music_Cover"];
+const BRACKET_RATING_BUCKET_VALUES: HololiveBracketRatingBucket[] = [
+  "unrated",
+  "favorite",
+  "like",
+  "neutral",
+  "dislike"
 ];
 type BracketFilterCopy = {
   label: string;
@@ -69,47 +80,47 @@ const BRACKET_FILTER_COPY = {
   },
   previousTop4: {
     label: "Previous Top 4",
-    description: "Exclude songs that have made Semi Finals."
+    description: "Exclude songs that have made Semi Final."
   },
   previousTop8: {
     label: "Previous Top 8",
-    description: "Exclude songs that have made Quarter Finals."
-  },
-  disliked: {
-    label: "Disliked",
-    description: "Exclude songs marked Dislike."
-  },
-  rated: {
-    label: "Rated",
-    description: "Exclude songs that have a rating."
+    description: "Exclude songs that have made Quarter Final."
   },
   topViewed: {
-    label: "Top Viewed",
-    description: "Exclude one highest-viewed pick per talent."
+    label: "Skip Top Viewed",
+    description: "Skip each talent's highest-viewed pick."
   },
   minViews: {
-    label: "Min Views",
+    label: "Minimum views",
     description: "Only include songs at or above this view count."
   },
   maxViews: {
-    label: "Max Views",
+    label: "Maximum views",
     description: "Only include songs at or below this view count."
   },
-  afterDate: {
-    label: "After Date",
+  fromDate: {
+    label: "From date",
     description: "Only include songs published on or after this date."
   },
-  beforeDate: {
-    label: "Before Date",
+  toDate: {
+    label: "To date",
     description: "Only include songs published on or before this date."
   }
 } as const satisfies Record<string, BracketFilterCopy>;
 
 const BRACKET_TOPIC_FILTERS: Array<{ value: HololiveMusicTopic } & BracketFilterCopy> = [
-  { value: "Original_Song", label: "Originals", description: "Do not include originals." },
-  { value: "Music_Cover", label: "Covers", description: "Do not include covers." }
+  { value: "Original_Song", label: "Originals", description: "Include original songs." },
+  { value: "Music_Cover", label: "Covers", description: "Include cover songs." }
+];
+const BRACKET_RATING_FILTERS: Array<{ value: HololiveBracketRatingBucket } & BracketFilterCopy> = [
+  { value: "unrated", label: "Unrated", description: "Include songs without a rating." },
+  { value: "favorite", label: "Favorite", description: "Include songs rated Favorite." },
+  { value: "like", label: "Like", description: "Include songs rated Like." },
+  { value: "neutral", label: "Neutral", description: "Include songs rated Neutral." },
+  { value: "dislike", label: "Disliked", description: "Include songs rated Dislike." }
 ];
 const VIEW_THRESHOLD_FORMATTER = new Intl.NumberFormat("en-US");
+const HOLOLIVE_EXPORT_TOAST_DURATION_MS = 5000;
 
 type BracketConnectorPath = {
   id: string;
@@ -183,7 +194,8 @@ function entryMeta(entry: HololiveBracketEntry): string {
 function roundProgressLabel(activeBracket: HololiveBracket, currentMatch: HololiveBracketMatch): string {
   const round = activeBracket.rounds[currentMatch.roundIndex];
   const matchCount = Math.max(round?.matches.length ?? 1, 1);
-  return `${round?.label ?? "Matchup"} · ${currentMatch.matchIndex + 1}/${matchCount}`;
+  const roundLabel = round ? displayHololiveBracketRoundLabel(round.label) : "Matchup";
+  return `${roundLabel} · ${currentMatch.matchIndex + 1}/${matchCount}`;
 }
 
 function summaryLabel(summary: HololiveBracketSummary): string {
@@ -212,6 +224,11 @@ function formatViewThresholdInput(value: string): string {
 
 function bracketFilterAriaLabel(copy: BracketFilterCopy): string {
   return `${copy.label}: ${copy.description}`;
+}
+
+function orderedBracketFilterValues<T extends string>(order: T[], values: T[]): T[] {
+  const selected = new Set(values);
+  return order.filter((value) => selected.has(value));
 }
 
 function BracketFilterOptionText({ copy }: { copy: BracketFilterCopy }) {
@@ -494,27 +511,134 @@ function formatBracketDate(value: string | null | undefined): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
-function StatNumber({ label, value }: { label: string; value: number | string }) {
+type BracketStatsMetric<T> = {
+  label: string;
+  header: string;
+  value: (row: T) => string;
+};
+
+function formatBracketRecord(row: { wins: number; losses: number }): string {
+  return `${row.wins}-${row.losses}`;
+}
+
+function formatBracketNumber(value: number): string {
+  return value.toLocaleString();
+}
+
+function finalsWithoutTitle(row: HololiveBracketSongStats): number {
+  return Math.max(0, row.finalistCount - row.championCount);
+}
+
+function formatBracketViewDelta(value: number): string {
+  const formatted = formatHololiveViewCount(value).replace(/\s+views$/i, "");
+  return formatted ? `+${formatted}` : "+0";
+}
+
+function giantKillerAverageScore(row: HololiveBracketSongStats): number {
+  return row.upsetWins > 0 ? row.giantKillerScore / row.upsetWins : 0;
+}
+
+function BracketStatsMetrics<T>({ row, metrics }: { row: T; metrics: Array<BracketStatsMetric<T>> }) {
   return (
-    <div className="hololive-bracket-stat-number">
-      <span>{label}</span>
-      <strong>{typeof value === "number" ? value.toLocaleString() : value}</strong>
+    <div className="metrics" style={{ "--metric-count": metrics.length } as CSSProperties}>
+      {metrics.map((metric) => {
+        const value = metric.value(row);
+        return (
+          <span key={metric.label} title={`${metric.label}: ${value}`}>
+            {value}
+          </span>
+        );
+      })}
     </div>
   );
 }
 
-function SongStatsTable({ title, rows }: { title: string; rows: HololiveBracketSongStats[] }) {
+function BracketStatsColumnHead<T>({ mainLabel, metrics }: { mainLabel: string; metrics: Array<BracketStatsMetric<T>> }) {
+  return (
+    <div className="hololive-bracket-stats-column-head" style={{ "--metric-count": metrics.length } as CSSProperties}>
+      <span className="rank">#</span>
+      <span className="main">{mainLabel}</span>
+      <div className="metrics">
+        {metrics.map((metric) => (
+          <span key={metric.label} title={metric.label}>
+            {metric.header}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function bracketStatRankClass(index: number): string {
+  return index < 3 ? ` top-rank-${index + 1}` : "";
+}
+
+const SONG_WIN_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Wins", header: "Wins", value: (row) => formatBracketNumber(row.wins) },
+  { label: "Titles", header: "Titles", value: (row) => formatBracketNumber(row.championCount) }
+];
+
+const SONG_WIN_RATE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Win rate", header: "Rate", value: (row) => formatBracketPercent(row.winRate) },
+  { label: "Wins-losses", header: "W-L", value: formatBracketRecord }
+];
+
+const SONG_APPEARANCE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Appearances", header: "Apps", value: (row) => formatBracketNumber(row.appearances) }
+];
+
+const SONG_FINALS_WITHOUT_TITLE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Runner-up finishes", header: "2nd", value: (row) => formatBracketNumber(finalsWithoutTitle(row)) }
+];
+
+const SONG_FIRST_ROUND_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "First-round exits", header: "Exits", value: (row) => formatBracketNumber(row.firstRoundEliminations) }
+];
+
+const SONG_UPSET_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Upset wins", header: "Upsets", value: (row) => formatBracketNumber(row.upsetWins) }
+];
+
+const SONG_REVENGE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Revenge wins", header: "Wins", value: (row) => formatBracketNumber(row.revengeWins) }
+];
+
+const SONG_GIANT_KILLER_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Total giant killer score", header: "Total", value: (row) => formatBracketViewDelta(row.giantKillerScore) }
+];
+
+const SONG_GIANT_KILLER_AVERAGE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Average giant killer score", header: "Avg", value: (row) => formatBracketViewDelta(giantKillerAverageScore(row)) }
+];
+
+function SongStatsTable({
+  title,
+  rows,
+  metrics,
+  emptyText = "No archived songs yet.",
+  description,
+  headerAction
+}: {
+  title: string;
+  rows: HololiveBracketSongStats[];
+  metrics: Array<BracketStatsMetric<HololiveBracketSongStats>>;
+  emptyText?: string;
+  description?: string;
+  headerAction?: ReactNode;
+}) {
   return (
     <section className="hololive-bracket-stats-panel">
-      <header>
+      <header title={description}>
         <strong>{title}</strong>
+        {headerAction ? <div className="hololive-bracket-stats-header-action">{headerAction}</div> : null}
       </header>
       {rows.length === 0 ? (
-        <div className="hololive-bracket-stats-empty">No archived songs yet.</div>
+        <div className="hololive-bracket-stats-empty">{emptyText}</div>
       ) : (
         <div className="hololive-bracket-stats-list">
+          <BracketStatsColumnHead mainLabel="Song" metrics={metrics} />
           {rows.map((row, index) => (
-            <article className="hololive-bracket-stats-row" key={`${title}:${row.youtubeVideoId}`}>
+            <article className={`hololive-bracket-stats-row${bracketStatRankClass(index)}`} key={`${title}:${row.youtubeVideoId}`}>
               <span className="rank">{index + 1}</span>
               <div className="main">
                 <strong title={row.title}>{displaySongTitle(row.title)}</strong>
@@ -522,11 +646,7 @@ function SongStatsTable({ title, rows }: { title: string; rows: HololiveBracketS
                   {row.idolName ?? "Unknown"} / {topicLabel({ topicId: row.topicId ?? "Original_Song" })}
                 </span>
               </div>
-              <div className="metrics">
-                <span>{row.wins}W</span>
-                <span>{row.losses}L</span>
-                <span>{formatBracketPercent(row.winRate)}</span>
-              </div>
+              <BracketStatsMetrics row={row} metrics={metrics} />
             </article>
           ))}
         </div>
@@ -535,30 +655,82 @@ function SongStatsTable({ title, rows }: { title: string; rows: HololiveBracketS
   );
 }
 
-function TalentStatsTable({ rows }: { rows: HololiveBracketTalentStats[] }) {
+const TALENT_RECORD_METRICS: Array<BracketStatsMetric<HololiveBracketTalentStats>> = [
+  { label: "Wins", header: "Wins", value: (row) => formatBracketNumber(row.wins) }
+];
+
+const TALENT_DEEP_RUN_METRICS: Array<BracketStatsMetric<HololiveBracketTalentStats>> = [
+  { label: "Top 4 runs", header: "Top 4", value: (row) => formatBracketNumber(row.top4Count) }
+];
+
+function TalentStatsTable({
+  title = "Talent Leaders",
+  rows,
+  metrics = TALENT_RECORD_METRICS,
+  emptyText = "No archived talents yet.",
+  description
+}: {
+  title?: string;
+  rows: HololiveBracketTalentStats[];
+  metrics?: Array<BracketStatsMetric<HololiveBracketTalentStats>>;
+  emptyText?: string;
+  description?: string;
+}) {
   return (
     <section className="hololive-bracket-stats-panel">
-      <header>
-        <strong>Talent Leaders</strong>
+      <header title={description}>
+        <strong>{title}</strong>
       </header>
       {rows.length === 0 ? (
-        <div className="hololive-bracket-stats-empty">No archived talents yet.</div>
+        <div className="hololive-bracket-stats-empty">{emptyText}</div>
       ) : (
         <div className="hololive-bracket-stats-list">
+          <BracketStatsColumnHead mainLabel="Talent" metrics={metrics} />
           {rows.map((row, index) => (
-            <article className="hololive-bracket-stats-row" key={row.idolId}>
+            <article className={`hololive-bracket-stats-row${bracketStatRankClass(index)}`} key={row.idolId}>
               <span className="rank">{index + 1}</span>
               <div className="main">
                 <strong title={row.idolName}>{row.idolName}</strong>
-                <span>
-                  {row.appearances} entries / {row.championCount} champions
-                </span>
               </div>
-              <div className="metrics">
-                <span>{row.wins}W</span>
-                <span>{row.losses}L</span>
-                <span>{formatBracketPercent(row.winRate)}</span>
+              <BracketStatsMetrics row={row} metrics={metrics} />
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const RIVALRY_METRICS: Array<BracketStatsMetric<HololiveBracketRivalryStats>> = [
+  { label: "Head-to-head record", header: "H2H", value: (row) => `${row.leftWins}-${row.rightWins}` }
+];
+
+function RivalryStatsTable({
+  rows,
+  description
+}: {
+  rows: HololiveBracketRivalryStats[];
+  description?: string;
+}) {
+  return (
+    <section className="hololive-bracket-stats-panel rivalry">
+      <header title={description}>
+        <strong>Rivalries</strong>
+      </header>
+      {rows.length === 0 ? (
+        <div className="hololive-bracket-stats-empty">No repeat rivalries yet.</div>
+      ) : (
+        <div className="hololive-bracket-stats-list">
+          <BracketStatsColumnHead mainLabel="Matchup" metrics={RIVALRY_METRICS} />
+          {rows.map((row, index) => (
+            <article className={`hololive-bracket-stats-row${bracketStatRankClass(index)}`} key={row.key}>
+              <span className="rank">{index + 1}</span>
+              <div className="main">
+                <strong title={`${row.leftIdolName} vs ${row.rightIdolName}`}>
+                  {row.leftIdolName} vs {row.rightIdolName}
+                </strong>
               </div>
+              <BracketStatsMetrics row={row} metrics={RIVALRY_METRICS} />
             </article>
           ))}
         </div>
@@ -578,7 +750,7 @@ function BracketHistoryList({
 }) {
   return (
     <section className="hololive-bracket-stats-panel history">
-      <header>
+      <header title="Completed bracket champions by archive date.">
         <strong>Champion History</strong>
       </header>
       {archives.length === 0 ? (
@@ -616,6 +788,33 @@ function BracketHistoryList({
   );
 }
 
+type GiantKillerStatsMode = "total" | "average";
+
+function GiantKillerModeToggle({
+  mode,
+  onModeChange
+}: {
+  mode: GiantKillerStatsMode;
+  onModeChange: (mode: GiantKillerStatsMode) => void;
+}) {
+  const nextMode: GiantKillerStatsMode = mode === "total" ? "average" : "total";
+  const label = mode === "total" ? "Total" : "Avg";
+  const nextLabel = nextMode === "total" ? "Total" : "Avg";
+
+  return (
+    <button
+      type="button"
+      className="hololive-bracket-stat-mode-button"
+      aria-label={`Giant killer mode: ${label}. Switch to ${nextLabel}.`}
+      aria-pressed={mode === "average"}
+      title={`Showing ${label}. Click for ${nextLabel}.`}
+      onClick={() => onModeChange(nextMode)}
+    >
+      {label}
+    </button>
+  );
+}
+
 function BracketStatsView({
   stats,
   archives,
@@ -629,6 +828,8 @@ function BracketStatsView({
   deletingArchiveId: string | null;
   onDeleteArchive: (archive: HololiveBracketArchiveSummary) => void;
 }) {
+  const [giantKillerMode, setGiantKillerMode] = useState<GiantKillerStatsMode>("total");
+
   if (loading && !stats) {
     return (
       <div className="hololive-bracket-empty">
@@ -647,19 +848,79 @@ function BracketStatsView({
     );
   }
 
+  const giantKillerRows =
+    giantKillerMode === "average" ? stats.topSongsByGiantKillerAverage : stats.topSongsByGiantKillerScore;
+  const giantKillerMetrics = giantKillerMode === "average" ? SONG_GIANT_KILLER_AVERAGE_METRICS : SONG_GIANT_KILLER_METRICS;
+  const giantKillerDescription =
+    giantKillerMode === "average"
+      ? "Average view-count gap per lower-view upset win."
+      : "Total view-count gap beaten in lower-view upset wins.";
+
   return (
     <div className="hololive-bracket-stats-view">
-      <div className="hololive-bracket-stats-totals">
-        <StatNumber label="Completed" value={stats.totals.completedBrackets} />
-        <StatNumber label="Matches" value={stats.totals.totalMatches} />
-        <StatNumber label="Songs" value={stats.totals.uniqueSongs} />
-        <StatNumber label="Talents" value={stats.totals.uniqueTalents} />
-      </div>
       <div className="hololive-bracket-stats-grid">
-        <SongStatsTable title="Most Wins" rows={stats.topSongsByWins} />
-        <SongStatsTable title="Best Win Rate" rows={stats.topSongsByWinRate} />
-        <SongStatsTable title="Most Appearances" rows={stats.topSongsByAppearances} />
-        <TalentStatsTable rows={stats.topTalents} />
+        <SongStatsTable
+          title="Most Wins"
+          rows={stats.topSongsByWins}
+          metrics={SONG_WIN_METRICS}
+          description="Songs with the most archived bracket match wins."
+        />
+        <SongStatsTable
+          title="Best Win Rate"
+          rows={stats.topSongsByWinRate}
+          metrics={SONG_WIN_RATE_METRICS}
+          description="Songs with the best match win rate across archived brackets."
+        />
+        <SongStatsTable
+          title="Most Played"
+          rows={stats.topSongsByAppearances}
+          metrics={SONG_APPEARANCE_METRICS}
+          description="Songs that have appeared in the most archived brackets."
+        />
+        <SongStatsTable
+          title="Upset Wins"
+          rows={stats.topSongsByUpsetWins}
+          metrics={SONG_UPSET_METRICS}
+          emptyText="No lower-view wins yet."
+          description="Lower-view songs beating higher-view opponents."
+        />
+        <SongStatsTable
+          title="Revenge Wins"
+          rows={stats.topSongsByRevengeWins}
+          metrics={SONG_REVENGE_METRICS}
+          emptyText="No revenge wins yet."
+          description="Songs beating an opponent that previously eliminated them."
+        />
+        <SongStatsTable
+          title="Giant Killers"
+          rows={giantKillerRows}
+          metrics={giantKillerMetrics}
+          emptyText="No giant-killer wins yet."
+          description={giantKillerDescription}
+          headerAction={<GiantKillerModeToggle mode={giantKillerMode} onModeChange={setGiantKillerMode} />}
+        />
+        <SongStatsTable
+          title="Finals Heartbreak"
+          rows={stats.topSongsByFinalsWithoutTitle}
+          metrics={SONG_FINALS_WITHOUT_TITLE_METRICS}
+          emptyText="No runner-up finishes yet."
+          description="Songs that reached finals but did not win the title."
+        />
+        <SongStatsTable
+          title="First-Round Exits"
+          rows={stats.topSongsByFirstRoundEliminations}
+          metrics={SONG_FIRST_ROUND_METRICS}
+          emptyText="No first-round exits yet."
+          description="Songs most often eliminated in their opening matchup."
+        />
+        <TalentStatsTable rows={stats.topTalents} description="Talents with the strongest archived match records." />
+        <TalentStatsTable
+          title="Deep Run Talents"
+          rows={stats.topTalentsByTop4}
+          metrics={TALENT_DEEP_RUN_METRICS}
+          description="Talents whose songs most often reached the top four."
+        />
+        <RivalryStatsTable rows={stats.topRivalries} description="Talent pairings with the most archived head-to-head matches." />
       </div>
       <BracketHistoryList
         archives={archives.length > 0 ? archives : stats.championHistory}
@@ -671,17 +932,18 @@ function BracketStatsView({
 }
 
 export function HololiveBracketsPage() {
+  const { showToast, showUndoToast } = useHololiveActionToast();
   const bracketCanvasRef = useRef<HTMLDivElement | null>(null);
   const playArenaRef = useRef<HTMLDivElement | null>(null);
   const matchRefs = useRef(new Map<string, HTMLElement>());
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const talentSelectorRef = useRef<HTMLDivElement | null>(null);
   const exportToastTimersRef = useRef<{ fade: number | null; clear: number | null }>({ fade: null, clear: null });
   const [summaries, setSummaries] = useState<HololiveBracketSummary[]>([]);
   const [activeBracket, setActiveBracket] = useState<HololiveBracket | null>(null);
   const [selectedSize, setSelectedSize] = useState<HololiveBracketSize>("RO64");
   const [selectedGenerationStyle, setSelectedGenerationStyle] = useState<HololiveBracketGenerationStyle>("top_songs");
-  const [excludeDisliked, setExcludeDisliked] = useState(false);
-  const [excludeRated, setExcludeRated] = useState(false);
+  const [includedRatingBuckets, setIncludedRatingBuckets] = useState<HololiveBracketRatingBucket[]>(BRACKET_RATING_BUCKET_VALUES);
   const [excludeTopViewedPerTalent, setExcludeTopViewedPerTalent] = useState(false);
   const [excludePreviousChampions, setExcludePreviousChampions] = useState(false);
   const [excludePreviousFinalists, setExcludePreviousFinalists] = useState(false);
@@ -691,7 +953,11 @@ export function HololiveBracketsPage() {
   const [excludeBelowViews, setExcludeBelowViews] = useState("");
   const [excludeAfterDate, setExcludeAfterDate] = useState("");
   const [excludeBeforeDate, setExcludeBeforeDate] = useState("");
-  const [excludeTopicIds, setExcludeTopicIds] = useState<HololiveMusicTopic[]>([]);
+  const [includedTopicIds, setIncludedTopicIds] = useState<HololiveMusicTopic[]>(BRACKET_TOPIC_VALUES);
+  const [bracketTalents, setBracketTalents] = useState<HololiveIdol[]>([]);
+  const [includedTalentIds, setIncludedTalentIds] = useState<string[] | null>(null);
+  const [talentSelectorOpen, setTalentSelectorOpen] = useState(false);
+  const [talentSelectorQuery, setTalentSelectorQuery] = useState("");
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -701,7 +967,6 @@ export function HololiveBracketsPage() {
   const [busy, setBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [deletingArchiveId, setDeletingArchiveId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [exportToast, setExportToast] = useState<ExportToastState | null>(null);
   const [playerData, setPlayerData] = useState<HololiveMusicPlayerData | null>(null);
   const [statsOverview, setStatsOverview] = useState<HololiveBracketStatsOverview | null>(null);
@@ -729,10 +994,74 @@ export function HololiveBracketsPage() {
   const userPlaylists = useMemo(() => (playerData?.playlists ?? []).filter((playlist) => !playlist.systemId), [playerData?.playlists]);
   const excludeAboveViewsValue = useMemo(() => parseViewThresholdInput(excludeAboveViews), [excludeAboveViews]);
   const excludeBelowViewsValue = useMemo(() => parseViewThresholdInput(excludeBelowViews), [excludeBelowViews]);
+  const selectedTopicIds = useMemo(
+    () => orderedBracketFilterValues(BRACKET_TOPIC_VALUES, includedTopicIds.length > 0 ? includedTopicIds : BRACKET_TOPIC_VALUES),
+    [includedTopicIds]
+  );
+  const selectedRatingBuckets = useMemo(
+    () =>
+      orderedBracketFilterValues(
+        BRACKET_RATING_BUCKET_VALUES,
+        includedRatingBuckets.length > 0 ? includedRatingBuckets : BRACKET_RATING_BUCKET_VALUES
+      ),
+    [includedRatingBuckets]
+  );
+  const officialBracketTalents = useMemo(
+    () =>
+      bracketTalents
+        .filter((talent) => talent.source === "official")
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName)),
+    [bracketTalents]
+  );
+  const allBracketTalentIds = useMemo(() => officialBracketTalents.map((talent) => talent.id), [officialBracketTalents]);
+  const selectedTalentIds = useMemo(() => {
+    if (allBracketTalentIds.length === 0) {
+      return [];
+    }
+    if (includedTalentIds === null) {
+      return allBracketTalentIds;
+    }
+    const knownIds = new Set(allBracketTalentIds);
+    const selectedIds = includedTalentIds.filter((talentId) => knownIds.has(talentId));
+    return allBracketTalentIds.filter((talentId) => selectedIds.includes(talentId));
+  }, [allBracketTalentIds, includedTalentIds]);
+  const isAllTalentsSelected = allBracketTalentIds.length > 0 && selectedTalentIds.length === allBracketTalentIds.length;
+  const selectedTalentLabel = useMemo(() => {
+    if (isAllTalentsSelected) {
+      return "All";
+    }
+    if (selectedTalentIds.length === 0) {
+      return "None";
+    }
+    if (selectedTalentIds.length === 1) {
+      return officialBracketTalents.find((talent) => talent.id === selectedTalentIds[0])?.displayName ?? "1 talent";
+    }
+    return `${selectedTalentIds.length} talents`;
+  }, [isAllTalentsSelected, officialBracketTalents, selectedTalentIds]);
+  const filteredBracketTalents = useMemo(() => {
+    const normalizedQuery = talentSelectorQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return officialBracketTalents;
+    }
+    return officialBracketTalents.filter((talent) => talent.displayName.toLowerCase().includes(normalizedQuery));
+  }, [officialBracketTalents, talentSelectorQuery]);
+  const excludedTopicIds = useMemo(
+    () => BRACKET_TOPIC_VALUES.filter((topicId) => !selectedTopicIds.includes(topicId)),
+    [selectedTopicIds]
+  );
+
+  function showBracketError(error: unknown, message: string) {
+    showToast({
+      message,
+      detail: error instanceof Error ? error.message : "Try again.",
+      tone: "error"
+    });
+  }
+
   const createFilters = useMemo<HololiveBracketGenerationFilters>(
     () => ({
-      excludeDisliked,
-      excludeRated,
+      ratingBuckets: selectedRatingBuckets,
       excludeTopViewedPerTalent,
       excludePreviousChampions,
       excludePreviousFinalists,
@@ -742,63 +1071,65 @@ export function HololiveBracketsPage() {
       excludeBelowViews: excludeBelowViewsValue,
       excludeAfterDate: excludeAfterDate || null,
       excludeBeforeDate: excludeBeforeDate || null,
-      excludeTopicIds
+      excludeTopicIds: excludedTopicIds,
+      includedTalentIds: isAllTalentsSelected ? undefined : selectedTalentIds
     }),
     [
       excludeAboveViewsValue,
       excludeAfterDate,
       excludeBeforeDate,
       excludeBelowViewsValue,
-      excludeDisliked,
+      excludedTopicIds,
       excludePreviousChampions,
       excludePreviousFinalists,
       excludePreviousTop4,
       excludePreviousTop8,
-      excludeRated,
       excludeTopViewedPerTalent,
-      excludeTopicIds
+      isAllTalentsSelected,
+      selectedTalentIds,
+      selectedRatingBuckets
     ]
   );
-  const activeExclusionLabels = useMemo(() => {
+  const activeFilterLabels = useMemo(() => {
     const labels: string[] = [];
-    if (excludePreviousChampions) {
-      labels.push(BRACKET_FILTER_COPY.previousWinners.label);
+    if (selectedTopicIds.length === 1) {
+      labels.push(selectedTopicIds[0] === "Original_Song" ? "Originals only" : "Covers only");
     }
-    if (excludePreviousFinalists) {
-      labels.push(BRACKET_FILTER_COPY.previousFinalists.label);
+    if (selectedRatingBuckets.length < BRACKET_RATING_BUCKET_VALUES.length) {
+      const ratingLabels = selectedRatingBuckets.map(
+        (bucket) => BRACKET_RATING_FILTERS.find((rating) => rating.value === bucket)?.label ?? bucket
+      );
+      labels.push(ratingLabels.join(" + "));
     }
-    if (excludePreviousTop4) {
-      labels.push(BRACKET_FILTER_COPY.previousTop4.label);
-    }
-    if (excludePreviousTop8) {
-      labels.push(BRACKET_FILTER_COPY.previousTop8.label);
-    }
-    if (excludeDisliked) {
-      labels.push(BRACKET_FILTER_COPY.disliked.label);
-    }
-    if (excludeRated) {
-      labels.push(BRACKET_FILTER_COPY.rated.label);
-    }
-    if (excludeTopViewedPerTalent) {
-      labels.push(BRACKET_FILTER_COPY.topViewed.label);
+    if (!isAllTalentsSelected) {
+      labels.push(selectedTalentIds.length === 0 ? "No talents" : selectedTalentLabel);
     }
     if (excludeBelowViewsValue !== null) {
-      labels.push(`Min ${VIEW_THRESHOLD_FORMATTER.format(excludeBelowViewsValue)}`);
+      labels.push(`${VIEW_THRESHOLD_FORMATTER.format(excludeBelowViewsValue)}+ views`);
     }
     if (excludeAboveViewsValue !== null) {
-      labels.push(`Max ${VIEW_THRESHOLD_FORMATTER.format(excludeAboveViewsValue)}`);
-    }
-    if (excludeTopicIds.includes("Original_Song")) {
-      labels.push("Originals");
-    }
-    if (excludeTopicIds.includes("Music_Cover")) {
-      labels.push("Covers");
+      labels.push(`${VIEW_THRESHOLD_FORMATTER.format(excludeAboveViewsValue)} or fewer views`);
     }
     if (excludeBeforeDate) {
-      labels.push(BRACKET_FILTER_COPY.afterDate.label);
+      labels.push(`From ${excludeBeforeDate}`);
     }
     if (excludeAfterDate) {
-      labels.push(BRACKET_FILTER_COPY.beforeDate.label);
+      labels.push(`To ${excludeAfterDate}`);
+    }
+    if (excludePreviousChampions) {
+      labels.push("Avoid previous winners");
+    }
+    if (excludePreviousFinalists) {
+      labels.push("Avoid previous finalists");
+    }
+    if (excludePreviousTop4) {
+      labels.push("Avoid previous top 4");
+    }
+    if (excludePreviousTop8) {
+      labels.push("Avoid previous top 8");
+    }
+    if (excludeTopViewedPerTalent) {
+      labels.push("Skip top viewed");
     }
     return labels;
   }, [
@@ -806,14 +1137,16 @@ export function HololiveBracketsPage() {
     excludeAfterDate,
     excludeBeforeDate,
     excludeBelowViewsValue,
-    excludeDisliked,
     excludePreviousChampions,
     excludePreviousFinalists,
     excludePreviousTop4,
     excludePreviousTop8,
-    excludeRated,
     excludeTopViewedPerTalent,
-    excludeTopicIds
+    isAllTalentsSelected,
+    selectedRatingBuckets,
+    selectedTalentIds,
+    selectedTalentLabel,
+    selectedTopicIds
   ]);
 
   const registerMatch = useCallback((matchId: string, element: HTMLElement | null) => {
@@ -982,19 +1315,20 @@ export function HololiveBracketsPage() {
   async function loadInitial() {
     setLoading(true);
     try {
-      const [nextSummaries, nextPlayerData] = await Promise.all([
+      const [nextSummaries, nextPlayerData, nextTierData] = await Promise.all([
         api.invoke("hololive:brackets:list", null),
-        api.invoke("hololive:player:data", null)
+        api.invoke("hololive:player:data", null),
+        api.invoke("hololive:tier-data", null)
       ]);
       setPlayerData(nextPlayerData);
+      setBracketTalents(nextTierData.idols);
       setSummaries(nextSummaries);
       if (nextSummaries[0]) {
         const bracket = await api.invoke("hololive:brackets:get", { bracketId: nextSummaries[0].id });
         setActiveBracket(bracket);
       }
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not load brackets.");
+      showBracketError(nextError, "Could not load brackets");
     } finally {
       setLoading(false);
     }
@@ -1009,9 +1343,8 @@ export function HololiveBracketsPage() {
       ]);
       setStatsOverview(nextStats);
       setArchiveSummaries(nextArchives);
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not load bracket stats.");
+      showBracketError(nextError, "Could not load bracket stats");
     } finally {
       setStatsLoading(false);
     }
@@ -1020,6 +1353,19 @@ export function HololiveBracketsPage() {
   useEffect(() => {
     void loadInitial();
   }, []);
+
+  useEffect(() => {
+    if (allBracketTalentIds.length === 0 || includedTalentIds === null) {
+      return;
+    }
+    const knownIds = new Set(allBracketTalentIds);
+    const nextTalentIds = includedTalentIds.filter((talentId) => knownIds.has(talentId));
+    if (nextTalentIds.length === allBracketTalentIds.length) {
+      setIncludedTalentIds(null);
+    } else if (nextTalentIds.length !== includedTalentIds.length) {
+      setIncludedTalentIds(nextTalentIds);
+    }
+  }, [allBracketTalentIds, includedTalentIds]);
 
   useEffect(() => {
     if (mode === "stats") {
@@ -1063,7 +1409,7 @@ export function HololiveBracketsPage() {
       })
       .catch((nextError) => {
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "Could not load matchup song actions.");
+          showBracketError(nextError, "Could not load matchup song actions");
         }
       });
 
@@ -1098,6 +1444,36 @@ export function HololiveBracketsPage() {
     };
   }, [createMenuOpen]);
 
+  useEffect(() => {
+    if (!talentSelectorOpen) {
+      return;
+    }
+
+    const closeTalentSelector = () => {
+      setTalentSelectorOpen(false);
+      setTalentSelectorQuery("");
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && talentSelectorRef.current?.contains(target)) {
+        return;
+      }
+      closeTalentSelector();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeTalentSelector();
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [talentSelectorOpen]);
+
   async function selectBracket(bracketId: string) {
     if (!bracketId) {
       setActiveBracket(null);
@@ -1107,9 +1483,8 @@ export function HololiveBracketsPage() {
     setBusy(true);
     try {
       setActiveBracket(await api.invoke("hololive:brackets:get", { bracketId }));
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not open bracket.");
+      showBracketError(nextError, "Could not open bracket");
     } finally {
       setBusy(false);
     }
@@ -1131,9 +1506,8 @@ export function HololiveBracketsPage() {
       setCreateMenuOpen(false);
       setSummaries(await api.invoke("hololive:brackets:list", null));
       setMode("play");
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not create bracket.");
+      showBracketError(nextError, "Could not create bracket");
     } finally {
       setBusy(false);
     }
@@ -1156,9 +1530,8 @@ export function HololiveBracketsPage() {
       if (bracket.status === "complete" && (statsOverview || archiveSummaries.length > 0)) {
         await loadBracketStats();
       }
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not save winner.");
+      showBracketError(nextError, "Could not save winner");
     } finally {
       setBusy(false);
     }
@@ -1172,9 +1545,8 @@ export function HololiveBracketsPage() {
     try {
       setActiveBracket(await api.invoke("hololive:brackets:undo", { bracketId: activeBracket.id }));
       setSummaries(await api.invoke("hololive:brackets:list", null));
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not undo pick.");
+      showBracketError(nextError, "Could not undo pick");
     } finally {
       setBusy(false);
     }
@@ -1188,51 +1560,72 @@ export function HololiveBracketsPage() {
     try {
       setActiveBracket(await api.invoke("hololive:brackets:reset", { bracketId: activeBracket.id }));
       setSummaries(await api.invoke("hololive:brackets:list", null));
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not reset bracket.");
+      showBracketError(nextError, "Could not reset bracket");
     } finally {
       setBusy(false);
     }
   }
 
-  async function removeBracket() {
-    if (!activeBracket || !window.confirm(`Delete ${activeBracket.name}?`)) {
-      return;
-    }
+  async function performRemoveBracket(bracket: HololiveBracket) {
     setBusy(true);
     try {
-      const nextSummaries = await api.invoke("hololive:brackets:delete", { bracketId: activeBracket.id });
+      const nextSummaries = await api.invoke("hololive:brackets:delete", { bracketId: bracket.id });
       setSummaries(nextSummaries);
       setActiveBracket(nextSummaries[0] ? await api.invoke("hololive:brackets:get", { bracketId: nextSummaries[0].id }) : null);
-      if (activeBracket.status === "complete" || statsOverview || archiveSummaries.length > 0) {
+      if (bracket.status === "complete" || statsOverview || archiveSummaries.length > 0) {
         await loadBracketStats();
       }
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not delete bracket.");
+      showBracketError(nextError, "Could not delete bracket");
     } finally {
       setBusy(false);
     }
   }
 
-  async function removeArchive(archive: HololiveBracketArchiveSummary) {
-    if (!window.confirm(`Delete archived run "${archive.name}"? This removes its bracket stats history.`)) {
+  function removeBracket() {
+    if (!activeBracket) {
       return;
     }
+    showToast({
+      message: `Delete ${activeBracket.name}?`,
+      detail: "This removes the saved bracket run.",
+      tone: "error",
+      actionLabel: "Delete",
+      onAction: () => performRemoveBracket(activeBracket)
+    });
+  }
 
+  async function performRemoveArchive(archive: HololiveBracketArchiveSummary) {
     setDeletingArchiveId(archive.id);
     try {
-      const nextArchives = await api.invoke("hololive:brackets:archives:delete", { archiveId: archive.id });
+      const response = await api.invoke("hololive:brackets:archives:delete", { archiveId: archive.id });
       const nextStats = await api.invoke("hololive:brackets:stats", null);
-      setArchiveSummaries(nextArchives);
+      setArchiveSummaries(response.data);
       setStatsOverview(nextStats);
-      setError(null);
+      if (response.undoToken) {
+        showUndoToast({
+          message: "Archive deleted",
+          undoToken: response.undoToken,
+          undoLabel: response.undoLabel,
+          onApplied: loadBracketStats
+        });
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not delete archived bracket run.");
+      showBracketError(nextError, "Could not delete archived bracket run");
     } finally {
       setDeletingArchiveId(null);
     }
+  }
+
+  function removeArchive(archive: HololiveBracketArchiveSummary) {
+    showToast({
+      message: `Delete archived run "${archive.name}"?`,
+      detail: "This removes its bracket stats history.",
+      tone: "error",
+      actionLabel: "Delete",
+      onAction: () => performRemoveArchive(archive)
+    });
   }
 
   function clearExportToastTimers() {
@@ -1258,19 +1651,18 @@ export function HololiveBracketsPage() {
     setExportToast({ id, filePath, fading: false });
     exportToastTimersRef.current.fade = window.setTimeout(() => {
       setExportToast((current) => (current?.id === id ? { ...current, fading: true } : current));
-    }, 3000);
+    }, HOLOLIVE_EXPORT_TOAST_DURATION_MS);
     exportToastTimersRef.current.clear = window.setTimeout(() => {
       setExportToast((current) => (current?.id === id ? null : current));
-    }, 3450);
+    }, HOLOLIVE_EXPORT_TOAST_DURATION_MS + 500);
   }
 
   async function openExportToast(filePath: string) {
     dismissExportToast();
     try {
       await api.invoke("app:open-path", { filePath });
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not open exported bracket image.");
+      showBracketError(nextError, "Could not open exported bracket image");
     }
   }
 
@@ -1294,9 +1686,8 @@ export function HololiveBracketsPage() {
       if (result.filePath) {
         showExportToast(result.filePath);
       }
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not export bracket image.");
+      showBracketError(nextError, "Could not export bracket image");
     } finally {
       setExportBusy(false);
     }
@@ -1314,9 +1705,8 @@ export function HololiveBracketsPage() {
       } else {
         await arena.requestFullscreen();
       }
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not toggle fullscreen.");
+      showBracketError(nextError, "Could not toggle fullscreen");
     }
   }
 
@@ -1338,7 +1728,6 @@ export function HololiveBracketsPage() {
         }
       })
     );
-    setError(null);
   }
 
   async function addBracketEntryToPlaylist(entry: HololiveBracketEntry, playlistId: string) {
@@ -1348,18 +1737,50 @@ export function HololiveBracketsPage() {
         youtubeVideoId: entry.youtubeVideoId
       })
     );
-    setError(null);
   }
 
-  function toggleExcludedTopic(topicId: HololiveMusicTopic) {
-    setExcludeTopicIds((current) =>
-      current.includes(topicId) ? current.filter((topic) => topic !== topicId) : [...current, topicId]
-    );
+  function toggleIncludedTopic(topicId: HololiveMusicTopic) {
+    setIncludedTopicIds((current) => {
+      const selected = current.length > 0 ? current : BRACKET_TOPIC_VALUES;
+      if (selected.includes(topicId)) {
+        return selected.length <= 1 ? selected : selected.filter((topic) => topic !== topicId);
+      }
+      return orderedBracketFilterValues(BRACKET_TOPIC_VALUES, [...selected, topicId]);
+    });
   }
 
-  function clearBracketExclusions() {
-    setExcludeDisliked(false);
-    setExcludeRated(false);
+  function toggleIncludedRatingBucket(bucket: HololiveBracketRatingBucket) {
+    setIncludedRatingBuckets((current) => {
+      const selected = current.length > 0 ? current : BRACKET_RATING_BUCKET_VALUES;
+      if (selected.includes(bucket)) {
+        return selected.length <= 1 ? selected : selected.filter((value) => value !== bucket);
+      }
+      return orderedBracketFilterValues(BRACKET_RATING_BUCKET_VALUES, [...selected, bucket]);
+    });
+  }
+
+  function toggleAllBracketTalents() {
+    setIncludedTalentIds(isAllTalentsSelected ? [] : null);
+    setTalentSelectorQuery("");
+  }
+
+  function toggleIncludedTalent(talentId: string) {
+    setIncludedTalentIds((current) => {
+      const allIds = allBracketTalentIds;
+      const selected = current === null ? allIds : current.filter((id) => allIds.includes(id));
+      if (selected.includes(talentId)) {
+        return selected.filter((id) => id !== talentId);
+      }
+      const nextSelected = allIds.filter((id) => selected.includes(id) || id === talentId);
+      return nextSelected.length === allIds.length ? null : nextSelected;
+    });
+  }
+
+  function clearBracketFilters() {
+    setIncludedRatingBuckets(BRACKET_RATING_BUCKET_VALUES);
+    setIncludedTalentIds(null);
+    setTalentSelectorOpen(false);
+    setTalentSelectorQuery("");
     setExcludeTopViewedPerTalent(false);
     setExcludePreviousChampions(false);
     setExcludePreviousFinalists(false);
@@ -1369,7 +1790,7 @@ export function HololiveBracketsPage() {
     setExcludeBelowViews("");
     setExcludeAfterDate("");
     setExcludeBeforeDate("");
-    setExcludeTopicIds([]);
+    setIncludedTopicIds(BRACKET_TOPIC_VALUES);
   }
 
   return (
@@ -1382,12 +1803,14 @@ export function HololiveBracketsPage() {
             className={`hololive-export-toast${exportToast.fading ? " fading" : ""}`}
             onClick={() => void openExportToast(exportToast.filePath)}
             title="Open exported bracket image"
+            style={{ "--toast-duration-ms": `${HOLOLIVE_EXPORT_TOAST_DURATION_MS}ms` } as CSSProperties}
           >
             <CheckCircle2 size={16} />
             <span>
               <strong>Bracket image saved</strong>
               <small>{fileNameFromPath(exportToast.filePath)}</small>
             </span>
+            <span className="hololive-toast-progress" aria-hidden="true" />
           </button>
         )}
 
@@ -1462,22 +1885,22 @@ export function HololiveBracketsPage() {
                       onChange={(event) => setNameDraft(event.target.value)}
                     />
                   </label>
-                  <div className={`hololive-bracket-exclusions${activeExclusionLabels.length > 0 ? " has-active" : ""}`}>
+                  <div className={`hololive-bracket-exclusions${activeFilterLabels.length > 0 ? " has-active" : ""}`}>
                     <div className="hololive-bracket-filter-row">
                       <span className="hololive-bracket-exclusions-title">
-                        <Ban size={13} />
-                        <strong>Filters</strong>
+                        <ListMusic size={13} />
+                        <strong>Song Pool</strong>
                       </span>
                       <div className="hololive-bracket-filter-chips" aria-label="Active bracket filters">
-                        {activeExclusionLabels.length > 0 ? (
+                        {activeFilterLabels.length > 0 ? (
                           <>
-                            {activeExclusionLabels.slice(0, 5).map((label) => (
+                            {activeFilterLabels.slice(0, 5).map((label) => (
                               <span key={label}>{label}</span>
                             ))}
-                            {activeExclusionLabels.length > 5 && <span>+{activeExclusionLabels.length - 5}</span>}
+                            {activeFilterLabels.length > 5 && <span>+{activeFilterLabels.length - 5}</span>}
                           </>
                         ) : (
-                          <span className="empty">No exclusions</span>
+                          <span className="empty">All songs</span>
                         )}
                       </div>
                       <button
@@ -1494,7 +1917,177 @@ export function HololiveBracketsPage() {
                     {filtersExpanded && (
                       <div className="hololive-bracket-exclusions-body">
                         <section className="hololive-bracket-filter-group">
-                          <h4>History</h4>
+                          <h4>Song Pool</h4>
+                          <div className="hololive-bracket-filter-subsection talent-selector">
+                            <div
+                              className={["hololive-bracket-talent-selector", talentSelectorOpen ? "open" : ""].filter(Boolean).join(" ")}
+                              ref={talentSelectorRef}
+                              onBlur={(event) => {
+                                const nextFocus = event.relatedTarget;
+                                if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
+                                  setTalentSelectorOpen(false);
+                                  setTalentSelectorQuery("");
+                                }
+                              }}
+                            >
+                              <button
+                                type="button"
+                                className="hololive-bracket-talent-selector-button"
+                                aria-expanded={talentSelectorOpen}
+                                disabled={busy || officialBracketTalents.length === 0}
+                                onClick={() => setTalentSelectorOpen((open) => !open)}
+                              >
+                                <span>{selectedTalentLabel}</span>
+                                <ChevronDown size={13} className={talentSelectorOpen ? "open" : ""} />
+                              </button>
+                              {talentSelectorOpen ? (
+                                <div className="hololive-bracket-talent-selector-menu">
+                                  <input
+                                    aria-label="Search bracket talents"
+                                    value={talentSelectorQuery}
+                                    placeholder="Search talents"
+                                    disabled={busy}
+                                    onChange={(event) => setTalentSelectorQuery(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Escape") {
+                                        event.preventDefault();
+                                        setTalentSelectorOpen(false);
+                                        setTalentSelectorQuery("");
+                                      }
+                                    }}
+                                  />
+                                  <div className="hololive-bracket-talent-selector-list">
+                                    <button
+                                      type="button"
+                                      className="hololive-bracket-talent-option"
+                                      role="menuitemcheckbox"
+                                      aria-checked={isAllTalentsSelected}
+                                      disabled={busy}
+                                      onMouseDown={(event) => event.preventDefault()}
+                                      onClick={toggleAllBracketTalents}
+                                    >
+                                      <span className="hololive-bracket-talent-check" aria-hidden="true" />
+                                      <span>All</span>
+                                    </button>
+                                    {filteredBracketTalents.map((talent) => {
+                                      const checked = selectedTalentIds.includes(talent.id);
+                                      return (
+                                        <button
+                                          type="button"
+                                          className="hololive-bracket-talent-option"
+                                          key={talent.id}
+                                          role="menuitemcheckbox"
+                                          aria-checked={checked}
+                                          disabled={busy}
+                                          onMouseDown={(event) => event.preventDefault()}
+                                          onClick={() => toggleIncludedTalent(talent.id)}
+                                        >
+                                          <span className="hololive-bracket-talent-check" aria-hidden="true" />
+                                          <span title={talent.displayName}>{talent.displayName}</span>
+                                        </button>
+                                      );
+                                    })}
+                                    {filteredBracketTalents.length === 0 ? (
+                                      <span className="hololive-bracket-talent-empty">No talents found</span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="hololive-bracket-filter-subsection">
+                            <span>Song Type</span>
+                            <div className="hololive-bracket-exclusion-list">
+                              {BRACKET_TOPIC_FILTERS.map((topic) => {
+                                const checked = selectedTopicIds.includes(topic.value);
+                                return (
+                                  <label className="hololive-bracket-exclusion-option" key={topic.value}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={busy || (checked && selectedTopicIds.length <= 1)}
+                                      onChange={() => toggleIncludedTopic(topic.value)}
+                                    />
+                                    <BracketFilterOptionText copy={topic} />
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="hololive-bracket-filter-subsection">
+                            <span>Ratings Included</span>
+                            <div className="hololive-bracket-exclusion-list rating-buckets">
+                              {BRACKET_RATING_FILTERS.map((rating) => {
+                                const checked = selectedRatingBuckets.includes(rating.value);
+                                return (
+                                  <label className="hololive-bracket-exclusion-option" key={rating.value}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={busy || (checked && selectedRatingBuckets.length <= 1)}
+                                      onChange={() => toggleIncludedRatingBucket(rating.value)}
+                                    />
+                                    <BracketFilterOptionText copy={rating} />
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="hololive-bracket-filter-fields">
+                            <div className="hololive-bracket-number-filters">
+                              <label>
+                                <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.minViews} />
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.minViews)}
+                                  placeholder="No minimum"
+                                  value={excludeBelowViews}
+                                  disabled={busy}
+                                  onChange={(event) => setExcludeBelowViews(event.target.value)}
+                                  onBlur={() => setExcludeBelowViews((value) => formatViewThresholdInput(value))}
+                                />
+                              </label>
+                              <label>
+                                <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.maxViews} />
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.maxViews)}
+                                  placeholder="No maximum"
+                                  value={excludeAboveViews}
+                                  disabled={busy}
+                                  onChange={(event) => setExcludeAboveViews(event.target.value)}
+                                  onBlur={() => setExcludeAboveViews((value) => formatViewThresholdInput(value))}
+                                />
+                              </label>
+                            </div>
+                            <div className="hololive-bracket-date-filters">
+                              <label>
+                                <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.fromDate} />
+                                <input
+                                  type="date"
+                                  aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.fromDate)}
+                                  value={excludeBeforeDate}
+                                  disabled={busy}
+                                  onChange={(event) => setExcludeBeforeDate(event.target.value)}
+                                />
+                              </label>
+                              <label>
+                                <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.toDate} />
+                                <input
+                                  type="date"
+                                  aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.toDate)}
+                                  value={excludeAfterDate}
+                                  disabled={busy}
+                                  onChange={(event) => setExcludeAfterDate(event.target.value)}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </section>
+                        <section className="hololive-bracket-filter-group">
+                          <h4>Avoid Previous Results</h4>
                           <div className="hololive-bracket-exclusion-list">
                             <label className="hololive-bracket-exclusion-option">
                               <input
@@ -1535,30 +2128,7 @@ export function HololiveBracketsPage() {
                           </div>
                         </section>
                         <section className="hololive-bracket-filter-group">
-                          <h4>Ratings</h4>
-                          <div className="hololive-bracket-exclusion-list">
-                            <label className="hololive-bracket-exclusion-option">
-                              <input
-                                type="checkbox"
-                                checked={excludeDisliked}
-                                disabled={busy}
-                                onChange={(event) => setExcludeDisliked(event.target.checked)}
-                              />
-                              <BracketFilterOptionText copy={BRACKET_FILTER_COPY.disliked} />
-                            </label>
-                            <label className="hololive-bracket-exclusion-option">
-                              <input
-                                type="checkbox"
-                                checked={excludeRated}
-                                disabled={busy}
-                                onChange={(event) => setExcludeRated(event.target.checked)}
-                              />
-                              <BracketFilterOptionText copy={BRACKET_FILTER_COPY.rated} />
-                            </label>
-                          </div>
-                        </section>
-                        <section className="hololive-bracket-filter-group">
-                          <h4>Talents</h4>
+                          <h4>Variety Rules</h4>
                           <div className="hololive-bracket-exclusion-list single">
                             <label className="hololive-bracket-exclusion-option">
                               <input
@@ -1571,90 +2141,22 @@ export function HololiveBracketsPage() {
                             </label>
                           </div>
                         </section>
-                        <section className="hololive-bracket-filter-group">
-                          <h4>Song Type</h4>
-                          <div className="hololive-bracket-exclusion-list">
-                            {BRACKET_TOPIC_FILTERS.map((topic) => (
-                              <label className="hololive-bracket-exclusion-option" key={topic.value}>
-                                <input
-                                  type="checkbox"
-                                  checked={excludeTopicIds.includes(topic.value)}
-                                  disabled={busy}
-                                  onChange={() => toggleExcludedTopic(topic.value)}
-                                />
-                                <BracketFilterOptionText copy={topic} />
-                              </label>
-                            ))}
-                          </div>
-                        </section>
-                        <div className="hololive-bracket-filter-fields">
-                          <div className="hololive-bracket-number-filters">
-                            <label>
-                              <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.minViews} />
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.minViews)}
-                                placeholder="No minimum"
-                                value={excludeBelowViews}
-                                disabled={busy}
-                                onChange={(event) => setExcludeBelowViews(event.target.value)}
-                                onBlur={() => setExcludeBelowViews((value) => formatViewThresholdInput(value))}
-                              />
-                            </label>
-                            <label>
-                              <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.maxViews} />
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.maxViews)}
-                                placeholder="No maximum"
-                                value={excludeAboveViews}
-                                disabled={busy}
-                                onChange={(event) => setExcludeAboveViews(event.target.value)}
-                                onBlur={() => setExcludeAboveViews((value) => formatViewThresholdInput(value))}
-                              />
-                            </label>
-                          </div>
-                          <div className="hololive-bracket-date-filters">
-                            <label>
-                              <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.afterDate} />
-                              <input
-                                type="date"
-                                aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.afterDate)}
-                                value={excludeBeforeDate}
-                                disabled={busy}
-                                onChange={(event) => setExcludeBeforeDate(event.target.value)}
-                              />
-                            </label>
-                            <label>
-                              <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.beforeDate} />
-                              <input
-                                type="date"
-                                aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.beforeDate)}
-                                value={excludeAfterDate}
-                                disabled={busy}
-                                onChange={(event) => setExcludeAfterDate(event.target.value)}
-                              />
-                            </label>
-                          </div>
-                        </div>
-                        {activeExclusionLabels.length > 0 && (
+                        {activeFilterLabels.length > 0 && (
                           <button
                             type="button"
                             className="hololive-bracket-exclusions-clear"
                             disabled={busy}
-                            onClick={clearBracketExclusions}
+                            onClick={clearBracketFilters}
                           >
-                            <X size={12} />
-                            Clear exclusions
+                            <RotateCcw size={12} />
+                            Reset filters
                           </button>
                         )}
                       </div>
                     )}
                   </div>
                   <div className="hololive-bracket-create-actions">
-                    <button type="button" className="primary" disabled={busy} onClick={() => void createBracket()}>
+                    <button type="button" className="primary" disabled={busy || selectedTalentIds.length === 0} onClick={() => void createBracket()}>
                       {busy ? <Loader2 size={14} className="spin" /> : <Swords size={14} />}
                       Create Bracket
                     </button>
@@ -1701,8 +2203,6 @@ export function HololiveBracketsPage() {
               <Trash2 size={14} />
             </button>
           </div>
-
-          {error && <div className="hololive-bracket-error">{error}</div>}
 
           {loading ? (
             <div className="hololive-bracket-empty">
@@ -1751,8 +2251,7 @@ export function HololiveBracketsPage() {
                       style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
                     >
                       <header>
-                        <strong>{round.label}</strong>
-                        <span>{round.matches.length}</span>
+                        <strong>{displayHololiveBracketRoundLabel(round.label)}</strong>
                       </header>
                       <div className="hololive-bracket-round-stack">
                         {round.matches.map((match) => (
@@ -1779,7 +2278,6 @@ export function HololiveBracketsPage() {
                 >
                   <header>
                     <strong>Final</strong>
-                    <span>1</span>
                   </header>
                   <div className="hololive-bracket-round-stack">
                     {finalRound?.matches[0] ? (
@@ -1803,27 +2301,26 @@ export function HololiveBracketsPage() {
 
                 <div className="hololive-bracket-side right">
                   {bracketTree.rightRounds.map((round) => (
-                  <section
-                    className={roundClassName(round, activeBracket)}
-                    key={`right-${round.roundIndex}`}
-                    style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
-                  >
-                    <header>
-                      <strong>{round.label}</strong>
-                      <span>{round.matches.length}</span>
-                    </header>
-                    <div className="hololive-bracket-round-stack">
-                      {round.matches.map((match) => (
-                        <BracketMatchCard
-                          key={match.id}
-                          match={match}
-                          side="right"
-                          current={activeBracket.currentMatchId === match.id}
-                          registerMatch={registerMatch}
-                        />
-                      ))}
-                    </div>
-                  </section>
+                    <section
+                      className={roundClassName(round, activeBracket)}
+                      key={`right-${round.roundIndex}`}
+                      style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
+                    >
+                      <header>
+                        <strong>{displayHololiveBracketRoundLabel(round.label)}</strong>
+                      </header>
+                      <div className="hololive-bracket-round-stack">
+                        {round.matches.map((match) => (
+                          <BracketMatchCard
+                            key={match.id}
+                            match={match}
+                            side="right"
+                            current={activeBracket.currentMatchId === match.id}
+                            registerMatch={registerMatch}
+                          />
+                        ))}
+                      </div>
+                    </section>
                   ))}
                 </div>
               </div>

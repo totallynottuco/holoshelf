@@ -195,13 +195,21 @@ for (const [id, label, color, position] of defaultTiers) {
 }
 
 if (tableExists("hololive_tier_placements")) {
-  const idols = rows("SELECT id, sort_order FROM hololive_idols ORDER BY sort_order ASC, display_name ASC");
-  for (const idol of idols) {
+  const idols = rows(`SELECT id
+    FROM hololive_idols
+    ORDER BY CASE
+        WHEN source = 'custom' THEN 2
+        WHEN status IN ('affiliate', 'alum', 'retired') THEN 1
+        ELSE 0
+      END ASC,
+      sort_order ASC,
+      display_name ASC`);
+  idols.forEach((idol, position) => {
     database.run(
       `INSERT INTO hololive_tier_placements (board_id, idol_id, tier_id, position, updated_at)
-       VALUES ('hololive-idol-ranking', ${sqlString(idol.id)}, NULL, ${Number(idol.sort_order) || 0}, ${sqlString(sanitizedAt)});`
+       VALUES ('hololive-idol-ranking', ${sqlString(idol.id)}, NULL, ${position}, ${sqlString(sanitizedAt)});`
     );
-  }
+  });
 }
 
 runIfTable(

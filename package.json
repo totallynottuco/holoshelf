@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.0.6",
+  "version": "1.0.34",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -66,8 +66,8 @@
         "to": "sql-wasm.wasm"
       },
       {
-        "from": "icon.ico",
-        "to": "icon.ico"
+        "from": "ico.ico",
+        "to": "ico.ico"
       },
       {
         "from": "resources/seed",
@@ -83,7 +83,7 @@
       }
     ],
     "win": {
-      "icon": "icon.ico",
+      "icon": "ico.ico",
       "signAndEditExecutable": false,
       "signExts": [
         "!exe",

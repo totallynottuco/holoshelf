@@ -9,13 +9,25 @@ interface YouTubeVideoStatsServiceOptions {
   fetcher?: typeof fetch;
 }
 
+interface YouTubeVideosApiItem {
+  id?: string;
+  statistics?: {
+    viewCount?: string;
+  };
+  status?: {
+    uploadStatus?: string;
+    privacyStatus?: string;
+    embeddable?: boolean;
+  };
+}
+
 interface YouTubeVideosApiResponse {
-  items?: Array<{
-    id?: string;
-    statistics?: {
-      viewCount?: string;
-    };
-  }>;
+  items?: YouTubeVideosApiItem[];
+}
+
+interface YouTubeVideoStatsBatchResult {
+  stats: Array<{ youtubeVideoId: string; viewCount: number; fetchedAt: string }>;
+  unavailableVideos: Array<{ youtubeVideoId: string; reason: string }>;
 }
 
 export class YouTubeVideoStatsService {
@@ -42,6 +54,7 @@ export class YouTubeVideoStatsService {
         requestedVideos: 0,
         updatedVideos: 0,
         missingVideos: 0,
+        unavailableVideos: 0,
         failedBatches: 0,
         batches: 0,
         fetchedAt
@@ -51,13 +64,24 @@ export class YouTubeVideoStatsService {
     const apiKey = await this.readApiKey();
     const batches = this.chunk(videoIds, YOUTUBE_VIDEO_STATS_BATCH_SIZE);
     let updatedVideos = 0;
+    let unavailableVideos = 0;
     let failedBatches = 0;
+    let unavailableBackupCreated = false;
 
     for (const batch of batches) {
       try {
-        const stats = await this.fetchBatch(batch, apiKey, fetchedAt);
-        this.database.upsertHololiveMusicVideoStats(stats);
-        updatedVideos += stats.length;
+        const batchResult = await this.fetchBatch(batch, apiKey, fetchedAt);
+        this.database.upsertHololiveMusicVideoStats(batchResult.stats);
+        updatedVideos += batchResult.stats.length;
+        for (const unavailable of batchResult.unavailableVideos) {
+          this.database.markHololiveMusicVideoUnavailable({
+            youtubeVideoId: unavailable.youtubeVideoId,
+            reason: unavailable.reason,
+            createBackup: !unavailableBackupCreated
+          });
+          unavailableBackupCreated = true;
+          unavailableVideos += 1;
+        }
       } catch {
         failedBatches += 1;
       }
@@ -67,6 +91,7 @@ export class YouTubeVideoStatsService {
       requestedVideos: videoIds.length,
       updatedVideos,
       missingVideos: Math.max(0, videoIds.length - updatedVideos),
+      unavailableVideos,
       failedBatches,
       batches: batches.length,
       fetchedAt
@@ -77,10 +102,10 @@ export class YouTubeVideoStatsService {
     youtubeVideoIds: string[],
     apiKey: string,
     fetchedAt: string
-  ): Promise<Array<{ youtubeVideoId: string; viewCount: number; fetchedAt: string }>> {
+  ): Promise<YouTubeVideoStatsBatchResult> {
     const url = new URL(YOUTUBE_VIDEOS_API_URL);
-    url.searchParams.set("part", "statistics");
-    url.searchParams.set("fields", "items(id,statistics(viewCount))");
+    url.searchParams.set("part", "statistics,status");
+    url.searchParams.set("fields", "items(id,statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))");
     url.searchParams.set("id", youtubeVideoIds.join(","));
     url.searchParams.set("key", apiKey);
 
@@ -90,11 +115,24 @@ export class YouTubeVideoStatsService {
     }
 
     const body = (await response.json()) as YouTubeVideosApiResponse;
-    return (body.items ?? [])
+    const returnedIds = new Set<string>();
+    const unavailableVideos: YouTubeVideoStatsBatchResult["unavailableVideos"] = [];
+    const stats = (body.items ?? [])
       .map((item) => {
         const youtubeVideoId = item.id?.trim() ?? "";
+        if (!youtubeVideoId) {
+          return null;
+        }
+        returnedIds.add(youtubeVideoId);
+
+        const unavailableReason = this.getUnavailableReason(item.status);
+        if (unavailableReason) {
+          unavailableVideos.push({ youtubeVideoId, reason: unavailableReason });
+          return null;
+        }
+
         const viewCount = Number.parseInt(item.statistics?.viewCount ?? "", 10);
-        if (!youtubeVideoId || !Number.isFinite(viewCount) || viewCount < 0) {
+        if (!Number.isFinite(viewCount) || viewCount < 0) {
           return null;
         }
         return {
@@ -104,6 +142,38 @@ export class YouTubeVideoStatsService {
         };
       })
       .filter((item): item is { youtubeVideoId: string; viewCount: number; fetchedAt: string } => Boolean(item));
+
+    for (const videoId of youtubeVideoIds) {
+      if (!returnedIds.has(videoId)) {
+        unavailableVideos.push({
+          youtubeVideoId: videoId,
+          reason: "YouTube Data API did not return the video during stats refresh."
+        });
+      }
+    }
+
+    return { stats, unavailableVideos };
+  }
+
+  private getUnavailableReason(status: YouTubeVideosApiItem["status"]): string | null {
+    const uploadStatus = status?.uploadStatus?.trim().toLowerCase() ?? "";
+    if (uploadStatus === "deleted") {
+      return "YouTube reports this video as deleted.";
+    }
+    if (uploadStatus === "failed" || uploadStatus === "rejected") {
+      return `YouTube reports this video upload as ${uploadStatus}.`;
+    }
+
+    const privacyStatus = status?.privacyStatus?.trim().toLowerCase() ?? "";
+    if (privacyStatus === "private") {
+      return "YouTube reports this video as private.";
+    }
+
+    if (status?.embeddable === false) {
+      return "YouTube reports this video as not embeddable.";
+    }
+
+    return null;
   }
 
   private async readApiKey(): Promise<string> {

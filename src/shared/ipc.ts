@@ -83,6 +83,26 @@ export interface OpenPathResponse {
   opened: boolean;
 }
 
+export interface DataSafetyBackupResponse {
+  created: boolean;
+  filePath: string | null;
+  reason: string;
+  skippedReason?: string;
+}
+
+export interface DataSafetyRestoreResponse {
+  restored: boolean;
+  backupFilePath: string | null;
+  restoredFromPath?: string | null;
+  requiresRestart: boolean;
+}
+
+export interface DataSafetyResetResponse {
+  reset: boolean;
+  backupFilePath: string | null;
+  requiresRestart: boolean;
+}
+
 export interface FetchEnqueueRequest {
   moduleId: ModuleId;
   sourceId: SourceId;
@@ -227,10 +247,16 @@ export interface HololiveMusicListRequest {
   limit?: number | null;
 }
 
+export type HololiveMusicLibrarySort = "newest" | "oldest" | "views_desc" | "views_asc";
+export type HololiveMusicLibraryCollabScope = "all" | "solo";
+
 export interface HololiveMusicLibraryRequest {
   query?: string | null;
   topicId?: HololiveMusicTopic | null;
   marker?: HololiveMusicMarker | null;
+  sort?: HololiveMusicLibrarySort | null;
+  talentId?: string | null;
+  collabScope?: HololiveMusicLibraryCollabScope | null;
   offset?: number | null;
   limit?: number | null;
 }
@@ -249,6 +275,26 @@ export interface HololiveMusicExcludeRequest {
   youtubeVideoId: string;
   title?: string | null;
   sourceUrl?: string | null;
+}
+
+export interface HololiveMusicUnavailableRequest {
+  youtubeVideoId: string;
+  title?: string | null;
+  sourceUrl?: string | null;
+  reason?: string | null;
+}
+
+export interface HololiveMusicUnavailableResponse {
+  removedYoutubeVideoId: string;
+  replacementYoutubeVideoId?: string | null;
+  replacementTitle?: string | null;
+  data: HololiveMusicPlayerData;
+}
+
+export interface UndoableResponse<TData> {
+  data: TData;
+  undoToken?: string | null;
+  undoLabel?: string | null;
 }
 
 export interface HololiveChannelsListRequest {
@@ -299,6 +345,11 @@ export interface HololivePlayerPlaylistItemAddRequest {
   position?: number | null;
 }
 
+export interface HololivePlayerPlaylistItemsAddRequest {
+  playlistId: string;
+  youtubeVideoIds: string[];
+}
+
 export interface HololivePlayerPlaylistItemRemoveRequest {
   itemId: string;
 }
@@ -320,6 +371,15 @@ export interface HololivePlayerPlayVideoRequest {
 export interface HololivePlayerQueueAddRequest {
   youtubeVideoId: string;
   placement: "now" | "next" | "end";
+}
+
+export interface HololivePlayerQueueBulkAddRequest {
+  youtubeVideoIds: string[];
+  placement: "now" | "next" | "end";
+}
+
+export interface HololivePlayerVisiblePlayRequest {
+  youtubeVideoIds: string[];
 }
 
 export interface HololivePlayerQueueRemoveRequest {
@@ -378,6 +438,23 @@ export interface HololiveBracketArchiveDeleteRequest {
   archiveId: string;
 }
 
+export interface HololiveUndoApplyRequest {
+  token: string;
+}
+
+export type HololiveUndoKind =
+  | "music-exclusion"
+  | "playlist-item-remove"
+  | "queue-item-remove"
+  | "bracket-archive-delete"
+  | "tier-board-clear"
+  | "tier-board-delete";
+
+export interface HololiveUndoApplyResponse {
+  applied: boolean;
+  kind: HololiveUndoKind;
+}
+
 export interface IpcChannelMap {
   "app:bootstrap": {
     request: null;
@@ -410,6 +487,18 @@ export interface IpcChannelMap {
   "app:open-path": {
     request: OpenPathRequest;
     response: OpenPathResponse;
+  };
+  "app:data-backup:create": {
+    request: null;
+    response: DataSafetyBackupResponse;
+  };
+  "app:data-backup:restore": {
+    request: null;
+    response: DataSafetyRestoreResponse;
+  };
+  "app:data:reset": {
+    request: null;
+    response: DataSafetyResetResponse;
   };
   "catalog:list": {
     request: CatalogListFilters;
@@ -461,11 +550,11 @@ export interface IpcChannelMap {
   };
   "hololive:board:delete": {
     request: HololiveBoardDeleteRequest;
-    response: HololiveTierListData;
+    response: UndoableResponse<HololiveTierListData>;
   };
   "hololive:board:clear": {
     request: HololiveBoardClearRequest;
-    response: HololiveTierListData;
+    response: UndoableResponse<HololiveTierListData>;
   };
   "hololive:tier:create": {
     request: HololiveTierCreateRequest;
@@ -541,7 +630,11 @@ export interface IpcChannelMap {
   };
   "hololive:music:exclude": {
     request: HololiveMusicExcludeRequest;
-    response: HololiveMusicExclusionRecord;
+    response: UndoableResponse<HololiveMusicExclusionRecord>;
+  };
+  "hololive:music:mark-unavailable": {
+    request: HololiveMusicUnavailableRequest;
+    response: HololiveMusicUnavailableResponse;
   };
   "hololive:channels:refresh": {
     request: null;
@@ -595,9 +688,13 @@ export interface IpcChannelMap {
     request: HololivePlayerPlaylistItemAddRequest;
     response: HololiveMusicPlayerData;
   };
+  "hololive:player:playlist-items:add": {
+    request: HololivePlayerPlaylistItemsAddRequest;
+    response: HololiveMusicPlayerData;
+  };
   "hololive:player:playlist-item:remove": {
     request: HololivePlayerPlaylistItemRemoveRequest;
-    response: HololiveMusicPlayerData;
+    response: UndoableResponse<HololiveMusicPlayerData>;
   };
   "hololive:player:playlist-item:reorder": {
     request: HololivePlayerPlaylistItemReorderRequest;
@@ -615,9 +712,17 @@ export interface IpcChannelMap {
     request: HololivePlayerQueueAddRequest;
     response: HololiveMusicPlayerData;
   };
+  "hololive:player:queue:bulk-add": {
+    request: HololivePlayerQueueBulkAddRequest;
+    response: HololiveMusicPlayerData;
+  };
+  "hololive:player:visible:play": {
+    request: HololivePlayerVisiblePlayRequest;
+    response: HololiveMusicPlayerData;
+  };
   "hololive:player:queue:remove": {
     request: HololivePlayerQueueRemoveRequest;
-    response: HololiveMusicPlayerData;
+    response: UndoableResponse<HololiveMusicPlayerData>;
   };
   "hololive:player:queue:reorder": {
     request: HololivePlayerQueueReorderRequest;
@@ -669,7 +774,11 @@ export interface IpcChannelMap {
   };
   "hololive:brackets:archives:delete": {
     request: HololiveBracketArchiveDeleteRequest;
-    response: HololiveBracketArchiveSummary[];
+    response: UndoableResponse<HololiveBracketArchiveSummary[]>;
+  };
+  "hololive:undo:apply": {
+    request: HololiveUndoApplyRequest;
+    response: HololiveUndoApplyResponse;
   };
   "hololive:brackets:stats": {
     request: null;

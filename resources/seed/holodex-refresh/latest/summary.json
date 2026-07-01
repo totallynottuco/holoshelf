@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-06-29T16:35:52.027Z",
-  "completedAt": "2026-06-29T16:45:24.207Z",
-  "databasePath": "F:\\coding\\Holoshelf\\data\\holoshelf.sqlite",
-  "artifactDirectory": "F:\\coding\\Holoshelf\\data\\holodex-refresh\\latest",
-  "officialDataVersion": "2026-06-29T163552Z",
+  "startedAt": "2026-07-01T01:55:05.295Z",
+  "completedAt": "2026-07-01T02:04:56.671Z",
+  "databasePath": "resources/seed/holoshelf-template.sqlite",
+  "artifactDirectory": "resources/seed/holodex-refresh/latest",
+  "officialDataVersion": "2026-07-01T015505Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -12,41 +12,42 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-06-29T16:35:56.714Z"
+    "updatedAt": "2026-07-01T01:55:08.594Z"
   },
   "musicRefresh": {
-    "sourceRows": 3019,
-    "importedRows": 2965,
-    "filteredRows": 54,
-    "duplicateRows": 1123,
+    "sourceRows": 2999,
+    "importedRows": 2952,
+    "filteredRows": 47,
+    "duplicateRows": 1132,
     "run": {
-      "id": "25735765-ea61-4ece-b054-38c30a5eddd7",
+      "id": "624b2181-87da-4db6-84e4-7b2798119b26",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-06-29T16:45:16.354Z",
-      "completedAt": "2026-06-29T16:45:18.068Z",
-      "fetchedRows": 3019,
-      "keptRows": 2965,
-      "filteredRows": 54,
-      "duplicateRows": 1123,
+      "startedAt": "2026-07-01T02:04:48.657Z",
+      "completedAt": "2026-07-01T02:04:50.744Z",
+      "fetchedRows": 2999,
+      "keptRows": 2952,
+      "filteredRows": 47,
+      "duplicateRows": 1132,
       "error": null
     }
   },
   "videoStatsRefresh": {
-    "requestedVideos": 2957,
-    "updatedVideos": 2957,
-    "missingVideos": 0,
+    "requestedVideos": 2944,
+    "updatedVideos": 2943,
+    "missingVideos": 1,
+    "unavailableVideos": 1,
     "failedBatches": 0,
-    "batches": 60,
-    "fetchedAt": "2026-06-29T16:45:18.277Z"
+    "batches": 59,
+    "fetchedAt": "2026-07-01T02:04:50.988Z"
   },
   "counts": {
-    "totalMusicRows": 2965,
+    "totalMusicRows": 2951,
     "totalChannels": 177,
     "officialIdols": 74,
     "customIdols": 0,
-    "statsRows": 2958,
-    "detailCacheRows": 2965,
-    "duplicateRemovalRows": 1101
+    "statsRows": 2946,
+    "detailCacheRows": 2951,
+    "duplicateRemovalRows": 1111
   }
 }

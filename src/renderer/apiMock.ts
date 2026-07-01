@@ -1,0 +1,2561 @@
+import { trackerModules } from "../modules/registry";
+import {
+  DEFAULT_HOLOLIVE_BOARD_NAME,
+  DEFAULT_HOLOLIVE_TIERS,
+  HOLOLIVE_DEFAULT_BOARD_ID,
+  HOLOLIVE_IDOLS
+} from "../modules/hololive/idols";
+import type {
+  AppBootstrap,
+  CatalogItem,
+  HolodexChannel,
+  HololiveBracket,
+  HololiveBracketArchiveSummary,
+  HololiveBracketEntry,
+  HololiveBracketGenerationStyle,
+  HololiveBracketMatch,
+  HololiveBracketRound,
+  HololiveBracketSize,
+  HololiveBracketStatsOverview,
+  HololiveBracketSummary,
+  HololiveCustomTalentPreview,
+  HololiveIdolProfile,
+  HololiveMusicLibraryResponse,
+  HololiveMusicPlayerData,
+  HololiveProfilePlaybackContext,
+  HololiveMusicResolvedItem,
+  HololiveMusicRow,
+  HololiveTierBoard,
+  HololiveTierBoardSummary,
+  HololiveTierListData,
+  SourceHealth
+} from "../shared/contracts";
+import { hololiveBracketRoundLabel } from "../shared/hololiveBracketLabels";
+import type { HololiveUndoKind, HoloshelfBridge, IpcChannel, IpcChannelMap, UpdateStatus } from "../shared/ipc";
+
+const now = new Date().toISOString();
+const mockSettings: Record<string, string> = {};
+let mockUpdateStatus: UpdateStatus = {
+  state: "unsupported",
+  message: "Updates are available only in the packaged Windows app.",
+  isUpdateSupported: false,
+  version: null,
+  percent: null,
+  error: null,
+  updatedAt: now
+};
+const mockHololiveMusicMarkers: Record<string, IpcChannelMap["hololive:music-marker:set"]["response"]> = {};
+const mockHololiveMusicExclusions: Record<string, IpcChannelMap["hololive:music:exclude"]["response"]["data"]> = {};
+const mockFavoritePositions: Record<string, number> = {};
+const MOCK_FAVORITES_PLAYLIST_ID = "system:favorites";
+let mockHolodexChannels: HolodexChannel[] = [];
+const mockUndoActions = new Map<string, { kind: HololiveUndoKind; apply: () => void }>();
+
+function createMockUndo(kind: HololiveUndoKind, apply: () => void): { undoToken: string; undoLabel: string } {
+  const undoToken = `mock-undo-${crypto.randomUUID()}`;
+  mockUndoActions.set(undoToken, { kind, apply });
+  return { undoToken, undoLabel: "Undo" };
+}
+
+const mockHololiveMusicRows: HololiveMusicRow[] = [
+  {
+    youtubeVideoId: "tokino-sora-mock-original",
+    idolId: "tokino-sora",
+    title: "Tokino Sora Original Song",
+    songName: "Tokino Sora Original Song",
+    canonicalSongKey: "tokino-sora-original-song",
+    canonicalPerformanceKey: "tokino-sora-original-song|tokino-sora",
+    topicId: "Original_Song",
+    status: "past",
+    youtubeUrl: "https://www.youtube.com/watch?v=mock-original",
+    channelId: "UCp6993wxpyDPHUpavwDFqgg",
+    channelName: "Tokino Sora Channel",
+    uploaderChannelKind: "idol",
+    uploaderChannelGroup: null,
+    participants: [
+      {
+        youtubeVideoId: "tokino-sora-mock-original",
+        idolId: "tokino-sora",
+        idolName: "Tokino Sora",
+        role: "primary",
+        channelId: "UCp6993wxpyDPHUpavwDFqgg"
+      }
+    ],
+    ownedIdolIds: ["tokino-sora"],
+    featuredIdolIds: [],
+    publishedAt: now,
+    durationSeconds: 210,
+    markerKey: "tokino-sora-original-song|tokino-sora",
+    marker: null,
+    updatedAt: now
+  },
+  {
+    youtubeVideoId: "tokino-sora-mock-original-2",
+    idolId: "tokino-sora",
+    title: "Tokino Sora Original Song 2",
+    songName: "Tokino Sora Original Song 2",
+    canonicalSongKey: "tokino-sora-original-song-2",
+    canonicalPerformanceKey: "tokino-sora-original-song-2|tokino-sora",
+    topicId: "Original_Song",
+    status: "past",
+    youtubeUrl: "https://www.youtube.com/watch?v=mock-original-2",
+    channelId: "UCp6993wxpyDPHUpavwDFqgg",
+    channelName: "Tokino Sora Channel",
+    uploaderChannelKind: "idol",
+    uploaderChannelGroup: null,
+    participants: [
+      {
+        youtubeVideoId: "tokino-sora-mock-original-2",
+        idolId: "tokino-sora",
+        idolName: "Tokino Sora",
+        role: "primary",
+        channelId: "UCp6993wxpyDPHUpavwDFqgg"
+      }
+    ],
+    ownedIdolIds: ["tokino-sora"],
+    featuredIdolIds: [],
+    publishedAt: now,
+    durationSeconds: 211,
+    markerKey: "tokino-sora-original-song-2|tokino-sora",
+    marker: null,
+    updatedAt: now
+  },
+  {
+    youtubeVideoId: "tokino-sora-mock-original-3",
+    idolId: "tokino-sora",
+    title: "Tokino Sora Original Song 3",
+    songName: "Tokino Sora Original Song 3",
+    canonicalSongKey: "tokino-sora-original-song-3",
+    canonicalPerformanceKey: "tokino-sora-original-song-3|tokino-sora",
+    topicId: "Original_Song",
+    status: "past",
+    youtubeUrl: "https://www.youtube.com/watch?v=mock-original-3",
+    channelId: "UCp6993wxpyDPHUpavwDFqgg",
+    channelName: "Tokino Sora Channel",
+    uploaderChannelKind: "idol",
+    uploaderChannelGroup: null,
+    participants: [
+      {
+        youtubeVideoId: "tokino-sora-mock-original-3",
+        idolId: "tokino-sora",
+        idolName: "Tokino Sora",
+        role: "primary",
+        channelId: "UCp6993wxpyDPHUpavwDFqgg"
+      }
+    ],
+    ownedIdolIds: ["tokino-sora"],
+    featuredIdolIds: [],
+    publishedAt: now,
+    durationSeconds: 212,
+    markerKey: "tokino-sora-original-song-3|tokino-sora",
+    marker: null,
+    updatedAt: now
+  },
+  {
+    youtubeVideoId: "tokino-sora-mock-cover",
+    idolId: "tokino-sora",
+    title: "Tokino Sora Cover Song",
+    songName: "Tokino Sora Cover Song",
+    canonicalSongKey: "tokino-sora-cover-song",
+    canonicalPerformanceKey: "tokino-sora-cover-song|tokino-sora",
+    topicId: "Music_Cover",
+    status: "past",
+    youtubeUrl: "https://www.youtube.com/watch?v=mock-cover",
+    channelId: "UCp6993wxpyDPHUpavwDFqgg",
+    channelName: "Tokino Sora Channel",
+    uploaderChannelKind: "idol",
+    uploaderChannelGroup: null,
+    participants: [
+      {
+        youtubeVideoId: "tokino-sora-mock-cover",
+        idolId: "tokino-sora",
+        idolName: "Tokino Sora",
+        role: "primary",
+        channelId: "UCp6993wxpyDPHUpavwDFqgg"
+      }
+    ],
+    ownedIdolIds: ["tokino-sora"],
+    featuredIdolIds: [],
+    publishedAt: now,
+    durationSeconds: 190,
+    markerKey: "tokino-sora-cover-song|tokino-sora",
+    marker: null,
+    updatedAt: now
+  },
+  {
+    youtubeVideoId: "tokino-sora-mock-featured",
+    idolId: null,
+    title: "Tokino Sora Featured Song",
+    songName: "Tokino Sora Featured Song",
+    canonicalSongKey: "tokino-sora-featured-song",
+    canonicalPerformanceKey: "tokino-sora-featured-song|collab",
+    topicId: "Original_Song",
+    status: "past",
+    youtubeUrl: "https://www.youtube.com/watch?v=mock-featured",
+    channelId: "UCJFZiqLMntJufDCHc6bQixg",
+    channelName: "hololive",
+    uploaderChannelKind: "group",
+    uploaderChannelGroup: "hololive",
+    participants: [
+      {
+        youtubeVideoId: "tokino-sora-mock-featured",
+        idolId: "tokino-sora",
+        idolName: "Tokino Sora",
+        role: "collab",
+        channelId: "UCp6993wxpyDPHUpavwDFqgg"
+      }
+    ],
+    ownedIdolIds: [],
+    featuredIdolIds: ["tokino-sora"],
+    publishedAt: now,
+    durationSeconds: 220,
+    markerKey: "tokino-sora-featured-song|collab",
+    marker: null,
+    updatedAt: now
+  }
+];
+
+let mockHololivePlayerData: HololiveMusicPlayerData = {
+  playlists: [],
+  queue: [],
+  state: {
+    playbackSourceType: "library",
+    currentQueueItemId: null,
+    currentPlaylistId: null,
+    currentPlaylistItemId: null,
+    currentYoutubeVideoId: null,
+    repeatMode: "off",
+    shuffleEnabled: false,
+    autoplayEnabled: true,
+    updatedAt: now
+  }
+};
+
+const MOCK_BRACKET_SIZE_COUNTS: Record<HololiveBracketSize, number> = {
+  RO16: 16,
+  RO32: 32,
+  RO64: 64,
+  RO128: 128,
+  RO256: 256
+};
+const mockHololiveBrackets = new Map<string, HololiveBracket>();
+const mockHololiveBracketArchives = new Map<string, HololiveBracket>();
+
+const mockBootstrap: AppBootstrap = {
+  appName: "Holoshelf",
+  dataDirectory: "data",
+  databasePath: "data\\holoshelf.sqlite",
+  backupDirectory: "data\\backups",
+  dataLocationKind: "dev",
+  modules: trackerModules,
+  sourceHealth: trackerModules.flatMap((module) =>
+    module.sourceAdapters.map<SourceHealth>((source) => ({
+      sourceId: source.id,
+      status: "unknown",
+      checkedAt: now,
+      httpStatus: null,
+      message: "Waiting for Electron IPC"
+    }))
+  ),
+  stats: {
+    catalogItems: 0,
+    trackedEntries: 0,
+    fetchJobsQueued: 0,
+    coversCached: 0
+  }
+};
+
+function createMockBoard(id: string, name: string, idols = HOLOLIVE_IDOLS): HololiveTierBoard {
+  return {
+    id,
+    name,
+    tileSize: 64,
+    createdAt: now,
+    updatedAt: now,
+    tiers: DEFAULT_HOLOLIVE_TIERS.map((tier) => ({
+      ...tier,
+      id: id === HOLOLIVE_DEFAULT_BOARD_ID ? tier.id : `${id}-${tier.id}`,
+      boardId: id
+    })),
+    placements: idols.map((idol) => ({
+      boardId: id,
+      idolId: idol.id,
+      tierId: null,
+      position: idol.sortOrder,
+      updatedAt: now
+    }))
+  };
+}
+
+let mockHololiveTierData: HololiveTierListData = {
+  idols: HOLOLIVE_IDOLS,
+  boards: [
+    {
+      id: HOLOLIVE_DEFAULT_BOARD_ID,
+      name: DEFAULT_HOLOLIVE_BOARD_NAME,
+      tileSize: 64,
+      rankedCount: 0,
+      totalCount: HOLOLIVE_IDOLS.length,
+      updatedAt: now
+    }
+  ],
+  activeBoard: createMockBoard(HOLOLIVE_DEFAULT_BOARD_ID, DEFAULT_HOLOLIVE_BOARD_NAME)
+};
+
+const mockHololiveBoards = new Map([[HOLOLIVE_DEFAULT_BOARD_ID, mockHololiveTierData.activeBoard]]);
+const mockHololiveBoardOrder = [HOLOLIVE_DEFAULT_BOARD_ID];
+
+function summarizeMockBoard(board: HololiveTierBoard): HololiveTierBoardSummary {
+  return {
+    id: board.id,
+    name: board.name,
+    tileSize: board.tileSize,
+    rankedCount: board.placements.filter((placement) => placement.tierId !== null).length,
+    totalCount: board.placements.length,
+    updatedAt: board.updatedAt
+  };
+}
+
+function refreshMockBoardSummary(): void {
+  mockHololiveBoards.set(mockHololiveTierData.activeBoard.id, mockHololiveTierData.activeBoard);
+  const orderedBoards = mockHololiveBoardOrder
+    .map((boardId) => mockHololiveBoards.get(boardId))
+    .filter((board): board is HololiveTierBoard => Boolean(board));
+  const missingBoards = [...mockHololiveBoards.values()].filter((board) => !mockHololiveBoardOrder.includes(board.id));
+  const boards = [...orderedBoards, ...missingBoards];
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    boards: boards.map(summarizeMockBoard),
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      updatedAt: now
+    }
+  };
+  mockHololiveBoards.set(mockHololiveTierData.activeBoard.id, mockHololiveTierData.activeBoard);
+}
+
+function resolveMockCustomTalentPreview(input: IpcChannelMap["hololive:custom-talents:resolve"]["request"]): HololiveCustomTalentPreview {
+  const channelInput = input.channelInput.trim();
+  const lowerInput = channelInput.toLowerCase();
+  const isTyra =
+    lowerInput.includes("soradukityra") ||
+    lowerInput.includes("ucdqycuyffhzoz0kowuig0lq") ||
+    lowerInput.includes("%e5%ae%99%e6%9c%88%e3%83%86%e3%82%a3%e3%83%a9");
+  const channelId = isTyra ? "UCdQYcUyffHZoz0KOwuiG0lQ" : channelInput.match(/UC[a-zA-Z0-9_-]{20,}/)?.[0] ?? "UCdQYcUyffHZoz0KOwuiG0lQ";
+  const displayName = input.displayName?.trim() || (isTyra ? "Soraduki Tyra" : "Custom Talent");
+  const slug = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "custom-talent";
+
+  return {
+    channelId,
+    displayName,
+    nativeName: isTyra ? "宙月ティラ" : null,
+    slug,
+    branch: isTyra ? "Independents" : "Custom",
+    generation: "Custom",
+    officialUrl: `https://www.youtube.com/channel/${channelId}`,
+    iconUrl: "https://yt3.googleusercontent.com/ytc/AIdro_mock_custom_talent=s176-c-k-c0x00ffffff-no-rj",
+    profileImageUrl: "https://yt3.googleusercontent.com/ytc/AIdro_mock_custom_talent=s512-c-k-c0x00ffffff-no-rj",
+    youtubeChannelUrl: `https://www.youtube.com/channel/${channelId}`,
+    xHandle: isTyra ? "@SoradukiTyra" : null,
+    xUrl: isTyra ? "https://twitter.com/SoradukiTyra" : null,
+    subscriberCount: 42100,
+    videoCount: 188,
+    clipCount: 91,
+    originalSongsUrl: input.originalSongsUrl ?? null,
+    coversUrl: input.coversUrl ?? null
+  };
+}
+
+function upsertMockCustomTalent(input: IpcChannelMap["hololive:custom-talents:upsert"]["request"]): IpcChannelMap["hololive:custom-talents:upsert"]["response"] {
+  const preview = resolveMockCustomTalentPreview(input);
+  const existingByChannel = mockHololiveTierData.idols.find((idol) => idol.youtubeChannelId === preview.channelId);
+  const id = existingByChannel?.id ?? `custom-${preview.slug}`;
+  const sortOrder =
+    existingByChannel?.sortOrder ??
+    Math.max(...mockHololiveTierData.idols.map((idol) => idol.sortOrder), HOLOLIVE_IDOLS.length - 1) + 1;
+  const idol = {
+    id,
+    slug: preview.slug,
+    displayName: preview.displayName,
+    branch: preview.branch,
+    generation: preview.generation,
+    status: "active" as const,
+    source: "custom" as const,
+    officialUrl: preview.officialUrl,
+    iconUrl: preview.iconUrl,
+    profileImageUrl: preview.profileImageUrl,
+    youtubeChannelUrl: preview.youtubeChannelUrl,
+    youtubeChannelId: preview.channelId,
+    xHandle: preview.xHandle ?? null,
+    xUrl: preview.xUrl ?? null,
+    sortOrder
+  };
+  const channel: HolodexChannel = {
+    id: preview.channelId,
+    name: preview.nativeName ?? preview.displayName,
+    englishName: preview.displayName,
+    type: "vtuber",
+    org: preview.branch,
+    group: preview.generation,
+    photoUrl: preview.iconUrl,
+    twitter: preview.xHandle?.replace(/^@/, "") ?? null,
+    videoCount: preview.videoCount ?? null,
+    subscriberCount: preview.subscriberCount ?? null,
+    clipCount: preview.clipCount ?? null,
+    publishedAt: null,
+    inactive: false,
+    kind: "idol",
+    mainIdolIds: [idol.id],
+    topicIdolIds: [],
+    linkedIdolIds: [idol.id],
+    updatedAt: new Date().toISOString()
+  };
+
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    idols: [
+      ...mockHololiveTierData.idols.filter((candidate) => candidate.id !== idol.id && candidate.youtubeChannelId !== idol.youtubeChannelId),
+      idol
+    ].sort((left, right) => left.sortOrder - right.sortOrder)
+  };
+  mockHolodexChannels = [
+    ...mockHolodexChannels.filter((candidate) => candidate.id !== channel.id),
+    channel
+  ];
+  for (const [boardId, board] of mockHololiveBoards.entries()) {
+    if (board.placements.some((placement) => placement.idolId === idol.id)) {
+      continue;
+    }
+    mockHololiveBoards.set(boardId, {
+      ...board,
+      placements: [
+        ...board.placements,
+        {
+          boardId,
+          idolId: idol.id,
+          tierId: null,
+          position: sortOrder,
+          updatedAt: new Date().toISOString()
+        }
+      ]
+    });
+  }
+  const updatedActiveBoard = mockHololiveBoards.get(mockHololiveTierData.activeBoard.id);
+  if (updatedActiveBoard) {
+    mockHololiveTierData = {
+      ...mockHololiveTierData,
+      activeBoard: updatedActiveBoard
+    };
+  }
+  mockHololiveMusicRows.splice(
+    0,
+    mockHololiveMusicRows.length,
+    ...mockHololiveMusicRows.filter((row) => row.channelId !== preview.channelId)
+  );
+  mockHololiveMusicRows.push(
+    {
+      youtubeVideoId: `${idol.id}-mock-original`,
+      idolId: idol.id,
+      title: `${idol.displayName} Original Song`,
+      songName: `${idol.displayName} Original Song`,
+      canonicalSongKey: `${idol.id}-mock-original`,
+      canonicalPerformanceKey: `${idol.id}-mock-original|${idol.id}`,
+      topicId: "Original_Song",
+      status: "past",
+      youtubeUrl: `https://www.youtube.com/watch?v=${idol.id}-mock-original`,
+      channelId: preview.channelId,
+      channelName: `${idol.displayName} Channel`,
+      uploaderChannelKind: "idol",
+      uploaderChannelGroup: preview.branch,
+      participants: [
+        {
+          youtubeVideoId: `${idol.id}-mock-original`,
+          idolId: idol.id,
+          idolName: idol.displayName,
+          role: "primary",
+          channelId: preview.channelId
+        }
+      ],
+      ownedIdolIds: [idol.id],
+      featuredIdolIds: [],
+      publishedAt: now,
+      durationSeconds: 203,
+      markerKey: `${idol.id}-mock-original|${idol.id}`,
+      marker: null,
+      updatedAt: now
+    },
+    {
+      youtubeVideoId: `${idol.id}-mock-cover`,
+      idolId: idol.id,
+      title: `${idol.displayName} Cover Song`,
+      songName: `${idol.displayName} Cover Song`,
+      canonicalSongKey: `${idol.id}-mock-cover`,
+      canonicalPerformanceKey: `${idol.id}-mock-cover|${idol.id}`,
+      topicId: "Music_Cover",
+      status: "past",
+      youtubeUrl: `https://www.youtube.com/watch?v=${idol.id}-mock-cover`,
+      channelId: preview.channelId,
+      channelName: `${idol.displayName} Channel`,
+      uploaderChannelKind: "idol",
+      uploaderChannelGroup: preview.branch,
+      participants: [
+        {
+          youtubeVideoId: `${idol.id}-mock-cover`,
+          idolId: idol.id,
+          idolName: idol.displayName,
+          role: "primary",
+          channelId: preview.channelId
+        }
+      ],
+      ownedIdolIds: [idol.id],
+      featuredIdolIds: [],
+      publishedAt: now,
+      durationSeconds: 184,
+      markerKey: `${idol.id}-mock-cover|${idol.id}`,
+      marker: null,
+      updatedAt: now
+    }
+  );
+  refreshMockBoardSummary();
+  return { idol, channel };
+}
+
+function deleteMockCustomTalent(idolId: string): void {
+  const idol = mockHololiveTierData.idols.find((candidate) => candidate.id === idolId);
+  if (!idol || idol.source !== "custom") {
+    throw new Error("Only custom talents can be removed.");
+  }
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    idols: mockHololiveTierData.idols.filter((candidate) => candidate.id !== idolId)
+  };
+  mockHolodexChannels = mockHolodexChannels.filter((channel) => !channel.linkedIdolIds.includes(idolId));
+  mockHololiveMusicRows.splice(
+    0,
+    mockHololiveMusicRows.length,
+    ...mockHololiveMusicRows.filter((row) => row.channelId !== idol.youtubeChannelId)
+  );
+  for (const [boardId, board] of mockHololiveBoards.entries()) {
+    mockHololiveBoards.set(boardId, {
+      ...board,
+      placements: board.placements.filter((placement) => placement.idolId !== idolId)
+    });
+  }
+  refreshMockBoardSummary();
+}
+
+function loadMockHololiveBoard(boardId?: string | null): void {
+  const nextBoard = (boardId ? mockHololiveBoards.get(boardId) : null) ?? mockHololiveTierData.activeBoard;
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: nextBoard
+  };
+  refreshMockBoardSummary();
+}
+
+function createMockHololiveBoard(payload: IpcChannelMap["hololive:board:create"]["request"]): void {
+  const boardId = `mock-board-${mockHololiveBoards.size + 1}`;
+  const board = createMockBoard(boardId, payload.name.trim() || DEFAULT_HOLOLIVE_BOARD_NAME, mockHololiveTierData.idols);
+  const afterIndex = payload.afterBoardId ? mockHololiveBoardOrder.indexOf(payload.afterBoardId) : -1;
+  const insertIndex = afterIndex >= 0 ? afterIndex + 1 : mockHololiveBoardOrder.length;
+
+  mockHololiveBoards.set(boardId, board);
+  mockHololiveBoardOrder.splice(insertIndex, 0, boardId);
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: board
+  };
+  refreshMockBoardSummary();
+}
+
+function deleteMockHololiveBoard(boardId: string): void {
+  if (mockHololiveBoards.size <= 1) {
+    return;
+  }
+
+  mockHololiveBoards.delete(boardId);
+  const orderIndex = mockHololiveBoardOrder.indexOf(boardId);
+  if (orderIndex >= 0) {
+    mockHololiveBoardOrder.splice(orderIndex, 1);
+  }
+
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: mockHololiveBoards.get(mockHololiveBoardOrder[0]) ?? [...mockHololiveBoards.values()][0]
+  };
+  refreshMockBoardSummary();
+}
+
+function updateMockHololiveBoard(payload: IpcChannelMap["hololive:board:update"]["request"]): void {
+  const board = mockHololiveBoards.get(payload.boardId);
+  if (!board) {
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const updatedBoard = {
+    ...board,
+    name: payload.name?.trim() || board.name,
+    tileSize: payload.tileSize ?? board.tileSize,
+    updatedAt
+  };
+
+  mockHololiveBoards.set(payload.boardId, updatedBoard);
+  if (mockHololiveTierData.activeBoard.id === payload.boardId) {
+    mockHololiveTierData = {
+      ...mockHololiveTierData,
+      activeBoard: updatedBoard
+    };
+  }
+
+  refreshMockBoardSummary();
+}
+
+function reorderMockHololiveBoards(payload: IpcChannelMap["hololive:board:reorder"]["request"]): void {
+  const existingIds = new Set(mockHololiveBoardOrder);
+  const orderedIds = payload.boardIds.filter((boardId) => existingIds.has(boardId));
+  const missingIds = mockHololiveBoardOrder.filter((boardId) => !orderedIds.includes(boardId));
+
+  mockHololiveBoardOrder.splice(0, mockHololiveBoardOrder.length, ...orderedIds, ...missingIds);
+  const activeBoard = payload.activeBoardId ? mockHololiveBoards.get(payload.activeBoardId) : null;
+  if (activeBoard) {
+    mockHololiveTierData = {
+      ...mockHololiveTierData,
+      activeBoard
+    };
+  }
+
+  refreshMockBoardSummary();
+}
+
+function createMockHololiveTier(payload: IpcChannelMap["hololive:tier:create"]["request"]): void {
+  const existing = [...mockHololiveTierData.activeBoard.tiers].sort((left, right) => left.position - right.position);
+  const position =
+    payload.position === undefined ? existing.length : Math.min(Math.max(Math.round(payload.position), 0), existing.length);
+  const shifted = existing.map((tier) =>
+    tier.position >= position ? { ...tier, position: tier.position + 1 } : tier
+  );
+  const tier = {
+    id: `mock-tier-${crypto.randomUUID()}`,
+    boardId: mockHololiveTierData.activeBoard.id,
+    label: payload.label?.trim() || `Tier ${existing.length + 1}`,
+    color: payload.color ?? "#82dfff",
+    position,
+    collapsed: false
+  };
+
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      tiers: [...shifted, tier].sort((left, right) => left.position - right.position),
+      updatedAt: now
+    }
+  };
+  refreshMockBoardSummary();
+}
+
+function updateMockHololiveTier(payload: IpcChannelMap["hololive:tier:update"]["request"]): void {
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      tiers: mockHololiveTierData.activeBoard.tiers.map((tier) =>
+        tier.id === payload.tierId && tier.boardId === payload.boardId
+          ? {
+              ...tier,
+              label: payload.label?.trim() || tier.label,
+              color: payload.color ?? tier.color,
+              collapsed: payload.collapsed ?? tier.collapsed
+            }
+          : tier
+      ),
+      updatedAt: now
+    }
+  };
+  refreshMockBoardSummary();
+}
+
+function sortedMockIdsForTier(tierId: string | null): string[] {
+  return mockHololiveTierData.activeBoard.placements
+    .filter((placement) => placement.tierId === tierId)
+    .sort((left, right) => left.position - right.position)
+    .map((placement) => placement.idolId);
+}
+
+function updateMockPlacementGroup(tierId: string | null, idolIds: string[]): void {
+  const positions = new Map(idolIds.map((idolId, index) => [idolId, index]));
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      placements: mockHololiveTierData.activeBoard.placements.map((placement) =>
+        positions.has(placement.idolId)
+          ? {
+              ...placement,
+              tierId,
+              position: positions.get(placement.idolId) ?? placement.position,
+              updatedAt: now
+            }
+          : placement
+      )
+    }
+  };
+}
+
+function moveMockHololiveIdol(payload: IpcChannelMap["hololive:placement:move"]["request"]): void {
+  const current = mockHololiveTierData.activeBoard.placements.find((placement) => placement.idolId === payload.idolId);
+  const sourceTierId = current?.tierId ?? null;
+  const destinationTierId = payload.tierId ?? null;
+  const sameGroup = sourceTierId === destinationTierId;
+  const sourceIds = sortedMockIdsForTier(sourceTierId).filter((idolId) => idolId !== payload.idolId);
+  const destinationIds = sameGroup
+    ? [...sourceIds]
+    : sortedMockIdsForTier(destinationTierId).filter((idolId) => idolId !== payload.idolId);
+  const insertionIndex = Math.min(Math.max(payload.index, 0), destinationIds.length);
+
+  destinationIds.splice(insertionIndex, 0, payload.idolId);
+  updateMockPlacementGroup(destinationTierId, destinationIds);
+
+  if (!sameGroup) {
+    updateMockPlacementGroup(sourceTierId, sourceIds);
+  }
+
+  refreshMockBoardSummary();
+}
+
+function deleteMockHololiveTier(payload: IpcChannelMap["hololive:tier:delete"]["request"]): void {
+  const unrankedIds = sortedMockIdsForTier(null);
+  const deletedTierIds = sortedMockIdsForTier(payload.tierId);
+  const tiers = mockHololiveTierData.activeBoard.tiers
+    .filter((tier) => !(tier.id === payload.tierId && tier.boardId === payload.boardId))
+    .sort((left, right) => left.position - right.position)
+    .map((tier, position) => ({ ...tier, position }));
+
+  updateMockPlacementGroup(null, [...unrankedIds, ...deletedTierIds]);
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      tiers,
+      updatedAt: now
+    }
+  };
+  refreshMockBoardSummary();
+}
+
+function clearMockHololiveBoard(): void {
+  const idolIds = [...mockHololiveTierData.idols]
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName))
+    .map((idol) => idol.id);
+  updateMockPlacementGroup(null, idolIds);
+  refreshMockBoardSummary();
+}
+
+function sortMockHololiveUnranked(): void {
+  const rankedIds = new Set(
+    mockHololiveTierData.activeBoard.placements
+      .filter((placement) => placement.tierId !== null)
+      .map((placement) => placement.idolId)
+  );
+  const idolIds = [...mockHololiveTierData.idols]
+    .filter((idol) => !rankedIds.has(idol.id))
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName))
+    .map((idol) => idol.id);
+  updateMockPlacementGroup(null, idolIds);
+  refreshMockBoardSummary();
+}
+
+function reorderMockHololiveTiers(payload: IpcChannelMap["hololive:tier:reorder"]["request"]): void {
+  const positions = new Map(payload.tierIds.map((tierId, index) => [tierId, index]));
+  mockHololiveTierData = {
+    ...mockHololiveTierData,
+    activeBoard: {
+      ...mockHololiveTierData.activeBoard,
+      tiers: mockHololiveTierData.activeBoard.tiers
+        .map((tier) => ({
+          ...tier,
+          position: positions.get(tier.id) ?? tier.position,
+          updatedAt: now
+        }))
+        .sort((left, right) => left.position - right.position)
+    }
+  };
+  refreshMockBoardSummary();
+}
+
+function visibleMockHololiveMusicRows(): HololiveMusicRow[] {
+  return mockHololiveMusicRows
+    .filter((row) => !mockHololiveMusicExclusions[row.youtubeVideoId])
+    .map((row) => ({
+      ...row,
+      marker: mockHololiveMusicMarkers[row.youtubeVideoId]?.marker ?? mockHololiveMusicMarkers[row.markerKey]?.marker ?? null
+    }));
+}
+
+function getMockHololiveMusicRow(videoId: string): HololiveMusicRow {
+  const row = visibleMockHololiveMusicRows().find((candidate) => candidate.youtubeVideoId === videoId);
+  if (!row) {
+    throw new Error(`Unknown mock Hololive music video: ${videoId}`);
+  }
+  return row;
+}
+
+function resolveMockHololivePlayerItems(
+  items: Array<Omit<HololiveMusicResolvedItem, "available" | "music">>
+): HololiveMusicResolvedItem[] {
+  const rowsById = new Map(visibleMockHololiveMusicRows().map((row) => [row.youtubeVideoId, row]));
+  return items.map((item) => {
+    const music = rowsById.get(item.youtubeVideoId) ?? null;
+    return {
+      ...item,
+      available: Boolean(music),
+      music
+    };
+  });
+}
+
+function resolveMockHololiveCurrentItem(): HololiveMusicResolvedItem | null {
+  const state = mockHololivePlayerData.state;
+  if (state.playbackSourceType === "queue") {
+    return state.currentQueueItemId
+      ? mockHololivePlayerData.queue.find((item) => item.id === state.currentQueueItemId) ?? null
+      : null;
+  }
+
+  if (state.playbackSourceType === "playlist") {
+    const playlist = state.currentPlaylistId
+      ? mockHololivePlayerData.playlists.find((candidate) => candidate.id === state.currentPlaylistId)
+      : null;
+    return state.currentPlaylistItemId
+      ? playlist?.items?.find((item) => item.id === state.currentPlaylistItemId) ?? null
+      : null;
+  }
+
+  if (!state.currentYoutubeVideoId) {
+    return null;
+  }
+  const row = visibleMockHololiveMusicRows().find((candidate) => candidate.youtubeVideoId === state.currentYoutubeVideoId);
+  return row
+    ? {
+        id: `library:${row.youtubeVideoId}`,
+        youtubeVideoId: row.youtubeVideoId,
+        position: 0,
+        titleSnapshot: row.songName || row.title,
+        sourceUrlSnapshot: row.youtubeUrl,
+        addedAt: row.updatedAt,
+        available: true,
+        music: row
+      }
+    : null;
+}
+
+function refreshMockHololivePlayerData(): HololiveMusicPlayerData {
+  const favoriteRows = visibleMockHololiveMusicRows()
+    .filter((row) => row.marker === "favorite")
+    .sort((left, right) => {
+      const leftPosition = mockFavoritePositions[left.youtubeVideoId];
+      const rightPosition = mockFavoritePositions[right.youtubeVideoId];
+      if (leftPosition !== undefined || rightPosition !== undefined) {
+        return (leftPosition ?? Number.MAX_SAFE_INTEGER) - (rightPosition ?? Number.MAX_SAFE_INTEGER);
+      }
+      const leftUpdated = mockHololiveMusicMarkers[left.youtubeVideoId]?.updatedAt ?? mockHololiveMusicMarkers[left.markerKey]?.updatedAt ?? now;
+      const rightUpdated = mockHololiveMusicMarkers[right.youtubeVideoId]?.updatedAt ?? mockHololiveMusicMarkers[right.markerKey]?.updatedAt ?? now;
+      return rightUpdated.localeCompare(leftUpdated) || left.title.localeCompare(right.title);
+    });
+  const favoriteItems = favoriteRows.map<HololiveMusicResolvedItem>((row, position) => ({
+    id: `${MOCK_FAVORITES_PLAYLIST_ID}:${row.youtubeVideoId}`,
+    youtubeVideoId: row.youtubeVideoId,
+    position,
+    titleSnapshot: row.songName || row.title,
+    sourceUrlSnapshot: row.youtubeUrl,
+    addedAt: mockHololiveMusicMarkers[row.youtubeVideoId]?.updatedAt ?? mockHololiveMusicMarkers[row.markerKey]?.updatedAt ?? now,
+    available: true,
+    music: row
+  }));
+  const favoritesPlaylist = {
+    id: MOCK_FAVORITES_PLAYLIST_ID,
+    name: "Favorites",
+    position: -1,
+    itemCount: favoriteItems.length,
+    systemId: "favorites" as const,
+    createdAt: favoriteItems[0]?.addedAt ?? now,
+    updatedAt: favoriteItems[0]?.addedAt ?? now,
+    items: favoriteItems
+  };
+  const userPlaylists = mockHololivePlayerData.playlists.filter((playlist) => playlist.systemId !== "favorites");
+  mockHololivePlayerData = {
+    ...mockHololivePlayerData,
+    playlists: [
+      favoritesPlaylist,
+      ...userPlaylists
+      .map((playlist, position) => ({
+        ...playlist,
+        position,
+        itemCount: playlist.items?.length ?? 0,
+        systemId: playlist.systemId ?? null,
+        items: resolveMockHololivePlayerItems(playlist.items ?? [])
+      }))
+      .sort((left, right) => left.position - right.position)
+    ],
+    queue: resolveMockHololivePlayerItems(mockHololivePlayerData.queue).sort((left, right) => left.position - right.position)
+  };
+  mockHololivePlayerData.currentItem = resolveMockHololiveCurrentItem();
+  return mockHololivePlayerData;
+}
+
+function createMockHololivePlayerItem(videoId: string, position: number): HololiveMusicResolvedItem {
+  const row = getMockHololiveMusicRow(videoId);
+  return {
+    id: `mock-player-item-${crypto.randomUUID()}`,
+    youtubeVideoId: row.youtubeVideoId,
+    position,
+    titleSnapshot: row.songName || row.title,
+    sourceUrlSnapshot: row.youtubeUrl,
+    addedAt: new Date().toISOString(),
+    available: true,
+    music: row
+  };
+}
+
+function mockQueueAdd(payload: IpcChannelMap["hololive:player:queue:add"]["request"]): HololiveMusicPlayerData {
+  const state = mockHololivePlayerData.state;
+  const currentIndex = state.currentQueueItemId
+    ? mockHololivePlayerData.queue.findIndex((item) => item.id === state.currentQueueItemId)
+    : -1;
+  const insertIndex =
+    payload.placement === "now"
+      ? Math.max(currentIndex, 0)
+      : payload.placement === "next" && currentIndex >= 0
+        ? currentIndex + 1
+        : mockHololivePlayerData.queue.length;
+  const item = createMockHololivePlayerItem(payload.youtubeVideoId, insertIndex);
+  const queue = [...mockHololivePlayerData.queue];
+  queue.splice(insertIndex, 0, item);
+  mockHololivePlayerData = {
+    ...mockHololivePlayerData,
+    queue: queue.map((entry, position) => ({ ...entry, position })),
+    state:
+      payload.placement === "now"
+        ? {
+            ...state,
+            playbackSourceType: "queue",
+            currentQueueItemId: item.id,
+            currentPlaylistId: null,
+            currentPlaylistItemId: null,
+            currentYoutubeVideoId: item.youtubeVideoId,
+            updatedAt: new Date().toISOString()
+          }
+        : state
+  };
+  return refreshMockHololivePlayerData();
+}
+
+function mockQueueBulkAdd(payload: IpcChannelMap["hololive:player:queue:bulk-add"]["request"]): HololiveMusicPlayerData {
+  const videoIds = payload.youtubeVideoIds.map((videoId) => videoId.trim()).filter(Boolean);
+  if (videoIds.length === 0) {
+    return refreshMockHololivePlayerData();
+  }
+
+  const state = mockHololivePlayerData.state;
+  const currentIndex = state.currentQueueItemId
+    ? mockHololivePlayerData.queue.findIndex((item) => item.id === state.currentQueueItemId)
+    : -1;
+  const insertIndex =
+    payload.placement === "now"
+      ? Math.max(currentIndex, 0)
+      : payload.placement === "next" && currentIndex >= 0
+        ? currentIndex + 1
+        : mockHololivePlayerData.queue.length;
+  const items = videoIds.map((videoId, index) => createMockHololivePlayerItem(videoId, insertIndex + index));
+  const queue = [...mockHololivePlayerData.queue];
+  queue.splice(insertIndex, 0, ...items);
+  mockHololivePlayerData = {
+    ...mockHololivePlayerData,
+    queue: queue.map((entry, position) => ({ ...entry, position })),
+    state:
+      payload.placement === "now"
+        ? {
+            ...state,
+            playbackSourceType: "queue",
+            currentQueueItemId: items[0]?.id ?? null,
+            currentPlaylistId: null,
+            currentPlaylistItemId: null,
+            currentYoutubeVideoId: items[0]?.youtubeVideoId ?? null,
+            updatedAt: new Date().toISOString()
+          }
+        : state
+  };
+  return refreshMockHololivePlayerData();
+}
+
+function getMockHololiveIdolProfile(idolId: string): HololiveIdolProfile {
+  const idol = mockHololiveTierData.idols.find((candidate) => candidate.id === idolId);
+  if (!idol) {
+    throw new Error(`Unknown Hololive idol: ${idolId}`);
+  }
+  const toProfileItem = (row: HololiveMusicRow) => ({
+    id: row.youtubeVideoId,
+    title: row.songName || row.title,
+    url: row.youtubeUrl,
+    publishedAt: row.publishedAt,
+    durationSeconds: row.durationSeconds,
+    viewCount: row.viewCount ?? null,
+    viewCountFetchedAt: row.viewCountFetchedAt ?? null,
+    markerKey: row.markerKey,
+    marker: row.marker ?? null
+  });
+  const originalItems = visibleMockHololiveMusicRows()
+    .filter((row) => row.ownedIdolIds.includes(idolId) && row.topicId === "Original_Song")
+    .map(toProfileItem);
+  const coverItems = visibleMockHololiveMusicRows()
+    .filter((row) => row.ownedIdolIds.includes(idolId) && row.topicId === "Music_Cover")
+    .map(toProfileItem);
+  const featuredItems = visibleMockHololiveMusicRows()
+    .filter((row) => row.featuredIdolIds.includes(idolId))
+    .map(toProfileItem);
+
+  return {
+    idol,
+    links: [
+      ...(idol.xUrl
+        ? [
+            {
+              id: "x",
+              label: idol.xHandle ?? "X",
+              url: idol.xUrl,
+              kind: "x" as const
+            }
+          ]
+        : [])
+    ],
+    mainChannel: {
+      id: idol.youtubeChannelId ?? "UCp6993wxpyDPHUpavwDFqgg",
+      name: `${idol.displayName} Channel`,
+      url: idol.youtubeChannelUrl ?? "https://www.youtube.com/channel/UCp6993wxpyDPHUpavwDFqgg",
+      photoUrl: idol.cachedIconUrl ?? idol.iconUrl,
+      twitter: idol.xHandle?.replace(/^@/, "") ?? null,
+      subscriberCount: 1230000,
+      videoCount: 640,
+      clipCount: 2100,
+      publishedAt: "2017-09-07T00:00:00.000Z",
+      updatedAt: now,
+      kind: "idol"
+    },
+    topicChannels: [],
+    mediaGroups: [
+      {
+        id: "original-songs",
+        label: "Original Songs",
+        items: originalItems.length
+          ? originalItems
+          : [
+          {
+            id: `${idol.id}-mock-original`,
+            title: `${idol.displayName} Original Song`,
+            url: "https://www.youtube.com/watch?v=mock-original",
+            publishedAt: now,
+            durationSeconds: 210,
+            markerKey: `video:${idol.id}-mock-original`,
+            marker: mockHololiveMusicMarkers[`${idol.id}-mock-original`]?.marker ?? null
+          }
+        ]
+      },
+      {
+        id: "covers",
+        label: "Covers",
+        items: coverItems.length
+          ? coverItems
+          : [
+          {
+            id: `${idol.id}-mock-cover`,
+            title: `${idol.displayName} Cover Song`,
+            url: "https://www.youtube.com/watch?v=mock-cover",
+            publishedAt: now,
+            durationSeconds: 190,
+            markerKey: `video:${idol.id}-mock-cover`,
+            marker: mockHololiveMusicMarkers[`${idol.id}-mock-cover`]?.marker ?? null
+          }
+        ]
+      },
+      {
+        id: "featured-in",
+        label: "Featured In",
+        items: featuredItems.length
+          ? featuredItems
+          : [
+          {
+            id: `${idol.id}-mock-featured`,
+            title: `${idol.displayName} Featured Song`,
+            url: "https://www.youtube.com/watch?v=mock-featured",
+            publishedAt: now,
+            durationSeconds: 220,
+            markerKey: `video:${idol.id}-mock-featured`,
+            marker: mockHololiveMusicMarkers[`${idol.id}-mock-featured`]?.marker ?? null
+          }
+        ]
+      },
+      { id: "playlists", label: "Playlists", items: [] }
+    ]
+  };
+}
+
+function getMockHololiveProfilePlaybackContext(
+  payload: IpcChannelMap["hololive:profile:playback-context"]["request"]
+): HololiveProfilePlaybackContext | null {
+  const youtubeVideoId = payload.youtubeVideoId.trim();
+  const row = visibleMockHololiveMusicRows().find((candidate) => candidate.youtubeVideoId === youtubeVideoId);
+  if (!row) {
+    return null;
+  }
+
+  const candidateIds = [
+    payload.preferredIdolId ?? null,
+    ...row.ownedIdolIds,
+    ...row.featuredIdolIds.filter((idolId) => !row.ownedIdolIds.includes(idolId))
+  ].filter((idolId): idolId is string => Boolean(idolId));
+  const ownedGroupId = row.topicId === "Original_Song" ? "original-songs" : "covers";
+  const groupOrder = [
+    payload.preferredGroupId ?? null,
+    ownedGroupId,
+    ownedGroupId === "original-songs" ? "covers" : "original-songs",
+    "featured-in"
+  ].filter((groupId): groupId is HololiveProfilePlaybackContext["mediaGroupId"] => Boolean(groupId && groupId !== "playlists"));
+  const tried = new Set<string>();
+
+  for (const idolId of candidateIds) {
+    if (tried.has(idolId)) {
+      continue;
+    }
+    tried.add(idolId);
+
+    const profile = getMockHololiveIdolProfile(idolId);
+    for (const groupId of [...new Set(groupOrder)]) {
+      const group = profile.mediaGroups.find((candidate) => candidate.id === groupId);
+      const currentIndex = group?.items.findIndex((item) => item.id === youtubeVideoId) ?? -1;
+      if (!group || currentIndex < 0) {
+        continue;
+      }
+
+      return {
+        youtubeVideoId,
+        idolId: profile.idol.id,
+        idolName: profile.idol.displayName,
+        mediaGroupId: group.id,
+        mediaGroupLabel: group.label,
+        songIds: group.items.map((item) => item.id),
+        currentIndex
+      };
+    }
+  }
+
+  return null;
+}
+
+function listMockHololiveBracketSummaries(): HololiveBracketSummary[] {
+  return [...mockHololiveBrackets.values()]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .map((bracket) => {
+      const matches = bracket.rounds.flatMap((round) => round.matches);
+      return {
+        id: bracket.id,
+        name: bracket.name,
+        size: bracket.size,
+        generationStyle: bracket.generationStyle,
+        generationFilters: bracket.generationFilters,
+        status: bracket.status,
+        currentMatchId: bracket.currentMatchId,
+        completedMatches: matches.filter((match) => match.winnerEntryId).length,
+        totalMatches: matches.length,
+        championTitle: bracket.champion?.title ?? null,
+        createdAt: bracket.createdAt,
+        updatedAt: bracket.updatedAt
+      };
+    });
+}
+
+function archiveMockHololiveBracket(bracket: HololiveBracket): void {
+  if (bracket.status === "complete" && bracket.champion) {
+    mockHololiveBracketArchives.set(bracket.id, structuredClone(bracket) as HololiveBracket);
+  }
+}
+
+function listMockHololiveBracketArchiveSummaries(): HololiveBracketArchiveSummary[] {
+  return [...mockHololiveBracketArchives.values()]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .map((bracket) => {
+      const matches = bracket.rounds.flatMap((round) => round.matches);
+      const completedMatches = matches.filter((match) => match.winnerEntryId);
+      const finalMatch = bracket.rounds[bracket.rounds.length - 1]?.matches[0] ?? null;
+      const completedAt = finalMatch?.completedAt ?? bracket.updatedAt;
+      return {
+        id: `archive:${bracket.id}`,
+        sourceBracketId: bracket.id,
+        name: bracket.name,
+        size: bracket.size,
+        generationStyle: bracket.generationStyle,
+        generationFilters: bracket.generationFilters,
+        totalEntries: bracket.entries.length,
+        totalMatches: matches.length,
+        completedMatches: completedMatches.length,
+        championYoutubeVideoId: bracket.champion?.youtubeVideoId ?? null,
+        championTitle: bracket.champion?.title ?? null,
+        championIdolId: bracket.champion?.idolId ?? null,
+        championIdolName: bracket.champion?.idolName ?? null,
+        createdAt: bracket.createdAt,
+        completedAt,
+        archivedAt: bracket.updatedAt
+      };
+    });
+}
+
+function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
+  const archives = listMockHololiveBracketArchiveSummaries();
+  const archivedBrackets = [...mockHololiveBracketArchives.values()].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  const songStats = new Map<string, HololiveBracketStatsOverview["topSongsByWins"][number]>();
+  const talentStats = new Map<string, HololiveBracketStatsOverview["topTalents"][number]>();
+  const rivalryStats = new Map<string, HololiveBracketStatsOverview["topRivalries"][number]>();
+  const previousSongResults = new Set<string>();
+
+  for (const bracket of archivedBrackets) {
+    const matches = bracket.rounds.flatMap((round) => round.matches);
+    const finalRoundIndex = Math.max(0, ...matches.map((match) => match.roundIndex));
+    const finalMatch = matches.find((match) => match.roundIndex === finalRoundIndex && match.matchIndex === 0);
+    const finalistIds = new Set([finalMatch?.entryA?.id, finalMatch?.entryB?.id].filter((id): id is string => Boolean(id)));
+
+    for (const entry of bracket.entries) {
+      const participatedMatches = matches.filter((match) => match.entryA?.id === entry.id || match.entryB?.id === entry.id);
+      const wins = participatedMatches.filter((match) => match.winnerEntryId === entry.id).length;
+      const loss = participatedMatches.find((match) => match.winnerEntryId && match.winnerEntryId !== entry.id);
+      const topRound = Math.max(0, ...participatedMatches.map((match) => match.roundIndex));
+      const top4Round = Math.max(0, finalRoundIndex - 1);
+      const top8Round = Math.max(0, finalRoundIndex - 2);
+      const top16Round = Math.max(0, finalRoundIndex - 3);
+      const isChampion = bracket.champion?.id === entry.id ? 1 : 0;
+      const isFinalist = finalistIds.has(entry.id) ? 1 : 0;
+
+      const song =
+        songStats.get(entry.youtubeVideoId) ??
+        ({
+          youtubeVideoId: entry.youtubeVideoId,
+          title: entry.title,
+          topicId: entry.topicId,
+          idolId: entry.idolId,
+          idolName: entry.idolName,
+          appearances: 0,
+          wins: 0,
+          losses: 0,
+          winRate: 0,
+          championCount: 0,
+          finalistCount: 0,
+          top4Count: 0,
+          top8Count: 0,
+          top16Count: 0,
+          firstRoundEliminations: 0,
+          upsetWins: 0,
+          revengeWins: 0,
+          giantKillerScore: 0,
+          lastArchivedAt: bracket.updatedAt
+        } satisfies HololiveBracketStatsOverview["topSongsByWins"][number]);
+      song.appearances += 1;
+      song.wins += wins;
+      song.losses += loss ? 1 : 0;
+      song.championCount += isChampion;
+      song.finalistCount += isFinalist;
+      song.top4Count += topRound >= top4Round ? 1 : 0;
+      song.top8Count += topRound >= top8Round ? 1 : 0;
+      song.top16Count += topRound >= top16Round ? 1 : 0;
+      song.firstRoundEliminations += loss?.roundIndex === 0 ? 1 : 0;
+      song.winRate = song.wins + song.losses > 0 ? song.wins / (song.wins + song.losses) : 0;
+      songStats.set(entry.youtubeVideoId, song);
+
+      const talent =
+        talentStats.get(entry.idolId) ??
+        ({
+          idolId: entry.idolId,
+          idolName: entry.idolName,
+          appearances: 0,
+          wins: 0,
+          losses: 0,
+          winRate: 0,
+          championCount: 0,
+          finalistCount: 0,
+          top4Count: 0,
+          top8Count: 0,
+          top16Count: 0,
+          firstRoundEliminations: 0,
+          lastArchivedAt: bracket.updatedAt
+        } satisfies HololiveBracketStatsOverview["topTalents"][number]);
+      talent.appearances += 1;
+      talent.wins += wins;
+      talent.losses += loss ? 1 : 0;
+      talent.championCount += isChampion;
+      talent.finalistCount += isFinalist;
+      talent.top4Count += topRound >= top4Round ? 1 : 0;
+      talent.top8Count += topRound >= top8Round ? 1 : 0;
+      talent.top16Count += topRound >= top16Round ? 1 : 0;
+      talent.firstRoundEliminations += loss?.roundIndex === 0 ? 1 : 0;
+      talent.winRate = talent.wins + talent.losses > 0 ? talent.wins / (talent.wins + talent.losses) : 0;
+      talentStats.set(entry.idolId, talent);
+    }
+
+    for (const match of matches) {
+      if (!match.winner || !match.winnerEntryId) {
+        continue;
+      }
+
+      const loser = [match.entryA, match.entryB].find((entry) => entry && entry.id !== match.winnerEntryId) ?? null;
+      if (!loser) {
+        continue;
+      }
+
+      const winnerSong = songStats.get(match.winner.youtubeVideoId);
+      if (winnerSong) {
+        const winnerViews = match.winner.viewCount ?? null;
+        const loserViews = loser.viewCount ?? null;
+        if (winnerViews != null && loserViews != null && winnerViews < loserViews) {
+          winnerSong.upsetWins += 1;
+          winnerSong.giantKillerScore += loserViews - winnerViews;
+        }
+        if (previousSongResults.has(`${loser.youtubeVideoId}|${match.winner.youtubeVideoId}`)) {
+          winnerSong.revengeWins += 1;
+        }
+      }
+      previousSongResults.add(`${match.winner.youtubeVideoId}|${loser.youtubeVideoId}`);
+
+      if (match.winner.idolId === loser.idolId) {
+        continue;
+      }
+
+      const [left, right] = [
+        { id: match.winner.idolId, name: match.winner.idolName },
+        { id: loser.idolId, name: loser.idolName }
+      ].sort((leftValue, rightValue) => leftValue.name.localeCompare(rightValue.name) || leftValue.id.localeCompare(rightValue.id));
+      const key = `${left.id}|${right.id}`;
+      const rivalry =
+        rivalryStats.get(key) ??
+        ({
+          key,
+          leftIdolId: left.id,
+          leftIdolName: left.name,
+          rightIdolId: right.id,
+          rightIdolName: right.name,
+          matches: 0,
+          leftWins: 0,
+          rightWins: 0,
+          lastArchivedAt: bracket.updatedAt
+        } satisfies HololiveBracketStatsOverview["topRivalries"][number]);
+      rivalry.matches += 1;
+      if (match.winner.idolId === rivalry.leftIdolId) {
+        rivalry.leftWins += 1;
+      } else {
+        rivalry.rightWins += 1;
+      }
+      if (bracket.updatedAt > rivalry.lastArchivedAt) {
+        rivalry.lastArchivedAt = bracket.updatedAt;
+      }
+      rivalryStats.set(key, rivalry);
+    }
+  }
+
+  const byWins = <T extends { wins: number; championCount: number; appearances: number }>(left: T, right: T) =>
+    right.wins - left.wins || right.championCount - left.championCount || right.appearances - left.appearances;
+  const finalsWithoutTitle = (song: HololiveBracketStatsOverview["topSongsByWins"][number]) => Math.max(0, song.finalistCount - song.championCount);
+  const giantKillerAverageScore = (song: HololiveBracketStatsOverview["topSongsByWins"][number]) => (song.upsetWins > 0 ? song.giantKillerScore / song.upsetWins : 0);
+  const songs = [...songStats.values()];
+  const talents = [...talentStats.values()];
+  const bySongTitle = (left: HololiveBracketStatsOverview["topSongsByWins"][number], right: HololiveBracketStatsOverview["topSongsByWins"][number]) =>
+    left.title.localeCompare(right.title);
+  const rivalries = [...rivalryStats.values()];
+  return {
+    totals: {
+      completedBrackets: archives.length,
+      totalMatches: archives.reduce((sum, archive) => sum + archive.completedMatches, 0),
+      uniqueSongs: songStats.size,
+      uniqueTalents: talentStats.size
+    },
+    topSongsByWins: [...songs].sort(byWins).slice(0, 10),
+    topSongsByWinRate: [...songs].sort((left, right) => right.winRate - left.winRate || byWins(left, right)).slice(0, 10),
+    topSongsByAppearances: [...songs].sort((left, right) => right.appearances - left.appearances || byWins(left, right)).slice(0, 10),
+    topSongsByFinalsWithoutTitle: [...songs]
+      .filter((song) => finalsWithoutTitle(song) > 0)
+      .sort((left, right) => finalsWithoutTitle(right) - finalsWithoutTitle(left) || right.finalistCount - left.finalistCount || byWins(left, right))
+      .slice(0, 10),
+    topSongsByFirstRoundEliminations: [...songs]
+      .filter((song) => song.firstRoundEliminations > 0)
+      .sort((left, right) => right.firstRoundEliminations - left.firstRoundEliminations || right.appearances - left.appearances || byWins(left, right))
+      .slice(0, 10),
+    topSongsByUpsetWins: [...songs]
+      .filter((song) => song.upsetWins > 0)
+      .sort((left, right) => right.upsetWins - left.upsetWins || right.giantKillerScore - left.giantKillerScore || byWins(left, right) || bySongTitle(left, right))
+      .slice(0, 10),
+    topSongsByRevengeWins: [...songs]
+      .filter((song) => song.revengeWins > 0)
+      .sort((left, right) => right.revengeWins - left.revengeWins || byWins(left, right) || bySongTitle(left, right))
+      .slice(0, 10),
+    topSongsByGiantKillerScore: [...songs]
+      .filter((song) => song.giantKillerScore > 0)
+      .sort((left, right) => right.giantKillerScore - left.giantKillerScore || right.upsetWins - left.upsetWins || byWins(left, right) || bySongTitle(left, right))
+      .slice(0, 10),
+    topSongsByGiantKillerAverage: [...songs]
+      .filter((song) => song.giantKillerScore > 0 && song.upsetWins > 0)
+      .sort(
+        (left, right) =>
+          giantKillerAverageScore(right) - giantKillerAverageScore(left) ||
+          right.giantKillerScore - left.giantKillerScore ||
+          right.upsetWins - left.upsetWins ||
+          byWins(left, right) ||
+          bySongTitle(left, right)
+      )
+      .slice(0, 10),
+    topTalents: [...talents].sort(byWins).slice(0, 10),
+    topTalentsByTop4: [...talents]
+      .filter((talent) => talent.top4Count > 0)
+      .sort((left, right) => right.top4Count - left.top4Count || right.championCount - left.championCount || byWins(left, right))
+      .slice(0, 10),
+    topRivalries: rivalries
+      .sort(
+        (left, right) =>
+          right.matches - left.matches ||
+          Math.min(right.leftWins, right.rightWins) - Math.min(left.leftWins, left.rightWins) ||
+          right.lastArchivedAt.localeCompare(left.lastArchivedAt) ||
+          left.key.localeCompare(right.key)
+      )
+      .slice(0, 10),
+    championHistory: archives.slice(0, 12)
+  };
+}
+
+function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:create"]["request"]): HololiveBracket {
+  const size = payload.size;
+  const generationStyle: HololiveBracketGenerationStyle = payload.generationStyle ?? "top_songs";
+  const sizeCount = MOCK_BRACKET_SIZE_COUNTS[size];
+  const id = `mock-bracket-${crypto.randomUUID()}`;
+  const officialIdols = mockHololiveTierData.idols.filter((idol) => idol.source === "official");
+  const entries: HololiveBracketEntry[] = [];
+
+  for (let index = 0; entries.length < sizeCount; index += 1) {
+    const idol = officialIdols[index % Math.max(officialIdols.length, 1)];
+    const isOriginal = generationStyle === "random_songs" ? (index + idol.id.length) % 2 === 0 : index % 2 === 0;
+    const title = `${idol?.displayName ?? "Mock Talent"} ${isOriginal ? "Original" : "Cover"} ${Math.floor(index / 2) + 1}`;
+    entries.push({
+      id: `${id}:entry:${entries.length}`,
+      bracketId: id,
+      slotIndex: entries.length,
+      youtubeVideoId: `${id}-video-${entries.length}`,
+      title,
+      songName: title,
+      topicId: isOriginal ? "Original_Song" : "Music_Cover",
+      youtubeUrl: `https://www.youtube.com/watch?v=${id}-video-${entries.length}`,
+      channelName: `${idol?.displayName ?? "Mock Talent"} Channel`,
+      idolId: idol?.id ?? "mock-talent",
+      idolName: idol?.displayName ?? "Mock Talent",
+      canonicalPerformanceKey: `${id}:canonical:${entries.length}`,
+      viewCount: 1_000_000 - entries.length * 1000,
+      publishedAt: now,
+      durationSeconds: 210
+    });
+  }
+
+  const rounds: HololiveBracketRound[] = [];
+  for (let roundIndex = 0; roundIndex < Math.log2(sizeCount); roundIndex += 1) {
+    const matchesInRound = sizeCount / 2 ** (roundIndex + 1);
+    const matches: HololiveBracketMatch[] = [];
+    for (let matchIndex = 0; matchIndex < matchesInRound; matchIndex += 1) {
+      matches.push({
+        id: `${id}:r${roundIndex}:m${matchIndex}`,
+        bracketId: id,
+        roundIndex,
+        matchIndex,
+        entryA: roundIndex === 0 ? entries[matchIndex * 2] ?? null : null,
+        entryB: roundIndex === 0 ? entries[matchIndex * 2 + 1] ?? null : null,
+        winnerEntryId: null,
+        winner: null,
+        completedAt: null,
+        updatedAt: now
+      });
+    }
+    rounds.push({
+      roundIndex,
+      label: getMockHololiveBracketRoundLabel(sizeCount, roundIndex),
+      matches
+    });
+  }
+
+  const bracket = updateMockHololiveBracketProgress({
+    id,
+    name: payload.name?.trim() || `${size} Bracket`,
+    size,
+    generationStyle,
+    generationFilters: payload.filters ?? {},
+    seed: id,
+    status: "active",
+    currentMatchId: `${id}:r0:m0`,
+    currentMatch: rounds[0]?.matches[0] ?? null,
+    champion: null,
+    entries,
+    rounds,
+    createdAt: now,
+    updatedAt: now
+  });
+  mockHololiveBrackets.set(id, bracket);
+  return bracket;
+}
+
+function getMockHololiveBracketRoundLabel(sizeCount: number, roundIndex: number): string {
+  return hololiveBracketRoundLabel(sizeCount, roundIndex);
+}
+
+function getMockHololiveBracket(bracketId: string): HololiveBracket {
+  const bracket = mockHololiveBrackets.get(bracketId);
+  if (!bracket) {
+    throw new Error(`Unknown mock bracket: ${bracketId}`);
+  }
+  return bracket;
+}
+
+function updateMockHololiveBracketProgress(bracket: HololiveBracket): HololiveBracket {
+  const rounds = bracket.rounds.map((round) => ({
+    ...round,
+    matches: round.matches.map((match) => ({
+      ...match,
+      winner: match.winnerEntryId ? bracket.entries.find((entry) => entry.id === match.winnerEntryId) ?? null : null
+    }))
+  }));
+  const matches = rounds.flatMap((round) => round.matches);
+  const currentMatch = matches.find((match) => match.entryA && match.entryB && !match.winnerEntryId) ?? null;
+  const finalMatch = rounds[rounds.length - 1]?.matches[0] ?? null;
+  const champion = finalMatch?.winner ?? null;
+  return {
+    ...bracket,
+    rounds,
+    status: champion ? "complete" : "active",
+    currentMatchId: champion ? null : currentMatch?.id ?? null,
+    currentMatch,
+    champion,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function clearMockHololiveBracketDownstream(
+  bracket: HololiveBracket,
+  roundIndex: number,
+  matchIndex: number
+): void {
+  const nextRound = bracket.rounds[roundIndex + 1];
+  const nextMatch = nextRound?.matches[Math.floor(matchIndex / 2)];
+  if (!nextMatch) {
+    return;
+  }
+
+  if (matchIndex % 2 === 0) {
+    nextMatch.entryA = null;
+  } else {
+    nextMatch.entryB = null;
+  }
+  nextMatch.winnerEntryId = null;
+  nextMatch.winner = null;
+  nextMatch.completedAt = null;
+  nextMatch.updatedAt = new Date().toISOString();
+  clearMockHololiveBracketDownstream(bracket, roundIndex + 1, Math.floor(matchIndex / 2));
+}
+
+function pickMockHololiveBracketWinner(
+  payload: IpcChannelMap["hololive:brackets:pick-winner"]["request"]
+): HololiveBracket {
+  const bracket = structuredClone(getMockHololiveBracket(payload.bracketId)) as HololiveBracket;
+  const match = bracket.rounds
+    .flatMap((round) => round.matches)
+    .find((candidate) => candidate.id === payload.matchId);
+  if (!match || !match.entryA || !match.entryB) {
+    throw new Error("This mock matchup is not ready");
+  }
+  if (payload.winnerEntryId !== match.entryA.id && payload.winnerEntryId !== match.entryB.id) {
+    throw new Error("The mock winner is not in this matchup");
+  }
+
+  clearMockHololiveBracketDownstream(bracket, match.roundIndex, match.matchIndex);
+  match.winnerEntryId = payload.winnerEntryId;
+  match.winner = bracket.entries.find((entry) => entry.id === payload.winnerEntryId) ?? null;
+  match.completedAt = new Date().toISOString();
+  match.updatedAt = match.completedAt;
+  const nextMatch = bracket.rounds[match.roundIndex + 1]?.matches[Math.floor(match.matchIndex / 2)];
+  if (nextMatch && match.winner) {
+    if (match.matchIndex % 2 === 0) {
+      nextMatch.entryA = match.winner;
+    } else {
+      nextMatch.entryB = match.winner;
+    }
+  }
+
+  const updated = updateMockHololiveBracketProgress(bracket);
+  mockHololiveBrackets.set(updated.id, updated);
+  archiveMockHololiveBracket(updated);
+  return updated;
+}
+
+function undoMockHololiveBracket(bracketId: string): HololiveBracket {
+  const bracket = structuredClone(getMockHololiveBracket(bracketId)) as HololiveBracket;
+  const completed = bracket.rounds
+    .flatMap((round) => round.matches)
+    .filter((match) => match.winnerEntryId)
+    .sort(
+      (left, right) =>
+        (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt) ||
+        right.roundIndex - left.roundIndex ||
+        right.matchIndex - left.matchIndex
+    )[0];
+  if (!completed) {
+    return bracket;
+  }
+
+  clearMockHololiveBracketDownstream(bracket, completed.roundIndex, completed.matchIndex);
+  completed.winnerEntryId = null;
+  completed.winner = null;
+  completed.completedAt = null;
+  completed.updatedAt = new Date().toISOString();
+  const updated = updateMockHololiveBracketProgress(bracket);
+  mockHololiveBrackets.set(updated.id, updated);
+  return updated;
+}
+
+function resetMockHololiveBracket(bracketId: string): HololiveBracket {
+  const bracket = structuredClone(getMockHololiveBracket(bracketId)) as HololiveBracket;
+  for (const round of bracket.rounds) {
+    for (const match of round.matches) {
+      if (round.roundIndex > 0) {
+        match.entryA = null;
+        match.entryB = null;
+      }
+      match.winnerEntryId = null;
+      match.winner = null;
+      match.completedAt = null;
+      match.updatedAt = new Date().toISOString();
+    }
+  }
+  const updated = updateMockHololiveBracketProgress(bracket);
+  mockHololiveBrackets.set(updated.id, updated);
+  return updated;
+}
+
+const mockBridge: HoloshelfBridge = {
+  onHololiveRefreshProgress() {
+    return () => undefined;
+  },
+  onUpdateStatus() {
+    return () => undefined;
+  },
+  async invoke<C extends IpcChannel>(
+    channel: C,
+    _payload: IpcChannelMap[C]["request"]
+  ): Promise<IpcChannelMap[C]["response"]> {
+    switch (channel) {
+      case "app:bootstrap":
+        return mockBootstrap as IpcChannelMap[C]["response"];
+      case "settings:get":
+        return mockSettings as IpcChannelMap[C]["response"];
+      case "settings:set":
+        {
+          const payload = _payload as IpcChannelMap["settings:set"]["request"];
+          mockSettings[payload.key] = payload.value;
+          return mockSettings as IpcChannelMap[C]["response"];
+        }
+      case "updates:status":
+        return mockUpdateStatus as IpcChannelMap[C]["response"];
+      case "updates:check":
+        mockUpdateStatus = {
+          ...mockUpdateStatus,
+          state: "unsupported",
+          message: "Updates are available only in the packaged Windows app.",
+          updatedAt: new Date().toISOString()
+        };
+        return mockUpdateStatus as IpcChannelMap[C]["response"];
+      case "updates:install":
+        return mockUpdateStatus as IpcChannelMap[C]["response"];
+      case "app:save-image":
+        return { filePath: "mock-bracket-export.png" } as IpcChannelMap[C]["response"];
+      case "app:open-path":
+        return { opened: true } as IpcChannelMap[C]["response"];
+      case "app:data-backup:create":
+        return {
+          created: true,
+          filePath: "data\\backups\\holoshelf.manual.mock.sqlite",
+          reason: "manual"
+        } as IpcChannelMap[C]["response"];
+      case "app:data-backup:restore":
+        return {
+          restored: true,
+          backupFilePath: "data\\backups\\holoshelf.pre-restore.mock.sqlite",
+          restoredFromPath: "data\\backups\\holoshelf.manual.mock.sqlite",
+          requiresRestart: true
+        } as IpcChannelMap[C]["response"];
+      case "app:data:reset":
+        return {
+          reset: true,
+          backupFilePath: "data\\backups\\holoshelf.pre-reset.mock.sqlite",
+          requiresRestart: true
+        } as IpcChannelMap[C]["response"];
+      case "catalog:list":
+        return [] as CatalogItem[] as IpcChannelMap[C]["response"];
+      case "source:health-check":
+        return mockBootstrap.sourceHealth as IpcChannelMap[C]["response"];
+      case "fetch:list":
+        return [] as IpcChannelMap[C]["response"];
+      case "fetch:enqueue":
+      case "fetch:run-next":
+      case "fetch:cancel":
+        return null as IpcChannelMap[C]["response"];
+      case "import:open-csv":
+        return null as IpcChannelMap[C]["response"];
+      case "import:apply-csv":
+        return { inserted: 0, skipped: 0 } as IpcChannelMap[C]["response"];
+      case "hololive:tier-data":
+      case "hololive:board:create":
+      case "hololive:board:update":
+      case "hololive:board:reorder":
+      case "hololive:board:delete":
+      case "hololive:board:clear":
+      case "hololive:tier:create":
+      case "hololive:tier:update":
+      case "hololive:tier:delete":
+      case "hololive:tier:reorder":
+      case "hololive:placement:move":
+      case "hololive:unranked:sort":
+        if (channel === "hololive:tier-data") {
+          loadMockHololiveBoard((_payload as IpcChannelMap["hololive:tier-data"]["request"])?.boardId);
+        }
+        if (channel === "hololive:board:create") {
+          createMockHololiveBoard(_payload as IpcChannelMap["hololive:board:create"]["request"]);
+        }
+        if (channel === "hololive:board:update") {
+          updateMockHololiveBoard(_payload as IpcChannelMap["hololive:board:update"]["request"]);
+        }
+        if (channel === "hololive:board:reorder") {
+          reorderMockHololiveBoards(_payload as IpcChannelMap["hololive:board:reorder"]["request"]);
+        }
+        if (channel === "hololive:board:delete") {
+          const snapshot = structuredClone(mockHololiveTierData);
+          deleteMockHololiveBoard((_payload as IpcChannelMap["hololive:board:delete"]["request"]).boardId);
+          return {
+            data: mockHololiveTierData,
+            ...createMockUndo("tier-board-delete", () => {
+              mockHololiveTierData = snapshot;
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+        if (channel === "hololive:tier:create") {
+          createMockHololiveTier(_payload as IpcChannelMap["hololive:tier:create"]["request"]);
+        }
+        if (channel === "hololive:tier:update") {
+          updateMockHololiveTier(_payload as IpcChannelMap["hololive:tier:update"]["request"]);
+        }
+        if (channel === "hololive:tier:delete") {
+          deleteMockHololiveTier(_payload as IpcChannelMap["hololive:tier:delete"]["request"]);
+        }
+        if (channel === "hololive:placement:move") {
+          moveMockHololiveIdol(_payload as IpcChannelMap["hololive:placement:move"]["request"]);
+        }
+        if (channel === "hololive:board:clear") {
+          const snapshot = structuredClone(mockHololiveTierData);
+          clearMockHololiveBoard();
+          return {
+            data: mockHololiveTierData,
+            ...createMockUndo("tier-board-clear", () => {
+              mockHololiveTierData = snapshot;
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+        if (channel === "hololive:unranked:sort") {
+          sortMockHololiveUnranked();
+        }
+        if (channel === "hololive:tier:reorder") {
+          reorderMockHololiveTiers(_payload as IpcChannelMap["hololive:tier:reorder"]["request"]);
+        }
+        return mockHololiveTierData as IpcChannelMap[C]["response"];
+      case "hololive:icons:refresh":
+        return { cached: 0, failed: 0 } as IpcChannelMap[C]["response"];
+      case "hololive:idol:profile":
+        return getMockHololiveIdolProfile(
+          (_payload as IpcChannelMap["hololive:idol:profile"]["request"]).idolId
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:profile:playback-context":
+        return getMockHololiveProfilePlaybackContext(
+          _payload as IpcChannelMap["hololive:profile:playback-context"]["request"]
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:music:import-artifacts":
+      case "hololive:music:refresh":
+        return {
+          run: {
+            id: "mock-holodex-run",
+            source: channel === "hololive:music:refresh" ? "live" : "artifact",
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            fetchedRows: 0,
+            keptRows: 0,
+            filteredRows: 0,
+            duplicateRows: 0,
+            error: null
+          },
+          sourceRows: 0,
+          idolMatchedRows: 0,
+          importedRows: 0,
+          detailCacheRows: 0,
+          duplicateRows: 0
+        } as IpcChannelMap[C]["response"];
+      case "hololive:music-video-stats:refresh":
+        return {
+          requestedVideos: visibleMockHololiveMusicRows().length,
+          updatedVideos: visibleMockHololiveMusicRows().length,
+          missingVideos: 0,
+          unavailableVideos: 0,
+          failedBatches: 0,
+          batches: 1,
+          fetchedAt: now
+        } as IpcChannelMap[C]["response"];
+      case "hololive:official-data:refresh":
+      case "hololive:data:refresh":
+        return {
+          channelRefresh: {
+            refreshedChannels: mockHolodexChannels.length,
+            classifiedChannels: mockHololiveTierData.idols.length,
+            updatedAt: now
+          },
+          musicRefresh: {
+            run: {
+              id: "mock-full-refresh-run",
+              source: "live",
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              fetchedRows: visibleMockHololiveMusicRows().length,
+              keptRows: visibleMockHololiveMusicRows().length,
+              filteredRows: 0,
+              duplicateRows: 0,
+              error: null
+            },
+            sourceRows: visibleMockHololiveMusicRows().length,
+            idolMatchedRows: visibleMockHololiveMusicRows().length,
+            importedRows: visibleMockHololiveMusicRows().length,
+            detailCacheRows: visibleMockHololiveMusicRows().length,
+            duplicateRows: 0
+          },
+          videoStatsRefresh: {
+            requestedVideos: visibleMockHololiveMusicRows().length,
+            updatedVideos: visibleMockHololiveMusicRows().length,
+            missingVideos: 0,
+            unavailableVideos: 0,
+            failedBatches: 0,
+            batches: 1,
+            fetchedAt: now
+          },
+          updatedAt: now
+        } as IpcChannelMap[C]["response"];
+      case "hololive:music:status":
+        return { latestRun: null, totalRows: 0 } as IpcChannelMap[C]["response"];
+      case "hololive:music:list":
+        {
+          const payload = (_payload ?? {}) as IpcChannelMap["hololive:music:list"]["request"];
+          let rows = visibleMockHololiveMusicRows();
+          if (payload?.youtubeVideoIds?.length) {
+            const ids = new Set(payload.youtubeVideoIds);
+            rows = rows.filter((row) => ids.has(row.youtubeVideoId));
+          }
+          if (payload?.topicId) {
+            rows = rows.filter((row) => row.topicId === payload.topicId);
+          }
+          if (payload?.query) {
+            const query = payload.query.toLowerCase();
+            rows = rows.filter((row) =>
+              `${row.title} ${row.songName ?? ""} ${row.channelName}`.toLowerCase().includes(query)
+            );
+          }
+          return rows.slice(0, payload?.limit ?? 100) as IpcChannelMap[C]["response"];
+        }
+      case "hololive:music:library":
+        {
+          const payload = (_payload ?? {}) as IpcChannelMap["hololive:music:library"]["request"];
+          let rows = visibleMockHololiveMusicRows();
+          if (payload?.topicId) {
+            rows = rows.filter((row) => row.topicId === payload.topicId);
+          }
+          if (payload?.talentId) {
+            rows = rows.filter(
+              (row) =>
+                row.idolId === payload.talentId ||
+                row.participants.some((participant) => participant.idolId === payload.talentId) ||
+                row.ownedIdolIds.includes(payload.talentId ?? "") ||
+                row.featuredIdolIds.includes(payload.talentId ?? "")
+            );
+          }
+          if (payload?.collabScope === "solo") {
+            rows = rows.filter(
+              (row) =>
+                row.ownedIdolIds.length === 1 &&
+                row.featuredIdolIds.length === 0 &&
+                new Set(row.participants.map((participant) => participant.idolId)).size <= 1 &&
+                row.uploaderChannelKind !== "group"
+            );
+          }
+          if (payload?.marker) {
+            rows = rows.filter((row) => row.marker === payload.marker);
+          }
+          if (payload?.query) {
+            const query = payload.query.toLowerCase();
+            rows = rows.filter((row) =>
+              `${row.title} ${row.songName ?? ""} ${row.channelName}`.toLowerCase().includes(query)
+            );
+          }
+          const titleCompare = (left: HololiveMusicRow, right: HololiveMusicRow) =>
+            (left.songName ?? left.title).localeCompare(right.songName ?? right.title) ||
+            left.youtubeVideoId.localeCompare(right.youtubeVideoId);
+          switch (payload?.sort ?? "newest") {
+            case "oldest":
+              rows = [...rows].sort(
+                (left, right) =>
+                  Number(!left.publishedAt) - Number(!right.publishedAt) ||
+                  (left.publishedAt ?? "").localeCompare(right.publishedAt ?? "") ||
+                  titleCompare(left, right)
+              );
+              break;
+            case "views_desc":
+              rows = [...rows].sort(
+                (left, right) =>
+                  Number(left.viewCount == null) - Number(right.viewCount == null) ||
+                  (right.viewCount ?? 0) - (left.viewCount ?? 0) ||
+                  (right.publishedAt ?? "").localeCompare(left.publishedAt ?? "") ||
+                  titleCompare(left, right)
+              );
+              break;
+            case "views_asc":
+              rows = [...rows].sort(
+                (left, right) =>
+                  Number(left.viewCount == null) - Number(right.viewCount == null) ||
+                  (left.viewCount ?? 0) - (right.viewCount ?? 0) ||
+                  (right.publishedAt ?? "").localeCompare(left.publishedAt ?? "") ||
+                  titleCompare(left, right)
+              );
+              break;
+            case "newest":
+            default:
+              rows = [...rows].sort(
+                (left, right) =>
+                  (right.publishedAt ?? "").localeCompare(left.publishedAt ?? "") ||
+                  titleCompare(left, right)
+              );
+              break;
+          }
+          const offset = payload?.offset ?? 0;
+          const limit = payload?.limit ?? 50;
+          const response: HololiveMusicLibraryResponse = {
+            rows: rows.slice(offset, offset + limit),
+            total: rows.length,
+            offset,
+            limit
+          };
+          return response as IpcChannelMap[C]["response"];
+        }
+      case "hololive:music-marker:set":
+        {
+          const payload = _payload as IpcChannelMap["hololive:music-marker:set"]["request"];
+          const updatedAt = payload.marker ? new Date().toISOString() : null;
+          const response = {
+            youtubeVideoId: payload.youtubeVideoId,
+            markerKey: `video:${payload.youtubeVideoId}`,
+            marker: payload.marker,
+            updatedAt
+          };
+          if (payload.marker) {
+            mockHololiveMusicMarkers[payload.youtubeVideoId] = response;
+            if (payload.marker !== "favorite") {
+              delete mockFavoritePositions[payload.youtubeVideoId];
+            }
+          } else {
+            delete mockHololiveMusicMarkers[payload.youtubeVideoId];
+            delete mockFavoritePositions[payload.youtubeVideoId];
+          }
+          return response as IpcChannelMap[C]["response"];
+        }
+      case "hololive:music:exclude":
+        {
+          const payload = _payload as IpcChannelMap["hololive:music:exclude"]["request"];
+          const exclusionsSnapshot = structuredClone(mockHololiveMusicExclusions);
+          const markersSnapshot = structuredClone(mockHololiveMusicMarkers);
+          const favoritePositionsSnapshot = structuredClone(mockFavoritePositions);
+          const playerSnapshot = structuredClone(mockHololivePlayerData);
+          const response = {
+            youtubeVideoId: payload.youtubeVideoId,
+            titleSnapshot: payload.title ?? null,
+            sourceUrlSnapshot: payload.sourceUrl ?? null,
+            createdAt: new Date().toISOString()
+          };
+          mockHololiveMusicExclusions[payload.youtubeVideoId] = response;
+          delete mockHololiveMusicMarkers[payload.youtubeVideoId];
+          delete mockFavoritePositions[payload.youtubeVideoId];
+          mockHololivePlayerData = {
+            ...mockHololivePlayerData,
+            queue: mockHololivePlayerData.queue.filter((item) => item.youtubeVideoId !== payload.youtubeVideoId),
+            playlists: mockHololivePlayerData.playlists.map((playlist) => ({
+              ...playlist,
+              items: (playlist.items ?? []).filter((item) => item.youtubeVideoId !== payload.youtubeVideoId)
+            })),
+            state:
+              mockHololivePlayerData.state.currentYoutubeVideoId === payload.youtubeVideoId
+                ? {
+                    ...mockHololivePlayerData.state,
+                    playbackSourceType: "library",
+                    currentQueueItemId: null,
+                    currentPlaylistId: null,
+                    currentPlaylistItemId: null,
+                    currentYoutubeVideoId: null,
+                    updatedAt: new Date().toISOString()
+                  }
+                : mockHololivePlayerData.state
+          };
+          return {
+            data: response,
+            ...createMockUndo("music-exclusion", () => {
+              Object.keys(mockHololiveMusicExclusions).forEach((key) => delete mockHololiveMusicExclusions[key]);
+              Object.assign(mockHololiveMusicExclusions, exclusionsSnapshot);
+              Object.keys(mockHololiveMusicMarkers).forEach((key) => delete mockHololiveMusicMarkers[key]);
+              Object.assign(mockHololiveMusicMarkers, markersSnapshot);
+              Object.keys(mockFavoritePositions).forEach((key) => delete mockFavoritePositions[key]);
+              Object.assign(mockFavoritePositions, favoritePositionsSnapshot);
+              mockHololivePlayerData = playerSnapshot;
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:music:mark-unavailable":
+        {
+          const payload = _payload as IpcChannelMap["hololive:music:mark-unavailable"]["request"];
+          const row = visibleMockHololiveMusicRows().find((candidate) => candidate.youtubeVideoId === payload.youtubeVideoId) ?? null;
+          const replacement =
+            row
+              ? visibleMockHololiveMusicRows()
+                  .filter((candidate) => candidate.youtubeVideoId !== row.youtubeVideoId)
+                  .filter(
+                    (candidate) =>
+                      candidate.topicId === row.topicId &&
+                      ((row.canonicalPerformanceKey &&
+                        candidate.canonicalPerformanceKey === row.canonicalPerformanceKey) ||
+                        (row.canonicalSongKey && candidate.canonicalSongKey === row.canonicalSongKey))
+                  )
+                  .sort(
+                    (left, right) =>
+                      Number(right.canonicalPerformanceKey === row.canonicalPerformanceKey) -
+                        Number(left.canonicalPerformanceKey === row.canonicalPerformanceKey) ||
+                      (right.publishedAt ?? "").localeCompare(left.publishedAt ?? "") ||
+                      left.title.localeCompare(right.title)
+                  )[0] ?? null
+              : null;
+          let replacementId = replacement?.youtubeVideoId ?? null;
+          mockHololiveMusicExclusions[payload.youtubeVideoId] = {
+            youtubeVideoId: payload.youtubeVideoId,
+            titleSnapshot: payload.title ?? row?.title ?? null,
+            sourceUrlSnapshot: payload.sourceUrl ?? row?.youtubeUrl ?? null,
+            createdAt: new Date().toISOString()
+          };
+          if (replacement) {
+            const replacementVideoId = replacement.youtubeVideoId;
+            replacementId = replacementVideoId;
+            const marker = mockHololiveMusicMarkers[payload.youtubeVideoId];
+            if (marker) {
+              mockHololiveMusicMarkers[replacementVideoId] = {
+                ...marker,
+                youtubeVideoId: replacementVideoId,
+                markerKey: `video:${replacementVideoId}`
+              };
+              delete mockHololiveMusicMarkers[payload.youtubeVideoId];
+            }
+            mockHololivePlayerData = {
+              ...mockHololivePlayerData,
+              queue: mockHololivePlayerData.queue.map((item) =>
+                item.youtubeVideoId === payload.youtubeVideoId
+                  ? {
+                      ...item,
+                      youtubeVideoId: replacementVideoId,
+                      titleSnapshot: replacement.songName || replacement.title,
+                      sourceUrlSnapshot: replacement.youtubeUrl
+                    }
+                  : item
+              ),
+              playlists: mockHololivePlayerData.playlists.map((playlist) => ({
+                ...playlist,
+                items: (playlist.items ?? []).map((item) =>
+                  item.youtubeVideoId === payload.youtubeVideoId
+                    ? {
+                        ...item,
+                        youtubeVideoId: replacementVideoId,
+                        titleSnapshot: replacement.songName || replacement.title,
+                        sourceUrlSnapshot: replacement.youtubeUrl
+                      }
+                    : item
+                )
+              })),
+              state:
+                mockHololivePlayerData.state.currentYoutubeVideoId === payload.youtubeVideoId
+                  ? {
+                      ...mockHololivePlayerData.state,
+                      currentYoutubeVideoId: replacementVideoId,
+                      updatedAt: new Date().toISOString()
+                    }
+                  : mockHololivePlayerData.state
+            };
+          } else {
+            mockHololivePlayerData = {
+              ...mockHololivePlayerData,
+              queue: mockHololivePlayerData.queue.filter((item) => item.youtubeVideoId !== payload.youtubeVideoId),
+              playlists: mockHololivePlayerData.playlists.map((playlist) => ({
+                ...playlist,
+                items: (playlist.items ?? []).filter((item) => item.youtubeVideoId !== payload.youtubeVideoId)
+              })),
+              state:
+                mockHololivePlayerData.state.currentYoutubeVideoId === payload.youtubeVideoId
+                  ? {
+                      ...mockHololivePlayerData.state,
+                      playbackSourceType: "library",
+                      currentQueueItemId: null,
+                      currentPlaylistId: null,
+                      currentPlaylistItemId: null,
+                      currentYoutubeVideoId: null,
+                      updatedAt: new Date().toISOString()
+                    }
+                  : mockHololivePlayerData.state
+            };
+          }
+          return {
+            removedYoutubeVideoId: payload.youtubeVideoId,
+            replacementYoutubeVideoId: replacementId,
+            replacementTitle: replacement?.songName || replacement?.title || null,
+            data: refreshMockHololivePlayerData()
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:channels:refresh":
+        return { refreshedChannels: mockHolodexChannels.length, classifiedChannels: mockHololiveTierData.idols.length, updatedAt: now } as IpcChannelMap[C]["response"];
+      case "hololive:channels:list":
+        return mockHolodexChannels as IpcChannelMap[C]["response"];
+      case "hololive:custom-talents:resolve":
+        return resolveMockCustomTalentPreview(
+          _payload as IpcChannelMap["hololive:custom-talents:resolve"]["request"]
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:custom-talents:upsert":
+        return upsertMockCustomTalent(
+          _payload as IpcChannelMap["hololive:custom-talents:upsert"]["request"]
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:custom-talents:delete":
+        deleteMockCustomTalent((_payload as IpcChannelMap["hololive:custom-talents:delete"]["request"]).idolId);
+        return mockHololiveTierData as IpcChannelMap[C]["response"];
+      case "hololive:custom-talents:refresh":
+        return {
+          musicRefresh: {
+            run: {
+              id: "mock-custom-holodex-run",
+              source: "live",
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              fetchedRows: 2,
+              keptRows: 2,
+              filteredRows: 0,
+              duplicateRows: 0,
+              error: null
+            },
+            sourceRows: 2,
+            idolMatchedRows: 2,
+            importedRows: 2,
+            detailCacheRows: 2,
+            duplicateRows: 0
+          },
+          videoStatsRefresh: {
+            requestedVideos: visibleMockHololiveMusicRows().length,
+            updatedVideos: visibleMockHololiveMusicRows().length,
+            missingVideos: 0,
+            unavailableVideos: 0,
+            failedBatches: 0,
+            batches: 1,
+            fetchedAt: now
+          },
+          updatedAt: now
+        } as IpcChannelMap[C]["response"];
+      case "hololive:custom-talents:refresh-all":
+        return {
+          refreshedTalents: mockHololiveTierData.idols.filter((idol) => idol.source === "custom").length,
+          musicRefreshes: [
+            {
+              run: {
+                id: "mock-custom-all-holodex-run",
+                source: "live",
+                status: "completed",
+                startedAt: now,
+                completedAt: now,
+                fetchedRows: 2,
+                keptRows: 2,
+                filteredRows: 0,
+                duplicateRows: 0,
+                error: null
+              },
+              sourceRows: 2,
+              idolMatchedRows: 2,
+              importedRows: 2,
+              detailCacheRows: 2,
+              duplicateRows: 0
+            }
+          ],
+          videoStatsRefresh: {
+            requestedVideos: visibleMockHololiveMusicRows().length,
+            updatedVideos: visibleMockHololiveMusicRows().length,
+            missingVideos: 0,
+            unavailableVideos: 0,
+            failedBatches: 0,
+            batches: 1,
+            fetchedAt: now
+          },
+          updatedAt: now
+        } as IpcChannelMap[C]["response"];
+      case "hololive:player:data":
+        return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+      case "hololive:player:playlist:create":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist:create"]["request"];
+          mockHololivePlayerData.playlists.push({
+            id: `mock-playlist-${crypto.randomUUID()}`,
+            name: payload.name,
+            position: mockHololivePlayerData.playlists.length,
+            itemCount: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            items: []
+          });
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist:update":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist:update"]["request"];
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.map((playlist) =>
+            playlist.id === payload.playlistId ? { ...playlist, name: payload.name, updatedAt: new Date().toISOString() } : playlist
+          );
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist:delete":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist:delete"]["request"];
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.filter(
+            (playlist) => playlist.id !== payload.playlistId
+          );
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist:reorder":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist:reorder"]["request"];
+          const byId = new Map(mockHololivePlayerData.playlists.map((playlist) => [playlist.id, playlist]));
+          mockHololivePlayerData.playlists = payload.playlistIds
+            .map((id) => byId.get(id))
+            .filter((playlist): playlist is HololiveMusicPlayerData["playlists"][number] => Boolean(playlist));
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist-item:add":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist-item:add"]["request"];
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.map((playlist) => {
+            if (playlist.id !== payload.playlistId) {
+              return playlist;
+            }
+            const items = [...(playlist.items ?? [])];
+            if (items.some((item) => item.youtubeVideoId === payload.youtubeVideoId)) {
+              return {
+                ...playlist,
+                items: items
+                  .filter((item) => item.youtubeVideoId !== payload.youtubeVideoId)
+                  .map((item, index) => ({ ...item, position: index }))
+              };
+            }
+            const position = payload.position ?? items.length;
+            items.splice(position, 0, createMockHololivePlayerItem(payload.youtubeVideoId, position));
+            return { ...playlist, items: items.map((item, index) => ({ ...item, position: index })) };
+          });
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist-items:add":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist-items:add"]["request"];
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.map((playlist) => {
+            if (playlist.id !== payload.playlistId) {
+              return playlist;
+            }
+            const items = [...(playlist.items ?? [])];
+            for (const videoId of payload.youtubeVideoIds) {
+              if (!items.some((item) => item.youtubeVideoId === videoId)) {
+                items.push(createMockHololivePlayerItem(videoId, items.length));
+              }
+            }
+            return { ...playlist, items: items.map((item, position) => ({ ...item, position })) };
+          });
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist-item:remove":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist-item:remove"]["request"];
+          const snapshot = structuredClone(mockHololivePlayerData);
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.map((playlist) => ({
+            ...playlist,
+            items: (playlist.items ?? []).filter((item) => item.id !== payload.itemId)
+          }));
+          const data = refreshMockHololivePlayerData();
+          return {
+            data,
+            ...createMockUndo("playlist-item-remove", () => {
+              mockHololivePlayerData = snapshot;
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist-item:reorder":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist-item:reorder"]["request"];
+          if (payload.playlistId === MOCK_FAVORITES_PLAYLIST_ID) {
+            payload.itemIds.forEach((id, position) => {
+              const videoId = id.startsWith(`${MOCK_FAVORITES_PLAYLIST_ID}:`)
+                ? id.slice(MOCK_FAVORITES_PLAYLIST_ID.length + 1)
+                : id;
+              mockFavoritePositions[videoId] = position;
+            });
+            return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+          }
+          mockHololivePlayerData.playlists = mockHololivePlayerData.playlists.map((playlist) => {
+            if (playlist.id !== payload.playlistId) {
+              return playlist;
+            }
+            const byId = new Map((playlist.items ?? []).map((item) => [item.id, item]));
+            return {
+              ...playlist,
+              items: payload.itemIds
+                .map((id, position) => {
+                  const item = byId.get(id);
+                  return item ? { ...item, position } : null;
+                })
+                .filter((item): item is HololiveMusicResolvedItem => Boolean(item))
+            };
+          });
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:playlist:play":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:playlist:play"]["request"];
+          const data = refreshMockHololivePlayerData();
+          const playlist = data.playlists.find((candidate) => candidate.id === payload.playlistId);
+          const item =
+            (payload.itemId ? playlist?.items?.find((candidate) => candidate.id === payload.itemId) : null) ??
+            playlist?.items?.find((candidate) => candidate.available);
+          if (!playlist || !item?.available) {
+            throw new Error("This playlist has no playable songs");
+          }
+          mockHololivePlayerData.state = {
+            ...mockHololivePlayerData.state,
+            playbackSourceType: "playlist",
+            currentQueueItemId: null,
+            currentPlaylistId: playlist.id,
+            currentPlaylistItemId: item.id,
+            currentYoutubeVideoId: item.youtubeVideoId,
+            updatedAt: new Date().toISOString()
+          };
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:play-video":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:play-video"]["request"];
+          const row = getMockHololiveMusicRow(payload.youtubeVideoId);
+          mockHololivePlayerData.state = {
+            ...mockHololivePlayerData.state,
+            playbackSourceType: "library",
+            currentQueueItemId: null,
+            currentPlaylistId: null,
+            currentPlaylistItemId: null,
+            currentYoutubeVideoId: row.youtubeVideoId,
+            updatedAt: new Date().toISOString()
+          };
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:queue:add":
+        return mockQueueAdd(_payload as IpcChannelMap["hololive:player:queue:add"]["request"]) as IpcChannelMap[C]["response"];
+      case "hololive:player:queue:bulk-add":
+        return mockQueueBulkAdd(_payload as IpcChannelMap["hololive:player:queue:bulk-add"]["request"]) as IpcChannelMap[C]["response"];
+      case "hololive:player:visible:play":
+        return mockQueueBulkAdd({
+          youtubeVideoIds: (_payload as IpcChannelMap["hololive:player:visible:play"]["request"]).youtubeVideoIds,
+          placement: "now"
+        }) as IpcChannelMap[C]["response"];
+      case "hololive:player:queue:remove":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:queue:remove"]["request"];
+          const snapshot = structuredClone(mockHololivePlayerData);
+          mockHololivePlayerData.queue = mockHololivePlayerData.queue.filter((item) => item.id !== payload.itemId);
+          if (mockHololivePlayerData.state.currentQueueItemId === payload.itemId) {
+            const next = mockHololivePlayerData.queue.find((item) => item.available);
+            mockHololivePlayerData.state = {
+              ...mockHololivePlayerData.state,
+              playbackSourceType: next ? "queue" : "library",
+              currentQueueItemId: next?.id ?? null,
+              currentPlaylistId: null,
+              currentPlaylistItemId: null,
+              currentYoutubeVideoId: next?.youtubeVideoId ?? null,
+              updatedAt: new Date().toISOString()
+            };
+          }
+          const data = refreshMockHololivePlayerData();
+          return {
+            data,
+            ...createMockUndo("queue-item-remove", () => {
+              mockHololivePlayerData = snapshot;
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:queue:reorder":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:queue:reorder"]["request"];
+          const byId = new Map(mockHololivePlayerData.queue.map((item) => [item.id, item]));
+          mockHololivePlayerData.queue = payload.itemIds
+            .map((id, position) => {
+              const item = byId.get(id);
+              return item ? { ...item, position } : null;
+            })
+            .filter((item): item is HololiveMusicResolvedItem => Boolean(item));
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:queue:clear":
+        mockHololivePlayerData = {
+          ...mockHololivePlayerData,
+          queue: [],
+          state:
+            mockHololivePlayerData.state.playbackSourceType === "queue"
+              ? {
+                  ...mockHololivePlayerData.state,
+                  playbackSourceType: "library",
+                  currentQueueItemId: null,
+                  currentPlaylistId: null,
+                  currentPlaylistItemId: null,
+                  currentYoutubeVideoId: null,
+                  updatedAt: new Date().toISOString()
+                }
+              : mockHololivePlayerData.state
+        };
+        return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+      case "hololive:player:queue:save":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:queue:save"]["request"];
+          const uniqueQueueItems = mockHololivePlayerData.queue.filter(
+            (item, index, items) => items.findIndex((candidate) => candidate.youtubeVideoId === item.youtubeVideoId) === index
+          );
+          mockHololivePlayerData.playlists.push({
+            id: `mock-playlist-${crypto.randomUUID()}`,
+            name: payload.name,
+            position: mockHololivePlayerData.playlists.length,
+            itemCount: uniqueQueueItems.length,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            items: uniqueQueueItems.map((item, position) => ({ ...item, id: `mock-playlist-item-${crypto.randomUUID()}`, position }))
+          });
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:player:state:update":
+        {
+          const payload = _payload as IpcChannelMap["hololive:player:state:update"]["request"];
+          mockHololivePlayerData.state = {
+            ...mockHololivePlayerData.state,
+            playbackSourceType:
+              payload.playbackSourceType === undefined
+                ? mockHololivePlayerData.state.playbackSourceType
+                : payload.playbackSourceType ?? "library",
+            currentQueueItemId:
+              payload.currentQueueItemId === undefined
+                ? mockHololivePlayerData.state.currentQueueItemId
+                : payload.currentQueueItemId,
+            currentPlaylistId:
+              payload.currentPlaylistId === undefined
+                ? mockHololivePlayerData.state.currentPlaylistId
+                : payload.currentPlaylistId,
+            currentPlaylistItemId:
+              payload.currentPlaylistItemId === undefined
+                ? mockHololivePlayerData.state.currentPlaylistItemId
+                : payload.currentPlaylistItemId,
+            currentYoutubeVideoId:
+              payload.currentYoutubeVideoId === undefined
+                ? mockHololivePlayerData.state.currentYoutubeVideoId
+                : payload.currentYoutubeVideoId,
+            repeatMode: payload.repeatMode ?? mockHololivePlayerData.state.repeatMode,
+            shuffleEnabled: payload.shuffleEnabled ?? mockHololivePlayerData.state.shuffleEnabled,
+            autoplayEnabled: payload.autoplayEnabled ?? mockHololivePlayerData.state.autoplayEnabled,
+            updatedAt: new Date().toISOString()
+          };
+          return refreshMockHololivePlayerData() as IpcChannelMap[C]["response"];
+        }
+      case "hololive:brackets:list":
+        return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
+      case "hololive:brackets:create":
+        return createMockHololiveBracket(
+          _payload as IpcChannelMap["hololive:brackets:create"]["request"]
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:get":
+        return getMockHololiveBracket(
+          (_payload as IpcChannelMap["hololive:brackets:get"]["request"]).bracketId
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:pick-winner":
+        return pickMockHololiveBracketWinner(
+          _payload as IpcChannelMap["hololive:brackets:pick-winner"]["request"]
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:undo":
+        return undoMockHololiveBracket(
+          (_payload as IpcChannelMap["hololive:brackets:undo"]["request"]).bracketId
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:reset":
+        return resetMockHololiveBracket(
+          (_payload as IpcChannelMap["hololive:brackets:reset"]["request"]).bracketId
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:delete":
+        {
+          const bracketId = (_payload as IpcChannelMap["hololive:brackets:delete"]["request"]).bracketId;
+          const bracket = mockHololiveBrackets.get(bracketId);
+          if (bracket) {
+            archiveMockHololiveBracket(bracket);
+          }
+          mockHololiveBrackets.delete(bracketId);
+        }
+        return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
+      case "hololive:brackets:archives:list":
+        return listMockHololiveBracketArchiveSummaries() as IpcChannelMap[C]["response"];
+      case "hololive:brackets:archives:delete":
+        {
+          const archiveId = (_payload as IpcChannelMap["hololive:brackets:archives:delete"]["request"]).archiveId;
+          const archivesSnapshot = new Map(mockHololiveBracketArchives);
+          mockHololiveBracketArchives.delete(archiveId.replace(/^archive:/, ""));
+          return {
+            data: listMockHololiveBracketArchiveSummaries(),
+            ...createMockUndo("bracket-archive-delete", () => {
+              mockHololiveBracketArchives.clear();
+              for (const [key, value] of archivesSnapshot) {
+                mockHololiveBracketArchives.set(key, value);
+              }
+            })
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:brackets:stats":
+        return getMockHololiveBracketStatsOverview() as IpcChannelMap[C]["response"];
+      case "hololive:undo:apply":
+        {
+          const token = (_payload as IpcChannelMap["hololive:undo:apply"]["request"]).token;
+          const action = mockUndoActions.get(token);
+          if (!action) {
+            throw new Error("This undo action has expired.");
+          }
+          mockUndoActions.delete(token);
+          action.apply();
+          return { applied: true, kind: action.kind } as IpcChannelMap[C]["response"];
+        }
+      default:
+        throw new Error(`Unhandled mock IPC channel: ${String(channel)}`);
+    }
+  }
+};
+
+export const api: HoloshelfBridge = mockBridge;

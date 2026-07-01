@@ -20,6 +20,7 @@ import {
   ChevronRight,
   GripVertical,
   ListMusic,
+  ListPlus,
   Pause,
   Pencil,
   Play,
@@ -35,6 +36,7 @@ import {
   X
 } from "lucide-react";
 import type {
+  HololiveIdol,
   HololiveMusicLibraryResponse,
   HololiveMusicMarker,
   HololiveMusicPlayerData,
@@ -42,8 +44,10 @@ import type {
   HololiveMusicRow,
   HololiveMusicTopic
 } from "../../shared/contracts";
+import type { HololiveMusicLibraryCollabScope, HololiveMusicLibrarySort } from "../../shared/ipc";
 import { api } from "../api";
 import { CompactSelect } from "../components/CompactSelect";
+import { useHololiveActionToast } from "../components/HololiveActionToast";
 import { MusicMarkerIcon, musicMarkerLabel } from "../components/HololiveMusicMarker";
 import { HololiveMusicMarkerMenu } from "../components/HololiveMusicMarkerMenu";
 import {
@@ -57,6 +61,22 @@ import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
 import { useHololivePlayer } from "../player/HololivePlayerContext";
 
 const LIBRARY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+const LIBRARY_SORT_OPTIONS: Array<{ value: HololiveMusicLibrarySort; label: string }> = [
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
+  { value: "views_desc", label: "Most views" },
+  { value: "views_asc", label: "Least views" }
+];
+const LIBRARY_SCOPE_OPTIONS: Array<{ value: HololiveMusicLibraryCollabScope; label: string }> = [
+  { value: "all", label: "All songs" },
+  { value: "solo", label: "Solo" }
+];
+const PLAYER_LIBRARY_TOPIC_SETTING_KEY = "hololive.player.libraryTopicId";
+const PLAYER_LIBRARY_SORT_SETTING_KEY = "hololive.player.librarySort";
+const PLAYER_LIBRARY_PAGE_SIZE_SETTING_KEY = "hololive.player.libraryPageSize";
+const PLAYER_LIBRARY_TALENT_SETTING_KEY = "hololive.player.libraryTalentId";
+const PLAYER_LIBRARY_SCOPE_SETTING_KEY = "hololive.player.libraryCollabScope";
+const PLAYER_SELECTED_PLAYLIST_SETTING_KEY = "hololive.player.selectedPlaylistId";
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
@@ -75,8 +95,6 @@ export function HololivePlayerPage() {
     currentVideoId,
     playableCount,
     playing,
-    status,
-    setStatus,
     loadPlayerData,
     applyPlayerData,
     updateState,
@@ -85,12 +103,20 @@ export function HololivePlayerPage() {
     playPlaylistItem,
     playVideoNow,
     queueVideo,
+    playVisibleVideos,
     playNext,
     togglePlayPause
   } = useHololivePlayer();
+  const { showToast, showUndoToast } = useHololiveActionToast();
   const [library, setLibrary] = useState<HololiveMusicLibraryResponse | null>(null);
+  const [talents, setTalents] = useState<HololiveIdol[]>([]);
   const [query, setQuery] = useState("");
   const [topicId, setTopicId] = useState<HololiveMusicTopic | "all">("all");
+  const [librarySort, setLibrarySort] = useState<HololiveMusicLibrarySort>("newest");
+  const [libraryTalentId, setLibraryTalentId] = useState<string>("all");
+  const [libraryCollabScope, setLibraryCollabScope] = useState<HololiveMusicLibraryCollabScope>("all");
+  const [talentFilterOpen, setTalentFilterOpen] = useState(false);
+  const [talentFilterQuery, setTalentFilterQuery] = useState("");
   const [libraryPage, setLibraryPage] = useState(0);
   const [libraryPageSize, setLibraryPageSize] = useState<number>(50);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
@@ -109,11 +135,118 @@ export function HololivePlayerPage() {
   const [playerPlaylistOpen, setPlayerPlaylistOpen] = useState(false);
   const [playerConfirmExclude, setPlayerConfirmExclude] = useState(false);
   const [pendingPlayerAction, setPendingPlayerAction] = useState<"marker" | "playlist" | null>(null);
+  const [bulkPlaylistOpen, setBulkPlaylistOpen] = useState(false);
+  const [bulkActionPending, setBulkActionPending] = useState<"play" | "queue" | "playlist" | null>(null);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [libraryRefreshVersion, setLibraryRefreshVersion] = useState(0);
   const libraryRequestIdRef = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
+
     void loadPlayerData();
+    void api
+      .invoke("hololive:tier-data", null)
+      .then((next) => {
+        if (!cancelled) {
+          setTalents(next.idols);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+      });
+    void api
+      .invoke("settings:get", null)
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+        const topic = settings[PLAYER_LIBRARY_TOPIC_SETTING_KEY];
+        if (topic === "Original_Song" || topic === "Music_Cover" || topic === "all") {
+          setTopicId(topic);
+        }
+        const sort = settings[PLAYER_LIBRARY_SORT_SETTING_KEY];
+        if (sort === "newest" || sort === "oldest" || sort === "views_desc" || sort === "views_asc") {
+          setLibrarySort(sort);
+        }
+        const pageSize = Number(settings[PLAYER_LIBRARY_PAGE_SIZE_SETTING_KEY]);
+        if (LIBRARY_PAGE_SIZE_OPTIONS.includes(pageSize as (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number])) {
+          setLibraryPageSize(pageSize);
+        }
+        setLibraryTalentId(settings[PLAYER_LIBRARY_TALENT_SETTING_KEY] || "all");
+        const scope = settings[PLAYER_LIBRARY_SCOPE_SETTING_KEY];
+        if (scope === "all" || scope === "solo") {
+          setLibraryCollabScope(scope);
+        }
+        setSelectedPlaylistId(settings[PLAYER_SELECTED_PLAYLIST_SETTING_KEY] || null);
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPreferencesLoaded(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  function savePlayerPreference(key: string, value: string) {
+    void api.invoke("settings:set", { key, value }).catch((error: unknown) => {
+      console.error("Failed to save Player preference", error);
+    });
+  }
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_LIBRARY_TOPIC_SETTING_KEY, topicId);
+  }, [preferencesLoaded, topicId]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_LIBRARY_SORT_SETTING_KEY, librarySort);
+  }, [preferencesLoaded, librarySort]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_LIBRARY_PAGE_SIZE_SETTING_KEY, String(libraryPageSize));
+  }, [preferencesLoaded, libraryPageSize]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_LIBRARY_TALENT_SETTING_KEY, libraryTalentId);
+  }, [preferencesLoaded, libraryTalentId]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_LIBRARY_SCOPE_SETTING_KEY, libraryCollabScope);
+  }, [preferencesLoaded, libraryCollabScope]);
+
+  useEffect(() => {
+    if (!preferencesLoaded || !data) {
+      return;
+    }
+
+    savePlayerPreference(PLAYER_SELECTED_PLAYLIST_SETTING_KEY, selectedPlaylistId ?? "");
+  }, [data, preferencesLoaded, selectedPlaylistId]);
 
   useEffect(() => {
     const requestId = libraryRequestIdRef.current + 1;
@@ -123,6 +256,9 @@ export function HololivePlayerPage() {
         .invoke("hololive:music:library", {
           query,
           topicId: topicId === "all" ? null : topicId,
+          sort: librarySort,
+          talentId: libraryTalentId === "all" ? null : libraryTalentId,
+          collabScope: libraryCollabScope === "all" ? null : libraryCollabScope,
           limit: libraryPageSize,
           offset: libraryPage * libraryPageSize
         })
@@ -133,12 +269,16 @@ export function HololivePlayerPage() {
         })
         .catch((error: unknown) => {
           if (libraryRequestIdRef.current === requestId) {
-            setStatus(error instanceof Error ? error.message : "Could not load music library.");
+            showToast({
+              message: "Could not load music library",
+              detail: error instanceof Error ? error.message : "Try again.",
+              tone: "error"
+            });
           }
         });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [libraryPage, libraryPageSize, query, topicId]);
+  }, [libraryCollabScope, libraryPage, libraryPageSize, libraryRefreshVersion, librarySort, libraryTalentId, query, topicId]);
 
   useEffect(() => {
     if (!library || library.total === 0 || library.offset < library.total) {
@@ -189,10 +329,31 @@ export function HololivePlayerPage() {
 
   const selectedPlaylist = data?.playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? data?.playlists[0] ?? null;
   const userPlaylists = useMemo(() => (data?.playlists ?? []).filter((playlist) => !playlist.systemId), [data?.playlists]);
+  const talentOptions = useMemo(
+    () => [
+      { value: "all", label: "All talents" },
+      ...talents
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName))
+        .map((talent) => ({ value: talent.id, label: talent.displayName }))
+    ],
+    [talents]
+  );
+  const selectedTalentLabel = talentOptions.find((option) => option.value === libraryTalentId)?.label ?? "All talents";
+  const filteredTalentOptions = useMemo(() => {
+    const normalizedQuery = talentFilterQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return talentOptions;
+    }
+    return talentOptions.filter((option) => option.label.toLowerCase().includes(normalizedQuery));
+  }, [talentFilterQuery, talentOptions]);
   const libraryTotal = library?.total ?? 0;
   const libraryPageCount = Math.max(Math.ceil(libraryTotal / libraryPageSize), 1);
   const libraryPageStart = libraryTotal === 0 ? 0 : libraryPage * libraryPageSize + 1;
   const libraryPageEnd = library ? Math.min(library.offset + library.rows.length, library.total) : 0;
+  const visibleLibraryRows = library?.rows ?? [];
+  const visibleLibraryVideoIds = visibleLibraryRows.map((row) => row.youtubeVideoId);
+  const visibleLibraryCount = visibleLibraryRows.length;
 
   useEffect(() => {
     if (!data) {
@@ -208,9 +369,49 @@ export function HololivePlayerPage() {
     });
   }, [data]);
 
+  useEffect(() => {
+    if (libraryTalentId === "all" || talents.length === 0) {
+      return;
+    }
+    if (!talents.some((talent) => talent.id === libraryTalentId)) {
+      setLibraryTalentId("all");
+      setLibraryPage(0);
+    }
+  }, [libraryTalentId, talents]);
+
   function togglePlaylist(playlistId: string) {
     setSelectedPlaylistId(playlistId);
     setExpandedPlaylistId((current) => (current === playlistId ? null : playlistId));
+  }
+
+  function refreshLibrary() {
+    setLibraryRefreshVersion((version) => version + 1);
+  }
+
+  function selectLibraryTalent(value: string) {
+    setLibraryTalentId(value);
+    setLibraryPage(0);
+    setTalentFilterOpen(false);
+    setTalentFilterQuery("");
+  }
+
+  function showPlayerUndoToast(
+    response: { undoToken?: string | null; undoLabel?: string | null },
+    message: string
+  ) {
+    if (!response.undoToken) {
+      return;
+    }
+
+    showUndoToast({
+      message,
+      undoToken: response.undoToken,
+      undoLabel: response.undoLabel,
+      onApplied: async () => {
+        await loadPlayerData();
+        refreshLibrary();
+      }
+    });
   }
 
   async function playLibrarySong(row: HololiveMusicRow) {
@@ -219,6 +420,58 @@ export function HololivePlayerPage() {
 
   async function addToQueue(row: HololiveMusicRow, placement: "now" | "next" | "end") {
     await queueVideo(row.youtubeVideoId, placement);
+  }
+
+  async function playVisibleLibrarySongs() {
+    if (visibleLibraryVideoIds.length === 0) {
+      return;
+    }
+
+    setBulkActionPending("play");
+    try {
+      await playVisibleVideos(visibleLibraryVideoIds);
+    } finally {
+      setBulkActionPending((current) => (current === "play" ? null : current));
+    }
+  }
+
+  async function queueVisibleLibrarySongs() {
+    if (visibleLibraryVideoIds.length === 0) {
+      return;
+    }
+
+    setBulkActionPending("queue");
+    await applyPlayerData(
+      () =>
+        api.invoke("hololive:player:queue:bulk-add", {
+          youtubeVideoIds: visibleLibraryVideoIds,
+          placement: "end"
+        }),
+      `Queued ${visibleLibraryCount} visible songs`
+    );
+    setBulkActionPending((current) => (current === "queue" ? null : current));
+  }
+
+  async function addVisibleSongsToPlaylist(playlistId: string) {
+    if (visibleLibraryVideoIds.length === 0) {
+      return;
+    }
+
+    const playlist = userPlaylists.find((candidate) => candidate.id === playlistId);
+    setBulkActionPending("playlist");
+    try {
+      await applyPlayerData(
+        () =>
+          api.invoke("hololive:player:playlist-items:add", {
+            playlistId,
+            youtubeVideoIds: visibleLibraryVideoIds
+          }),
+        playlist ? `Added visible songs to ${playlist.name}` : "Playlist updated"
+      );
+      setBulkPlaylistOpen(false);
+    } finally {
+      setBulkActionPending((current) => (current === "playlist" ? null : current));
+    }
   }
 
   async function setLibraryMarker(row: HololiveMusicRow, marker: HololiveMusicMarker | null) {
@@ -248,7 +501,11 @@ export function HololivePlayerPage() {
       setOpenMarkerVideoId(null);
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Marker update failed.");
+      showToast({
+        message: "Marker update failed",
+        detail: error instanceof Error ? error.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setPendingMarkerVideoId((current) => (current === row.youtubeVideoId ? null : current));
     }
@@ -264,15 +521,19 @@ export function HololivePlayerPage() {
       });
       window.dispatchEvent(
         new CustomEvent("hololive-music-excluded", {
-          detail: response
+          detail: response.data
         })
       );
       await loadPlayerData();
       setOpenMarkerVideoId(null);
-      setStatus("Song excluded");
+      showPlayerUndoToast(response, "Song excluded");
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Exclude failed.");
+      showToast({
+        message: "Exclude failed",
+        detail: error instanceof Error ? error.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setPendingMarkerVideoId((current) => (current === row.youtubeVideoId ? null : current));
     }
@@ -370,11 +631,15 @@ export function HololivePlayerPage() {
           : current
       );
       await loadPlayerData();
-      setStatus(marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared");
+      showToast({ message: marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared", tone: "success" });
       setPlayerMarkerOpen(false);
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Marker update failed.");
+      showToast({
+        message: "Marker update failed",
+        detail: error instanceof Error ? error.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setPendingPlayerAction((current) => (current === "marker" ? null : current));
     }
@@ -404,7 +669,7 @@ export function HololivePlayerPage() {
         : current
     );
     await loadPlayerData();
-    setStatus(marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared");
+    showToast({ message: marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared", tone: "success" });
   }
 
   async function excludeCurrentSong() {
@@ -421,16 +686,20 @@ export function HololivePlayerPage() {
       });
       window.dispatchEvent(
         new CustomEvent("hololive-music-excluded", {
-          detail: response
+          detail: response.data
         })
       );
       await loadPlayerData();
       setPlayerMarkerOpen(false);
       setPlayerConfirmExclude(false);
-      setStatus("Song excluded");
+      showPlayerUndoToast(response, "Song excluded");
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Exclude failed.");
+      showToast({
+        message: "Exclude failed",
+        detail: error instanceof Error ? error.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setPendingPlayerAction((current) => (current === "marker" ? null : current));
     }
@@ -444,11 +713,11 @@ export function HololivePlayerPage() {
     });
     window.dispatchEvent(
       new CustomEvent("hololive-music-excluded", {
-        detail: response
+        detail: response.data
       })
     );
     await loadPlayerData();
-    setStatus("Song excluded");
+    showPlayerUndoToast(response, "Song excluded");
   }
 
   function startCreatePlaylist() {
@@ -480,7 +749,11 @@ export function HololivePlayerPage() {
       setCreatingPlaylist(false);
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Player action failed.");
+      showToast({
+        message: "Player action failed",
+        detail: error instanceof Error ? error.message : "Try again.",
+        tone: "error"
+      });
     }
   }
 
@@ -503,13 +776,20 @@ export function HololivePlayerPage() {
     cancelRenamePlaylist();
   }
 
-  async function deletePlaylist(playlistId: string, name: string) {
-    if (!window.confirm(`Delete "${name}"?`)) {
-      return;
-    }
+  async function performDeletePlaylist(playlistId: string) {
     await applyPlayerData(() => api.invoke("hololive:player:playlist:delete", { playlistId }), "Playlist deleted");
     setSelectedPlaylistId(null);
     setExpandedPlaylistId((current) => (current === playlistId ? null : current));
+  }
+
+  function deletePlaylist(playlistId: string, name: string) {
+    showToast({
+      message: `Delete "${name}"?`,
+      detail: "This removes the playlist, not the songs.",
+      tone: "error",
+      actionLabel: "Delete",
+      onAction: () => performDeletePlaylist(playlistId)
+    });
   }
 
   async function saveQueue(name: string) {
@@ -533,6 +813,30 @@ export function HololivePlayerPage() {
         itemIds
       })
     );
+  }
+
+  async function removeQueueItem(item: HololiveMusicResolvedItem) {
+    let undoResponse: { undoToken?: string | null; undoLabel?: string | null } | null = null;
+    await applyPlayerData(async () => {
+      const response = await api.invoke("hololive:player:queue:remove", { itemId: item.id });
+      undoResponse = response;
+      return response.data;
+    }, "Removed from queue");
+    if (undoResponse) {
+      showPlayerUndoToast(undoResponse, "Removed from queue");
+    }
+  }
+
+  async function removePlaylistItem(item: HololiveMusicResolvedItem) {
+    let undoResponse: { undoToken?: string | null; undoLabel?: string | null } | null = null;
+    await applyPlayerData(async () => {
+      const response = await api.invoke("hololive:player:playlist-item:remove", { itemId: item.id });
+      undoResponse = response;
+      return response.data;
+    }, "Removed from playlist");
+    if (undoResponse) {
+      showPlayerUndoToast(undoResponse, "Removed from playlist");
+    }
   }
 
   const currentMarker = currentItem?.music?.marker ?? null;
@@ -716,7 +1020,6 @@ export function HololivePlayerPage() {
                 </button>
               </form>
             ) : null}
-            {status ? <div className="hololive-player-status">{status}</div> : null}
           </section>
 
           <section className="hololive-player-panel hololive-queue-panel" aria-label="Active queue">
@@ -742,9 +1045,7 @@ export function HololivePlayerPage() {
               emptyText="No queued songs."
               onSelect={(item) => void loadQueueItem(item.id)}
               onPlayNow={(item) => void playQueueItem(item.id)}
-              onRemove={(item) =>
-                void applyPlayerData(() => api.invoke("hololive:player:queue:remove", { itemId: item.id }), "Removed from queue")
-              }
+              onRemove={(item) => void removeQueueItem(item)}
               onReorder={(itemIds) => void reorderQueueItems(itemIds)}
               playlists={userPlaylists}
               onPlaylistAdd={(item, playlistId) => void addResolvedItemToPlaylist(item, playlistId)}
@@ -899,12 +1200,7 @@ export function HololivePlayerPage() {
                           activeVideoId={currentVideoId}
                           onSelect={(item) => void playPlaylistItem(playlist.id, item.id, false)}
                           onPlayNow={(item) => void playPlaylistItem(playlist.id, item.id)}
-                          onRemove={(item) =>
-                            void applyPlayerData(
-                              () => api.invoke("hololive:player:playlist-item:remove", { itemId: item.id }),
-                              "Removed from playlist"
-                            )
-                          }
+                          onRemove={(item) => void removePlaylistItem(item)}
                           onReorder={(itemIds) => void reorderPlaylistItems(playlist.id, itemIds)}
                           canRemove={!isSystem}
                           playlists={userPlaylists}
@@ -923,7 +1219,7 @@ export function HololivePlayerPage() {
 
           <section className="hololive-player-panel hololive-library-panel" aria-label="Music library">
             <div className="hololive-library-tools">
-              <label>
+              <label className="hololive-library-search">
                 <Search size={14} />
                 <input
                   value={query}
@@ -948,9 +1244,138 @@ export function HololivePlayerPage() {
                   setLibraryPage(0);
                 }}
               />
+              <CompactSelect<HololiveMusicLibrarySort>
+                className="hololive-select-wrap hololive-sort-select"
+                ariaLabel="Sort songs"
+                value={librarySort}
+                options={LIBRARY_SORT_OPTIONS}
+                onChange={(value) => {
+                  setLibrarySort(value);
+                  setLibraryPage(0);
+                }}
+              />
+              <div
+                className={["hololive-talent-filter", talentFilterOpen ? "open" : ""].filter(Boolean).join(" ")}
+                onBlur={(event) => {
+                  const nextFocus = event.relatedTarget;
+                  if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
+                    setTalentFilterOpen(false);
+                    setTalentFilterQuery("");
+                  }
+                }}
+              >
+                <input
+                  role="combobox"
+                  aria-label="Talent"
+                  aria-expanded={talentFilterOpen}
+                  aria-controls="hololive-player-talent-filter-listbox"
+                  aria-autocomplete="list"
+                  value={talentFilterOpen ? talentFilterQuery : selectedTalentLabel}
+                  placeholder={selectedTalentLabel}
+                  onFocus={() => {
+                    setTalentFilterOpen(true);
+                    setTalentFilterQuery("");
+                  }}
+                  onChange={(event) => {
+                    setTalentFilterQuery(event.target.value);
+                    setTalentFilterOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setTalentFilterOpen(false);
+                      setTalentFilterQuery("");
+                    } else if (event.key === "Enter") {
+                      const nextTalent = filteredTalentOptions[0];
+                      if (nextTalent) {
+                        event.preventDefault();
+                        selectLibraryTalent(nextTalent.value);
+                      }
+                    }
+                  }}
+                  className="hololive-talent-filter-input"
+                />
+                <ChevronDown className="hololive-talent-filter-chevron" size={13} aria-hidden="true" />
+                {talentFilterOpen ? (
+                  <div id="hololive-player-talent-filter-listbox" className="hololive-talent-filter-menu" role="listbox" aria-label="Talent">
+                    {filteredTalentOptions.map((option) => (
+                      <button
+                        type="button"
+                        key={option.value}
+                        role="option"
+                        aria-selected={option.value === libraryTalentId}
+                        className={option.value === libraryTalentId ? "selected" : ""}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectLibraryTalent(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                    {filteredTalentOptions.length === 0 ? <span className="hololive-talent-filter-empty">No talents found</span> : null}
+                  </div>
+                ) : null}
+              </div>
+              <CompactSelect<HololiveMusicLibraryCollabScope>
+                className="hololive-select-wrap hololive-scope-select"
+                ariaLabel="Collaboration scope"
+                value={libraryCollabScope}
+                options={LIBRARY_SCOPE_OPTIONS}
+                onChange={(value) => {
+                  setLibraryCollabScope(value);
+                  setLibraryPage(0);
+                }}
+              />
+              <div
+                className="hololive-library-bulk-actions"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setBulkPlaylistOpen(false);
+                  }
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={visibleLibraryCount === 0 || bulkActionPending !== null}
+                  onClick={() => void playVisibleLibrarySongs()}
+                  title="Play visible songs from the top"
+                >
+                  <Play size={13} />
+                  <span>{bulkActionPending === "play" ? "Playing" : "Play visible"}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={visibleLibraryCount === 0 || bulkActionPending !== null}
+                  onClick={() => void queueVisibleLibrarySongs()}
+                  title="Add visible songs to queue"
+                >
+                  <ListPlus size={13} />
+                  <span>{bulkActionPending === "queue" ? "Queueing" : "Queue visible"}</span>
+                </button>
+                <span className="hololive-library-bulk-menu">
+                  <button
+                    type="button"
+                    disabled={visibleLibraryCount === 0 || userPlaylists.length === 0 || bulkActionPending !== null}
+                    aria-expanded={bulkPlaylistOpen}
+                    onClick={() => setBulkPlaylistOpen((current) => !current)}
+                    title={userPlaylists.length === 0 ? "Create a playlist first" : "Add visible songs to playlist"}
+                  >
+                    <ListMusic size={13} />
+                    <span>{bulkActionPending === "playlist" ? "Adding" : "Add visible"}</span>
+                  </button>
+                  {bulkPlaylistOpen ? (
+                    <HololivePlaylistMenu
+                      ariaLabel="Choose playlist for visible songs"
+                      className="hololive-library-playlist-popover hololive-library-bulk-popover"
+                      disabled={bulkActionPending !== null}
+                      playlists={userPlaylists}
+                      onSelect={(playlistId) => void addVisibleSongsToPlaylist(playlistId)}
+                    />
+                  ) : null}
+                </span>
+              </div>
             </div>
             <div className="hololive-library-list">
-              {(library?.rows ?? []).map((row) => {
+              {visibleLibraryRows.map((row) => {
                 const isActive = row.youtubeVideoId === currentVideoId;
 
                 return (

@@ -65,6 +65,7 @@ import {
 } from "../components/HololiveMusicText";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
 import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
+import { useHololiveActionToast } from "../components/HololiveActionToast";
 import { useHololivePlayer } from "../player/HololivePlayerContext";
 
 const POOL_CONTAINER_ID = "pool";
@@ -477,13 +478,13 @@ export function HololivePage() {
   } | null>(null);
   const [profileCache, setProfileCache] = useState<Record<string, HololiveIdolProfile>>({});
   const [profileLoadingId, setProfileLoadingId] = useState<string | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
   const {
     currentVideoId: activeMusicVideoId,
     data: playerData,
     playVideoNow,
     applyPlayerData
   } = useHololivePlayer();
+  const { showToast, showUndoToast } = useHololiveActionToast();
   const userPlaylists = useMemo(() => (playerData?.playlists ?? []).filter((playlist) => !playlist.systemId), [playerData?.playlists]);
   const autoCacheAttempted = useRef(false);
   const latestDataRef = useRef<HololiveTierListData | null>(null);
@@ -1067,6 +1068,29 @@ export function HololivePage() {
     }
   }
 
+  async function applyUndoableDataMutation(
+    work: () => Promise<{ data: HololiveTierListData; undoToken?: string | null; undoLabel?: string | null }>,
+    message: string
+  ) {
+    setBusy(true);
+    try {
+      const response = await work();
+      storeTierData(response.data);
+      if (response.undoToken) {
+        showUndoToast({
+          message,
+          undoToken: response.undoToken,
+          undoLabel: response.undoLabel,
+          onApplied: async () => {
+            await loadTierData(activeBoardId);
+          }
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function syncDataMutation(work: () => Promise<HololiveTierListData>) {
     const next = await work();
     storeTierData(next);
@@ -1107,7 +1131,6 @@ export function HololivePage() {
     }
 
     setActiveProfileId(idolId);
-    setProfileError(null);
 
     if (profileCache[idolId]) {
       return;
@@ -1122,7 +1145,11 @@ export function HololivePage() {
       }));
     } catch (error) {
       console.error(error);
-      setProfileError("Could not load this profile.");
+      showToast({
+        message: "Could not load this profile",
+        detail: error instanceof Error ? error.message : "Try opening it again.",
+        tone: "error"
+      });
     } finally {
       setProfileLoadingId((current) => (current === idolId ? null : current));
     }
@@ -1181,12 +1208,23 @@ export function HololivePage() {
       title: item.title,
       sourceUrl: item.url ?? null
     });
-    removeCachedProfileSong(response.youtubeVideoId);
+    removeCachedProfileSong(response.data.youtubeVideoId);
     window.dispatchEvent(
       new CustomEvent("hololive-music-excluded", {
-        detail: response
+        detail: response.data
       })
     );
+    if (response.undoToken) {
+      showUndoToast({
+        message: "Song excluded",
+        undoToken: response.undoToken,
+        undoLabel: response.undoLabel,
+        onApplied: async () => {
+          setProfileCache({});
+          await loadTierData(activeBoardId);
+        }
+      });
+    }
   }
 
   async function playProfileSong(item: HololiveProfileSongItem, mediaGroupId: HololiveProfileMediaGroupId) {
@@ -1382,17 +1420,26 @@ export function HololivePage() {
     await applyDataMutation(() => api.invoke("hololive:board:update", { boardId, name: nextName }));
   }
 
+  async function performDeleteBoard(boardId: string) {
+    await applyUndoableDataMutation(
+      () => api.invoke("hololive:board:delete", { boardId }),
+      "Board deleted"
+    );
+  }
+
   async function deleteBoard() {
     if (!data || data.boards.length <= 1) {
       return;
     }
 
-    const confirmed = window.confirm(`Delete "${data.activeBoard.name}"?`);
-    if (!confirmed) {
-      return;
-    }
-
-    await applyDataMutation(() => api.invoke("hololive:board:delete", { boardId: data.activeBoard.id }));
+    const board = data.activeBoard;
+    showToast({
+      message: `Delete "${board.name}"?`,
+      detail: "This removes the board. You can undo immediately after deletion.",
+      tone: "error",
+      actionLabel: "Delete",
+      onAction: () => performDeleteBoard(board.id)
+    });
   }
 
   async function clearBoard() {
@@ -1400,7 +1447,10 @@ export function HololivePage() {
       return;
     }
 
-    await applyDataMutation(() => api.invoke("hololive:board:clear", { boardId: data.activeBoard.id }));
+    await applyUndoableDataMutation(
+      () => api.invoke("hololive:board:clear", { boardId: data.activeBoard.id }),
+      "Board cleared"
+    );
   }
 
   async function createTierAdjacent(tier: HololiveTier, direction: "above" | "below") {
@@ -1430,22 +1480,31 @@ export function HololivePage() {
     );
   }
 
-  async function deleteTier(tier: HololiveTier) {
+  async function performDeleteTier(tierId: string) {
     if (!data) {
-      return;
-    }
-
-    const confirmed = window.confirm(`Delete tier "${tier.label}"? Its idols will move to Unranked.`);
-    if (!confirmed) {
       return;
     }
 
     await applyDataMutation(() =>
       api.invoke("hololive:tier:delete", {
         boardId: data.activeBoard.id,
-        tierId: tier.id
+        tierId
       })
     );
+  }
+
+  async function deleteTier(tier: HololiveTier) {
+    if (!data) {
+      return;
+    }
+
+    showToast({
+      message: `Delete tier "${tier.label}"?`,
+      detail: "Its idols will move to Unranked.",
+      tone: "error",
+      actionLabel: "Delete",
+      onAction: () => performDeleteTier(tier.id)
+    });
   }
 
   async function sortUnranked() {
@@ -1600,7 +1659,6 @@ export function HololivePage() {
           profile={activeProfile}
           fallbackIdol={activeProfileFallbackIdol}
           loading={profileLoading}
-          error={profileError}
           activeMusicVideoId={activeMusicVideoId}
           focusedGroupId={profileFocus?.profileId === activeProfileId ? profileFocus.groupId : null}
           focusedSongId={profileFocus?.profileId === activeProfileId ? profileFocus.songId : null}
@@ -2212,7 +2270,6 @@ interface HololiveProfileShelfProps {
   profile: HololiveIdolProfile | null;
   fallbackIdol: HololiveIdol | null;
   loading: boolean;
-  error: string | null;
   activeMusicVideoId?: string | null;
   focusedGroupId?: HololiveProfileMediaGroupId | null;
   focusedSongId?: string | null;
@@ -2229,7 +2286,6 @@ function HololiveProfileShelf({
   profile,
   fallbackIdol,
   loading,
-  error,
   activeMusicVideoId,
   focusedGroupId,
   focusedSongId,
@@ -2391,8 +2447,6 @@ function HololiveProfileShelf({
             </div>
 
             {loading ? <div className="hololive-profile-message">Loading profile</div> : null}
-            {error ? <div className="hololive-profile-message error">{error}</div> : null}
-
             {idol.profileQuote ? <p className="hololive-profile-quote">{idol.profileQuote}</p> : null}
 
             {displayLinks.length > 0 ? (

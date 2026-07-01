@@ -14,6 +14,7 @@ import {
 import { isExcludedHolodexChannelId } from "./types";
 
 const MIN_FULL_DURATION_SECONDS = 90;
+export const HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS = 20;
 const OFFICIAL_TITLE_MARKERS = ["official", "mv", "original", "\u30aa\u30ea\u30b8\u30ca\u30eb", "\u30aa\u30ea\u30b8\u30ca\u30eb\u30bd\u30f3\u30b0"];
 const VERSION_KEEP_MARKERS = ["acoustic", "piano", "re paint", "repaint", "live", "tour"];
 const DUPLICATE_CONTEXT_DROP_MARKERS = [
@@ -412,7 +413,7 @@ function hasSimilarDuplicateDuration(
     return true;
   }
 
-  return Math.abs(leftDuration - rightDuration) <= 15;
+  return Math.abs(leftDuration - rightDuration) <= HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS;
 }
 
 function buildCrossOwnerTopicDuplicateGroups(

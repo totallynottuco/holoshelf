@@ -242,6 +242,60 @@ describe("Holodex cleanup rules", () => {
     ]);
   });
 
+  it("removes provider topic mirrors of official talent uploads with slightly different durations", () => {
+    const rows = [
+      row({
+        youtubeVideoId: "kPqmld3_lSs",
+        title: "BEEP BEEP / Hoshimatic Project (official)",
+        topicId: "Original_Song",
+        channelId: "suisei-main",
+        channelName: "Suisei Channel",
+        publishedAt: "2026-04-17T12:00:06.000Z"
+      }),
+      row({
+        youtubeVideoId: "Hew0tgd9Ipg",
+        title: "BEEP BEEP",
+        topicId: "Original_Song",
+        channelId: "hololive-group",
+        channelName: "hololive ホロライブ - VTuber Group",
+        publishedAt: "2026-04-17T15:01:10.000Z"
+      })
+    ];
+    const records: Record<string, HolodexVideoRecord> = {
+      kPqmld3_lSs: { channelId: "suisei-main", duration: 209 } as HolodexVideoRecord,
+      Hew0tgd9Ipg: { channelId: "hololive-group", duration: 193 } as HolodexVideoRecord
+    };
+    const details = {
+      kPqmld3_lSs: normalizeVideoDetail("kPqmld3_lSs", {
+        youtubeVideoId: "kPqmld3_lSs",
+        channelId: "suisei-main",
+        duration: 209,
+        songNames: ["BEEP BEEP"],
+        mentions: [{ channelId: "suisei-main", name: "Hoshimachi Suisei", englishName: "", type: "vtuber", photoUrl: "", org: "Hololive" }]
+      }),
+      Hew0tgd9Ipg: normalizeVideoDetail("Hew0tgd9Ipg", {
+        youtubeVideoId: "Hew0tgd9Ipg",
+        channelId: "hololive-group",
+        originalChannelId: "provider-topic-owner",
+        providedToYoutube: true,
+        duration: 193,
+        songNames: ["BEEP BEEP"],
+        mentions: [{ channelId: "suisei-main", name: "Hoshimachi Suisei", englishName: "", type: "vtuber", photoUrl: "", org: "Hololive" }]
+      })
+    };
+
+    const result = cleanupCatalogRows(rows, records, details);
+
+    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["kPqmld3_lSs"]);
+    expect(result.duplicateRemovals).toMatchObject([
+      {
+        removedYoutubeVideoId: "Hew0tgd9Ipg",
+        keptYoutubeVideoId: "kPqmld3_lSs",
+        reason: "topic_duplicate_of_non_topic"
+      }
+    ]);
+  });
+
   it("removes topic duplicates when the official upload only has an artist-prefixed title", () => {
     const rows = [
       row({

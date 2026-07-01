@@ -301,10 +301,13 @@ export interface HololiveMusicPlayerData {
 export type HololiveBracketSize = "RO16" | "RO32" | "RO64" | "RO128" | "RO256";
 export type HololiveBracketStatus = "active" | "complete";
 export type HololiveBracketGenerationStyle = "top_songs" | "random_songs";
+export type HololiveBracketRatingBucket = "unrated" | "favorite" | "like" | "neutral" | "dislike";
 
 export interface HololiveBracketGenerationFilters {
   excludeDisliked?: boolean;
   excludeRated?: boolean;
+  ratingBuckets?: HololiveBracketRatingBucket[];
+  includedTalentIds?: string[];
   excludeTopViewedPerTalent?: boolean;
   excludePreviousChampions?: boolean;
   excludePreviousFinalists?: boolean;
@@ -421,6 +424,9 @@ export interface HololiveBracketSongStats {
   top8Count: number;
   top16Count: number;
   firstRoundEliminations: number;
+  upsetWins: number;
+  revengeWins: number;
+  giantKillerScore: number;
   lastArchivedAt: string;
 }
 
@@ -440,6 +446,18 @@ export interface HololiveBracketTalentStats {
   lastArchivedAt: string;
 }
 
+export interface HololiveBracketRivalryStats {
+  key: string;
+  leftIdolId: string;
+  leftIdolName: string;
+  rightIdolId: string;
+  rightIdolName: string;
+  matches: number;
+  leftWins: number;
+  rightWins: number;
+  lastArchivedAt: string;
+}
+
 export interface HololiveBracketStatsOverview {
   totals: {
     completedBrackets: number;
@@ -450,7 +468,15 @@ export interface HololiveBracketStatsOverview {
   topSongsByWins: HololiveBracketSongStats[];
   topSongsByWinRate: HololiveBracketSongStats[];
   topSongsByAppearances: HololiveBracketSongStats[];
+  topSongsByFinalsWithoutTitle: HololiveBracketSongStats[];
+  topSongsByFirstRoundEliminations: HololiveBracketSongStats[];
+  topSongsByUpsetWins: HololiveBracketSongStats[];
+  topSongsByRevengeWins: HololiveBracketSongStats[];
+  topSongsByGiantKillerScore: HololiveBracketSongStats[];
+  topSongsByGiantKillerAverage: HololiveBracketSongStats[];
   topTalents: HololiveBracketTalentStats[];
+  topTalentsByTop4: HololiveBracketTalentStats[];
+  topRivalries: HololiveBracketRivalryStats[];
   championHistory: HololiveBracketArchiveSummary[];
 }
 
@@ -487,6 +513,7 @@ export interface HololiveMusicVideoStatsRefreshResult {
   requestedVideos: number;
   updatedVideos: number;
   missingVideos: number;
+  unavailableVideos: number;
   failedBatches: number;
   batches: number;
   fetchedAt: string;

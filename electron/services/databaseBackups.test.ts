@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
-import { createRollingDatabaseBackup } from "./databaseBackups";
+import { createRollingDatabaseBackup, createTimestampedDatabaseBackup, validateSqliteDatabaseFile } from "./databaseBackups";
 
 describe("database backups", () => {
   async function createSqliteFile(filePath: string, label: string) {
@@ -23,13 +23,13 @@ describe("database backups", () => {
     const backupDirectory = path.join(root, "backups");
     const SQL = await createSqliteFile(databasePath, "one");
 
-    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "first");
+    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "first", { force: true });
     await createSqliteFile(databasePath, "two");
-    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "second");
+    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "second", { force: true });
     await createSqliteFile(databasePath, "three");
-    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "third");
+    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "third", { force: true });
     await createSqliteFile(databasePath, "four");
-    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "fourth");
+    createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "fourth", { force: true });
 
     const backupFiles = fs.readdirSync(backupDirectory).sort();
     expect(backupFiles).toEqual(["holoshelf.autosave.1.sqlite", "holoshelf.autosave.2.sqlite", "holoshelf.autosave.3.sqlite"]);
@@ -44,6 +44,20 @@ describe("database backups", () => {
     expect(readLabel(1)).toBe("four");
     expect(readLabel(2)).toBe("three");
     expect(readLabel(3)).toBe("two");
+  });
+
+  it("skips startup backup work when the newest backup already covers the database", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-backups-current-"));
+    const databasePath = path.join(root, "holoshelf.sqlite");
+    const backupDirectory = path.join(root, "backups");
+    const SQL = await createSqliteFile(databasePath, "one");
+
+    const first = createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "startup");
+    expect(first).toMatchObject({ created: true });
+
+    const skipped = createRollingDatabaseBackup(databasePath, backupDirectory, SQL, "startup");
+    expect(skipped).toMatchObject({ created: false, skippedReason: "backup-current" });
+    expect(fs.readdirSync(backupDirectory).sort()).toEqual(["holoshelf.autosave.1.sqlite"]);
   });
 
   it("skips missing, empty, and corrupt database files", async () => {
@@ -63,5 +77,19 @@ describe("database backups", () => {
     const corruptResult = createRollingDatabaseBackup(corruptPath, backupDirectory, SQL, "corrupt");
     expect(corruptResult).toMatchObject({ created: false, skippedReason: "integrity-check-failed" });
     expect(fs.existsSync(backupDirectory)).toBe(false);
+  });
+
+  it("creates timestamped manual backups and validates SQLite files", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-backups-manual-"));
+    const databasePath = path.join(root, "holoshelf.sqlite");
+    const backupDirectory = path.join(root, "backups");
+    const SQL = await createSqliteFile(databasePath, "manual");
+
+    const result = createTimestampedDatabaseBackup(databasePath, backupDirectory, SQL, "manual");
+
+    expect(result).toMatchObject({ created: true, reason: "manual" });
+    expect(result.filePath).toContain("holoshelf.manual.");
+    expect(result.filePath ? fs.existsSync(result.filePath) : false).toBe(true);
+    expect(result.filePath ? validateSqliteDatabaseFile(result.filePath, SQL) : false).toBe(true);
   });
 });

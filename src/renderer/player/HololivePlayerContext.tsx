@@ -36,6 +36,7 @@ import { MusicMarkerIcon, musicMarkerLabel } from "../components/HololiveMusicMa
 import { HololiveMusicMarkerMenu } from "../components/HololiveMusicMarkerMenu";
 import { hololiveResolvedItemTitle } from "../components/HololiveMusicText";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
+import { useHololiveActionToast } from "../components/HololiveActionToast";
 
 declare global {
   interface Window {
@@ -125,8 +126,6 @@ interface HololivePlayerContextValue {
   playableCount: number;
   profileContext: HololiveProfilePlaybackContext | null;
   playing: boolean;
-  status: string | null;
-  setStatus: (status: string | null) => void;
   loadPlayerData: () => Promise<HololiveMusicPlayerData>;
   applyPlayerData: (
     work: () => Promise<HololiveMusicPlayerData>,
@@ -138,6 +137,7 @@ interface HololivePlayerContextValue {
   playPlaylistItem: (playlistId: string, itemId?: string | null, shouldPlay?: boolean) => Promise<void>;
   playVideoNow: (youtubeVideoId: string, source?: HololiveProfilePlaybackSource) => Promise<HololiveMusicPlayerData | null>;
   queueVideo: (youtubeVideoId: string, placement: "now" | "next" | "end") => Promise<HololiveMusicPlayerData | null>;
+  playVisibleVideos: (youtubeVideoIds: string[]) => Promise<HololiveMusicPlayerData | null>;
   playNext: (direction: 1 | -1) => Promise<void>;
   togglePlayPause: () => void;
 }
@@ -280,6 +280,10 @@ function findPlayableItemIndex(
 
 function itemTitle(item: HololiveMusicResolvedItem | null | undefined): string {
   return hololiveResolvedItemTitle(item, "Nothing selected");
+}
+
+function isPermanentYouTubePlaybackError(errorCode?: number): boolean {
+  return errorCode === 100 || errorCode === 101 || errorCode === 150;
 }
 
 function resolvePlaybackSource(
@@ -1143,6 +1147,7 @@ function HololivePersistentPlayerSurface({
 
 export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const { showToast, showUndoToast } = useHololiveActionToast();
   const [data, setData] = useState<HololiveMusicPlayerData | null>(null);
   const [playSignal, setPlaySignal] = useState(0);
   const [playTargetVideoId, setPlayTargetVideoId] = useState<string | null>(null);
@@ -1150,7 +1155,6 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   const [playing, setPlaying] = useState(false);
   const [miniDismissed, setMiniDismissed] = useState(true);
   const [miniBounds, setMiniBounds] = useState<MiniPlayerBounds>(() => defaultMiniPlayerBounds());
-  const [status, setStatus] = useState<string | null>(null);
   const [profileContext, setProfileContext] = useState<HololiveProfilePlaybackContext | null>(null);
   const profileContextPreferenceRef = useRef<{
     youtubeVideoId: string;
@@ -1159,6 +1163,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const profileContextSeqRef = useRef(0);
   const handledEndedPlaybackTokenRef = useRef<string | null>(null);
+  const unavailableVideoHandlingRef = useRef<Set<string>>(new Set());
 
   const queue = data?.queue ?? [];
   const state = data?.state ?? null;
@@ -1186,6 +1191,10 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   const currentMarker = currentItem?.music?.marker ?? null;
   const canPlayProfileNext = Boolean(profileContext && profileContext.currentIndex >= 0 && profileContext.songIds.length > 1);
 
+  function notifyPlayer(message: string, tone: "info" | "success" | "error" = "info", detail?: string | null) {
+    showToast({ message, detail, tone });
+  }
+
   async function loadPlayerData() {
     const next = await api.invoke("hololive:player:data", null);
     setData(next);
@@ -1197,12 +1206,12 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       const next = await work();
       setData(next);
       if (message) {
-        setStatus(message);
+        notifyPlayer(message, "success");
       }
       return next;
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Player action failed.");
+      notifyPlayer("Player action failed", "error", error instanceof Error ? error.message : "Try again.");
       return null;
     }
   }
@@ -1325,7 +1334,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
     });
     if (next) {
       void resolveProfileContext(next.state.currentYoutubeVideoId);
-      setStatus("Loaded in player");
+      notifyPlayer("Loaded in player", "success");
     }
   }
 
@@ -1377,6 +1386,19 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       placement === "now" ? "Playing now" : placement === "next" ? "Queued next" : "Added to queue"
     );
     if (next && placement === "now") {
+      setMiniDismissedState(false);
+      void resolveProfileContext(next.state.currentYoutubeVideoId);
+      requestPlayback(next.state.currentYoutubeVideoId);
+    }
+    return next;
+  }
+
+  async function playVisibleVideos(youtubeVideoIds: string[]) {
+    const next = await applyPlayerData(
+      () => api.invoke("hololive:player:visible:play", { youtubeVideoIds }),
+      "Playing visible songs"
+    );
+    if (next) {
       setMiniDismissedState(false);
       void resolveProfileContext(next.state.currentYoutubeVideoId);
       requestPlayback(next.state.currentYoutubeVideoId);
@@ -1446,7 +1468,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       })
     );
     await loadPlayerData();
-    setStatus(marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared");
+    notifyPlayer(marker ? `${musicMarkerLabel(marker)} saved` : "Marker cleared", "success");
   }
 
   async function excludeCurrentVideo() {
@@ -1464,16 +1486,108 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       });
       window.dispatchEvent(
         new CustomEvent("hololive-music-excluded", {
-          detail: response
+          detail: response.data
         })
       );
       setProfileContext(null);
       profileContextPreferenceRef.current = null;
       await loadPlayerData();
-      setStatus("Song excluded");
+      notifyPlayer("Song excluded", "success");
+      if (response.undoToken) {
+        showUndoToast({
+          message: "Song excluded",
+          undoToken: response.undoToken,
+          undoLabel: response.undoLabel,
+          onApplied: async () => {
+            await loadPlayerData();
+          }
+        });
+      }
     } catch (error) {
       console.error(error);
-      setStatus(error instanceof Error ? error.message : "Exclude failed.");
+      notifyPlayer("Exclude failed", "error", error instanceof Error ? error.message : "Try again.");
+    }
+  }
+
+  async function handlePlayerError(errorCode: number | undefined, mode: AutoplayAdvanceMode) {
+    const errorDetail = errorCode ? `Error ${errorCode}.` : null;
+    if (!currentVideoId || !isPermanentYouTubePlaybackError(errorCode)) {
+      notifyPlayer("YouTube could not play this video", "error", errorDetail);
+      if (state?.autoplayEnabled) {
+        if (mode === "profile-context" && profileContext && profileContext.songIds.length > 1) {
+          void playProfileContextNext();
+        } else {
+          void playNext(1);
+        }
+      }
+      return;
+    }
+
+    const failedVideoId = currentVideoId;
+    if (unavailableVideoHandlingRef.current.has(failedVideoId)) {
+      return;
+    }
+    unavailableVideoHandlingRef.current.add(failedVideoId);
+
+    try {
+      setPauseSignal((value) => value + 1);
+      setPlaying(false);
+      const response = await api.invoke("hololive:music:mark-unavailable", {
+        youtubeVideoId: failedVideoId,
+        title: currentItem ? itemTitle(currentItem) : null,
+        sourceUrl: currentItem?.music?.youtubeUrl ?? currentItem?.sourceUrlSnapshot ?? null,
+        reason: errorDetail
+      });
+      window.dispatchEvent(
+        new CustomEvent("hololive-music-excluded", {
+          detail: {
+            youtubeVideoId: response.removedYoutubeVideoId,
+            titleSnapshot: currentItem ? itemTitle(currentItem) : null,
+            sourceUrlSnapshot: currentItem?.music?.youtubeUrl ?? currentItem?.sourceUrlSnapshot ?? null,
+            createdAt: new Date().toISOString()
+          }
+        })
+      );
+      setData(response.data);
+      setProfileContext(null);
+      profileContextPreferenceRef.current = null;
+
+      if (response.replacementYoutubeVideoId) {
+        notifyPlayer(
+          "Video unavailable; switched versions",
+          "info",
+          response.replacementTitle ? `Now playing ${response.replacementTitle}.` : null
+        );
+        setMiniDismissedState(false);
+        void resolveProfileContext(response.replacementYoutubeVideoId);
+        requestPlayback(response.replacementYoutubeVideoId);
+        return;
+      }
+
+      notifyPlayer("Video unavailable; hidden from library", "error", errorDetail);
+      if (state?.autoplayEnabled) {
+        if (mode === "profile-context" && profileContext && profileContext.songIds.length > 1) {
+          void playProfileContextNext();
+        } else {
+          void playNext(1);
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      notifyPlayer(
+        "YouTube could not play this video",
+        "error",
+        error instanceof Error ? error.message : errorDetail
+      );
+      if (state?.autoplayEnabled) {
+        if (mode === "profile-context" && profileContext && profileContext.songIds.length > 1) {
+          void playProfileContextNext();
+        } else {
+          void playNext(1);
+        }
+      }
+    } finally {
+      unavailableVideoHandlingRef.current.delete(failedVideoId);
     }
   }
 
@@ -1501,7 +1615,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
 
     if (!state?.autoplayEnabled) {
       setPlaying(false);
-      setStatus("Autoplay is off");
+      notifyPlayer("Autoplay is off", "info");
       return;
     }
 
@@ -1545,7 +1659,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   async function toggleMiniAutoplay() {
     const nextEnabled = !state?.autoplayEnabled;
     await updateState({ autoplayEnabled: nextEnabled });
-    setStatus(`Autoplay: ${nextEnabled ? "on" : "off"}`);
+    notifyPlayer(`Autoplay: ${nextEnabled ? "on" : "off"}`, "info");
   }
 
   function togglePlayPause() {
@@ -1601,7 +1715,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       })
       .catch((error: unknown) => {
         console.error(error);
-        setStatus(error instanceof Error ? error.message : "Could not clear the mini player.");
+        notifyPlayer("Could not clear the mini player", "error", error instanceof Error ? error.message : "Try again.");
       });
   }
 
@@ -1617,7 +1731,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error(error);
         if (!cancelled) {
-          setStatus(error instanceof Error ? error.message : "Could not load Hololive player.");
+          notifyPlayer("Could not load Hololive player", "error", error instanceof Error ? error.message : "Try again.");
         }
       }
     }
@@ -1707,8 +1821,6 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       playableCount,
       profileContext,
       playing,
-      status,
-      setStatus,
       loadPlayerData,
       applyPlayerData,
       updateState,
@@ -1717,6 +1829,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       playPlaylistItem,
       playVideoNow,
       queueVideo,
+      playVisibleVideos,
       playNext,
       togglePlayPause
     }),
@@ -1731,8 +1844,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
       profileContext,
       playing,
       queue,
-      state,
-      status
+      state
     ]
   );
 
@@ -1751,16 +1863,7 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
         pauseSignal={pauseSignal}
         onPlayingChange={setPlaying}
         onEnded={(mode) => void handleEnded(mode)}
-        onError={(errorCode, mode) => {
-          setStatus(errorCode ? `YouTube could not play this video. Error ${errorCode}.` : "YouTube could not play this video.");
-          if (state?.autoplayEnabled) {
-            if (mode === "profile-context" && profileContext && profileContext.songIds.length > 1) {
-              void playProfileContextNext();
-            } else {
-              void playNext(1);
-            }
-          }
-        }}
+        onError={(errorCode, mode) => void handlePlayerError(errorCode, mode)}
         onTogglePlayPause={togglePlayPause}
         onNext={() => void playProfileContextNext()}
         canNext={canPlayProfileNext}

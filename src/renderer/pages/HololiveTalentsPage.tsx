@@ -8,6 +8,7 @@ import type {
   HololiveTierListData
 } from "../../shared/contracts";
 import { api } from "../api";
+import { useHololiveActionToast } from "../components/HololiveActionToast";
 import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
 
 const emptyInput: HololiveCustomTalentInput = {
@@ -47,6 +48,7 @@ function channelForIdol(idol: HololiveIdol, channels: HolodexChannel[]): Holodex
 }
 
 export function HololiveTalentsPage() {
+  const { showToast } = useHololiveActionToast();
   const [form, setForm] = useState<HololiveCustomTalentInput>(emptyInput);
   const [preview, setPreview] = useState<HololiveCustomTalentPreview | null>(null);
   const [tierData, setTierData] = useState<HololiveTierListData | null>(null);
@@ -58,8 +60,6 @@ export function HololiveTalentsPage() {
   const [refreshingOfficial, setRefreshingOfficial] = useState(false);
   const [refreshingCustomAll, setRefreshingCustomAll] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const customTalents = useMemo(
     () => (tierData?.idols ?? []).filter((idol) => idol.source === "custom"),
@@ -75,9 +75,12 @@ export function HololiveTalentsPage() {
       ]);
       setTierData(nextTierData);
       setChannels(nextChannels);
-      setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not load talents.");
+      showToast({
+        message: "Could not load talents",
+        detail: nextError instanceof Error ? nextError.message : "Try again in a moment.",
+        tone: "error"
+      });
     } finally {
       setLoading(false);
     }
@@ -90,7 +93,7 @@ export function HololiveTalentsPage() {
   useEffect(() => {
     return api.onHololiveRefreshProgress((progress) => {
       if (progress.scope === "official" || progress.scope === "custom" || progress.scope === "custom-all") {
-        setMessage(progress.message);
+        showToast({ message: progress.message, tone: "info" });
       }
     });
   }, []);
@@ -98,23 +101,29 @@ export function HololiveTalentsPage() {
   async function resolveTalent() {
     const payload = customTalentInput(form);
     if (!payload.channelInput) {
-      setError("Enter a YouTube handle, channel URL, Holodex link, or channel ID.");
+      showToast({
+        message: "Enter a talent channel first",
+        detail: "Use a YouTube handle, channel URL, Holodex link, or channel ID.",
+        tone: "error"
+      });
       return;
     }
 
     setResolving(true);
-    setMessage(null);
     try {
       const nextPreview = await api.invoke("hololive:custom-talents:resolve", payload);
       setPreview(nextPreview);
-      setError(null);
-      setMessage(`Resolved ${nextPreview.displayName}.`);
+      showToast({ message: `Resolved ${nextPreview.displayName}`, tone: "success" });
       if (!form.displayName?.trim()) {
         setForm((current) => ({ ...current, displayName: nextPreview.displayName }));
       }
     } catch (nextError) {
       setPreview(null);
-      setError(nextError instanceof Error ? nextError.message : "Could not resolve talent.");
+      showToast({
+        message: "Could not resolve talent",
+        detail: nextError instanceof Error ? nextError.message : "Check the channel input and try again.",
+        tone: "error"
+      });
     } finally {
       setResolving(false);
     }
@@ -123,15 +132,18 @@ export function HololiveTalentsPage() {
   async function saveTalent() {
     const payload = customTalentInput(form);
     if (!payload.channelInput) {
-      setError("Enter a YouTube handle, channel URL, Holodex link, or channel ID.");
+      showToast({
+        message: "Enter a talent channel first",
+        detail: "Use a YouTube handle, channel URL, Holodex link, or channel ID.",
+        tone: "error"
+      });
       return;
     }
 
     setSaving(true);
-    setMessage(null);
     try {
       const record = await api.invoke("hololive:custom-talents:upsert", payload);
-      setMessage(`Saved ${record.idol.displayName}. Refreshing music...`);
+      showToast({ message: `Saved ${record.idol.displayName}`, detail: "Refreshing music...", tone: "success" });
       setForm(emptyInput);
       setPreview(null);
       const result = await api.invoke("hololive:custom-talents:refresh", {
@@ -140,14 +152,17 @@ export function HololiveTalentsPage() {
         includeCollabs: true
       });
       await loadData();
-      setMessage(
-        `Saved and refreshed ${record.idol.displayName}: ${result.musicRefresh.importedRows} song${
-          result.musicRefresh.importedRows === 1 ? "" : "s"
-        }.`
-      );
-      setError(null);
+      showToast({
+        message: `Saved and refreshed ${record.idol.displayName}`,
+        detail: `${result.musicRefresh.importedRows} song${result.musicRefresh.importedRows === 1 ? "" : "s"} imported.`,
+        tone: "success"
+      });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not save talent.");
+      showToast({
+        message: "Could not save talent",
+        detail: nextError instanceof Error ? nextError.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setSaving(false);
     }
@@ -155,7 +170,6 @@ export function HololiveTalentsPage() {
 
   async function refreshTalent(idol: HololiveIdol) {
     setRefreshingId(idol.id);
-    setMessage(null);
     try {
       const result = await api.invoke("hololive:custom-talents:refresh", {
         idolId: idol.id,
@@ -163,16 +177,19 @@ export function HololiveTalentsPage() {
         includeCollabs: true
       });
       await loadData();
-      setMessage(
-        `Refreshed ${idol.displayName}: ${result.musicRefresh.importedRows} song${
-          result.musicRefresh.importedRows === 1 ? "" : "s"
-        }, ${result.videoStatsRefresh.updatedVideos} video stat${
-          result.videoStatsRefresh.updatedVideos === 1 ? "" : "s"
-        }.`
-      );
-      setError(null);
+      showToast({
+        message: `Refreshed ${idol.displayName}`,
+        detail:
+          `${result.musicRefresh.importedRows} song${result.musicRefresh.importedRows === 1 ? "" : "s"}, ` +
+          `${result.videoStatsRefresh.updatedVideos} video stat${result.videoStatsRefresh.updatedVideos === 1 ? "" : "s"}.`,
+        tone: "success"
+      });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : `Could not refresh ${idol.displayName}.`);
+      showToast({
+        message: `Could not refresh ${idol.displayName}`,
+        detail: nextError instanceof Error ? nextError.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setRefreshingId(null);
     }
@@ -180,7 +197,7 @@ export function HololiveTalentsPage() {
 
   async function refreshOfficialData() {
     setRefreshingOfficial(true);
-    setMessage("Refreshing official Hololive songs and video stats...");
+    showToast({ message: "Refreshing official Hololive songs and video stats", tone: "info" });
     try {
       const result = await api.invoke("hololive:official-data:refresh", {
         includeRelationships: true,
@@ -191,20 +208,28 @@ export function HololiveTalentsPage() {
       const failedStats =
         result.videoStatsRefresh.failedBatches > 0 ? ` (${result.videoStatsRefresh.failedBatches} stat batch failed)` : "";
       if (result.musicRefresh.run.status === "failed") {
-        setMessage(
-          `Partial refresh: ${result.channelRefresh.refreshedChannels} channels, ` +
-            `${result.videoStatsRefresh.updatedVideos} view counts${failedStats}.`
-        );
-        setError(result.musicRefresh.run.error ?? "Holodex music refresh failed.");
+        showToast({
+          message: "Official refresh partially completed",
+          detail:
+            `${result.channelRefresh.refreshedChannels} channels, ${result.videoStatsRefresh.updatedVideos} view counts${failedStats}. ` +
+            (result.musicRefresh.run.error ?? "Holodex music refresh failed."),
+          tone: "error"
+        });
       } else {
-        setMessage(
-          `Hololive refresh complete: ${result.channelRefresh.refreshedChannels} channels, ` +
-            `${result.musicRefresh.importedRows} songs, ${result.videoStatsRefresh.updatedVideos} view counts${failedStats}.`
-        );
-        setError(null);
+        showToast({
+          message: "Hololive refresh complete",
+          detail:
+            `${result.channelRefresh.refreshedChannels} channels, ${result.musicRefresh.importedRows} songs, ` +
+            `${result.videoStatsRefresh.updatedVideos} view counts${failedStats}.`,
+          tone: "success"
+        });
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not refresh official Hololive data.");
+      showToast({
+        message: "Could not refresh official Hololive data",
+        detail: nextError instanceof Error ? nextError.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setRefreshingOfficial(false);
     }
@@ -212,7 +237,7 @@ export function HololiveTalentsPage() {
 
   async function refreshAllCustomTalents() {
     setRefreshingCustomAll(true);
-    setMessage("Refreshing all custom talents...");
+    showToast({ message: "Refreshing all custom talents", tone: "info" });
     try {
       const result = await api.invoke("hololive:custom-talents:refresh-all", {
         includeRelationships: true,
@@ -223,36 +248,51 @@ export function HololiveTalentsPage() {
       const failed = result.musicRefreshes.filter((refresh) => refresh.run.status === "failed");
       const failedStats =
         result.videoStatsRefresh.failedBatches > 0 ? ` (${result.videoStatsRefresh.failedBatches} stat batch failed)` : "";
-      setMessage(
-        `Custom refresh complete: ${result.refreshedTalents} talent${result.refreshedTalents === 1 ? "" : "s"}, ` +
-          `${importedRows} songs, ${result.videoStatsRefresh.updatedVideos} view counts${failedStats}.`
-      );
-      setError(failed[0]?.run.error ?? null);
+      showToast({
+        message: failed.length > 0 ? "Custom refresh partially completed" : "Custom refresh complete",
+        detail:
+          `${result.refreshedTalents} talent${result.refreshedTalents === 1 ? "" : "s"}, ${importedRows} songs, ` +
+          `${result.videoStatsRefresh.updatedVideos} view counts${failedStats}.` +
+          (failed[0]?.run.error ? ` ${failed[0].run.error}` : ""),
+        tone: failed.length > 0 ? "error" : "success"
+      });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not refresh custom talents.");
+      showToast({
+        message: "Could not refresh custom talents",
+        detail: nextError instanceof Error ? nextError.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setRefreshingCustomAll(false);
     }
   }
 
-  async function deleteTalent(idol: HololiveIdol) {
-    if (!window.confirm(`Remove ${idol.displayName} from custom talents? Their playlists and ratings stay by YouTube ID.`)) {
-      return;
-    }
-
+  async function performDeleteTalent(idol: HololiveIdol) {
     setDeletingId(idol.id);
-    setMessage(null);
     try {
       const nextTierData = await api.invoke("hololive:custom-talents:delete", { idolId: idol.id });
       setTierData(nextTierData);
       setChannels(await api.invoke("hololive:channels:list", null));
-      setMessage(`Removed ${idol.displayName}.`);
-      setError(null);
+      showToast({ message: `Removed ${idol.displayName}`, tone: "success" });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : `Could not remove ${idol.displayName}.`);
+      showToast({
+        message: `Could not remove ${idol.displayName}`,
+        detail: nextError instanceof Error ? nextError.message : "Try again.",
+        tone: "error"
+      });
     } finally {
       setDeletingId(null);
     }
+  }
+
+  function deleteTalent(idol: HololiveIdol) {
+    showToast({
+      message: `Remove ${idol.displayName}?`,
+      detail: "Playlists and ratings stay linked by YouTube video ID.",
+      tone: "error",
+      actionLabel: "Remove",
+      onAction: () => performDeleteTalent(idol)
+    });
   }
 
   return (
@@ -365,8 +405,6 @@ export function HololiveTalentsPage() {
                 </dl>
               </div>
             ) : null}
-            {message ? <p className="hololive-talents-message">{message}</p> : null}
-            {error ? <p className="hololive-talents-error">{error}</p> : null}
           </form>
 
           <section className="hololive-talents-panel hololive-custom-talent-list" aria-label="Custom talents">

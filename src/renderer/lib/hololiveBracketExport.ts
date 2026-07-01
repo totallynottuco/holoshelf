@@ -1,4 +1,5 @@
 import type { HololiveBracket, HololiveBracketEntry, HololiveBracketMatch, HololiveBracketRound } from "../../shared/contracts";
+import { displayHololiveBracketRoundLabel } from "../../shared/hololiveBracketLabels";
 
 type MatchRect = {
   left: number;
@@ -12,7 +13,31 @@ type ChampionStory = {
   championMatchIds: Set<string>;
 };
 
+type RoundHeader = {
+  label: string;
+  x: number;
+  width: number;
+  state: "current" | "complete" | "upcoming";
+};
+
 const EXPORT_MAX_CANVAS_DIMENSION = 8192;
+const EXPORT_PIXEL_SCALE = 1.25;
+const EXPORT_LAYOUT = {
+  columnWidth: 190,
+  finalWidth: 205,
+  columnGap: 16,
+  padding: 16,
+  matchPaddingX: 4,
+  matchPaddingY: 4,
+  entryHeight: 27,
+  entryGap: 4,
+  entryHighlightInsetY: 4,
+  thumbnailHeight: 20,
+  thumbnailAspectRatio: 16 / 9,
+  thumbnailGap: 7,
+  roundHeaderHeight: 22,
+  headerTop: 14
+} as const;
 
 function youtubeThumbnailUrl(videoId: string): string {
   return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
@@ -205,7 +230,7 @@ function drawEntry(
   width: number,
   image: HTMLImageElement | null | undefined
 ): void {
-  const height = 29;
+  const height = EXPORT_LAYOUT.entryHeight;
   roundRect(ctx, x, y, width, height, 5);
   if (!entry) {
     ctx.fillStyle = "rgba(2, 11, 17, 0.48)";
@@ -221,14 +246,15 @@ function drawEntry(
     ctx.fillStyle = "rgba(2, 11, 17, 0.82)";
   }
   ctx.fill();
+  const highlightInsetY = EXPORT_LAYOUT.entryHighlightInsetY;
   if (highlight === "champion-path") {
     ctx.fillStyle = "#ffd426";
-    ctx.fillRect(x, y + 4, 3, height - 8);
+    ctx.fillRect(x, y + highlightInsetY, 3, height - highlightInsetY * 2);
     ctx.fillStyle = "#7de7bf";
-    ctx.fillRect(x + 4, y + 4, 2, height - 8);
+    ctx.fillRect(x + 4, y + highlightInsetY, 2, height - highlightInsetY * 2);
   } else if (highlight === "winner") {
     ctx.fillStyle = "rgba(125, 231, 191, 0.72)";
-    ctx.fillRect(x, y + 4, 3, height - 8);
+    ctx.fillRect(x, y + highlightInsetY, 3, height - highlightInsetY * 2);
   }
 
   if (!entry) {
@@ -239,9 +265,9 @@ function drawEntry(
   }
 
   const thumbnailX = x + 5;
-  const thumbnailY = y + 4;
-  const thumbnailWidth = 44;
-  const thumbnailHeight = 21;
+  const thumbnailY = y + Math.round((height - EXPORT_LAYOUT.thumbnailHeight) / 2);
+  const thumbnailHeight = EXPORT_LAYOUT.thumbnailHeight;
+  const thumbnailWidth = thumbnailHeight * EXPORT_LAYOUT.thumbnailAspectRatio;
   roundRect(ctx, thumbnailX, thumbnailY, thumbnailWidth, thumbnailHeight, 3);
   ctx.fillStyle = "rgba(12, 39, 53, 0.82)";
   ctx.fill();
@@ -249,18 +275,18 @@ function drawEntry(
     ctx.save();
     roundRect(ctx, thumbnailX, thumbnailY, thumbnailWidth, thumbnailHeight, 3);
     ctx.clip();
-    ctx.drawImage(image, thumbnailX, thumbnailY, thumbnailWidth, thumbnailHeight);
+    drawImageCover(ctx, image, thumbnailX, thumbnailY, thumbnailWidth, thumbnailHeight);
     ctx.restore();
   }
 
-  const textX = thumbnailX + thumbnailWidth + 8;
+  const textX = thumbnailX + thumbnailWidth + EXPORT_LAYOUT.thumbnailGap;
   const textWidth = width - textX + x - 8;
   ctx.fillStyle = highlight === "champion-path" ? "#fff8cc" : "#f0fbff";
-  ctx.font = "800 10.5px Segoe UI, Arial, sans-serif";
-  ctx.fillText(truncateText(ctx, displayExportSongTitle(entry.title), textWidth), textX, y + 12);
+  ctx.font = "800 9.6px Segoe UI, Arial, sans-serif";
+  ctx.fillText(truncateText(ctx, displayExportSongTitle(entry.title), textWidth), textX, y + 11);
   ctx.fillStyle = highlight === "champion-path" ? "#d1fff1" : "#92d5e6";
-  ctx.font = "700 8.5px Segoe UI, Arial, sans-serif";
-  ctx.fillText(truncateText(ctx, `${entry.idolName} / ${topicLabel(entry)}`, textWidth), textX, y + 24);
+  ctx.font = "700 7.8px Segoe UI, Arial, sans-serif";
+  ctx.fillText(truncateText(ctx, `${entry.idolName} / ${topicLabel(entry)}`, textWidth), textX, y + 22);
 }
 
 function drawMatch(
@@ -289,19 +315,10 @@ function drawMatch(
   roundRect(ctx, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, 7);
   ctx.stroke();
 
-  const label = matchLabel(match);
-  ctx.font = "800 9px Segoe UI, Arial, sans-serif";
-  const labelWidth = ctx.measureText(label).width + 12;
-  roundRect(ctx, rect.left + 7, rect.top - 8, labelWidth, 15, 8);
-  ctx.fillStyle = "#071923";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(64, 171, 210, 0.32)";
-  ctx.stroke();
-  ctx.fillStyle = isChampionPath ? "#ffd426" : "#86dcf4";
-  ctx.fillText(label, rect.left + 13, rect.top + 3);
-
-  const entryX = rect.left + 5;
-  const entryWidth = rect.right - rect.left - 10;
+  const entryX = rect.left + EXPORT_LAYOUT.matchPaddingX;
+  const entryWidth = rect.right - rect.left - EXPORT_LAYOUT.matchPaddingX * 2;
+  const firstEntryY = rect.top + EXPORT_LAYOUT.matchPaddingY;
+  const secondEntryY = firstEntryY + EXPORT_LAYOUT.entryHeight + EXPORT_LAYOUT.entryGap;
   const entryAHighlight =
     championId && championId === match.entryA?.id
       ? "champion-path"
@@ -319,7 +336,7 @@ function drawMatch(
     match.entryA,
     entryAHighlight,
     entryX,
-    rect.top + 4,
+    firstEntryY,
     entryWidth,
     match.entryA ? images.get(match.entryA.youtubeVideoId) : null
   );
@@ -328,10 +345,40 @@ function drawMatch(
     match.entryB,
     entryBHighlight,
     entryX,
-    rect.top + 35,
+    secondEntryY,
     entryWidth,
     match.entryB ? images.get(match.entryB.youtubeVideoId) : null
   );
+
+  const label = matchLabel(match);
+  ctx.textAlign = "left";
+  ctx.font = "800 9px Segoe UI, Arial, sans-serif";
+  const labelWidth = ctx.measureText(label).width + 12;
+  const labelY = rect.top - 12;
+  roundRect(ctx, rect.left + 7, labelY, labelWidth, 16, 8);
+  ctx.fillStyle = "#071923";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(64, 171, 210, 0.42)";
+  ctx.stroke();
+  ctx.fillStyle = isChampionPath ? "#ffd426" : "#86dcf4";
+  ctx.fillText(label, rect.left + 13, rect.top - 1);
+  ctx.restore();
+}
+
+function drawRoundHeader(ctx: CanvasRenderingContext2D, header: RoundHeader, top: number): void {
+  const accent = header.state === "complete" ? "#7de7bf" : header.state === "current" ? "#ffd426" : "#82dfff";
+  const headerY = top + 2;
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.fillStyle = accent;
+  ctx.fillRect(header.x + 4, headerY + 19, header.width - 8, 1);
+  ctx.fillStyle = accent;
+  ctx.font = "850 11px Segoe UI, Arial, sans-serif";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 1;
+  ctx.fillText(header.label, header.x + header.width / 2, top + 15);
   ctx.restore();
 }
 
@@ -410,13 +457,13 @@ function drawChampionHero(
   width: number
 ): void {
   const plaqueWidth = Math.min(570, width - 70);
-  const plaqueHeight = 138;
+  const plaqueHeight = 114;
   const plaqueX = centerX - plaqueWidth / 2;
   const plaqueY = top;
-  const imageWidth = Math.min(405, width - 120);
+  const imageWidth = Math.min(335, width - 110);
   const imageHeight = Math.round((imageWidth * 9) / 16);
   const imageX = centerX - imageWidth / 2;
-  const imageY = top + 352;
+  const imageY = top + 290;
   const title = displayExportSongTitle(champion.title);
   const credit = `${champion.idolName} / ${topicLabel(champion)}`;
 
@@ -435,8 +482,8 @@ function drawChampionHero(
   roundRect(ctx, plaqueX, plaqueY, plaqueWidth, plaqueHeight, 4);
   ctx.stroke();
 
-  const badgeWidth = 174;
-  const badgeHeight = 34;
+  const badgeWidth = 142;
+  const badgeHeight = 28;
   roundRect(ctx, centerX - badgeWidth / 2, plaqueY + 18, badgeWidth, badgeHeight, 17);
   const badgeGradient = ctx.createLinearGradient(
     centerX - badgeWidth / 2,
@@ -449,18 +496,18 @@ function drawChampionHero(
   ctx.fillStyle = badgeGradient;
   ctx.fill();
   ctx.fillStyle = "#061721";
-  ctx.font = "950 18px Segoe UI, Arial, sans-serif";
-  ctx.fillText("CHAMPION", centerX, plaqueY + 41);
+  ctx.font = "950 15px Segoe UI, Arial, sans-serif";
+  ctx.fillText("CHAMPION", centerX, plaqueY + 37);
 
   ctx.fillStyle = "#ffd426";
-  const titleSize = fitText(ctx, title, plaqueWidth - 44, 950, 42, 24);
+  const titleSize = fitText(ctx, title, plaqueWidth - 42, 950, 32, 20);
   ctx.font = `950 ${titleSize}px Segoe UI, Arial, sans-serif`;
-  ctx.fillText(title, centerX, plaqueY + 92);
+  ctx.fillText(title, centerX, plaqueY + 76);
   ctx.fillStyle = "#bdf6ff";
-  ctx.font = "850 18px Segoe UI, Arial, sans-serif";
-  const detailSize = fitText(ctx, credit, plaqueWidth - 40, 850, 18, 13);
+  ctx.font = "850 15px Segoe UI, Arial, sans-serif";
+  const detailSize = fitText(ctx, credit, plaqueWidth - 38, 850, 15, 12);
   ctx.font = `850 ${detailSize}px Segoe UI, Arial, sans-serif`;
-  ctx.fillText(credit, centerX, plaqueY + 120);
+  ctx.fillText(credit, centerX, plaqueY + 98);
 
   ctx.save();
   roundRect(ctx, imageX, imageY, imageWidth, imageHeight, 8);
@@ -514,18 +561,18 @@ export async function renderHololiveBracketExportPng(bracket: HololiveBracket): 
   const finalRound = bracket.rounds[bracket.rounds.length - 1] ?? null;
   const baseMatches = Math.max(1, leftRounds[0]?.matches.length ?? 1);
   const story = buildChampionStory(bracket);
-  const columnWidth = 250;
-  const finalWidth = 260;
-  const gap = 28;
-  const matchHeight = 68;
-  const rowHeight = baseMatches <= 4 ? 95 : 75;
-  const headerHeight = 14;
-  const roundHeaderHeight = 22;
-  const padding = 20;
+  const columnWidth = EXPORT_LAYOUT.columnWidth;
+  const finalWidth = EXPORT_LAYOUT.finalWidth;
+  const gap = EXPORT_LAYOUT.columnGap;
+  const matchHeight = EXPORT_LAYOUT.entryHeight * 2 + EXPORT_LAYOUT.entryGap + EXPORT_LAYOUT.matchPaddingY * 2;
+  const rowHeight = baseMatches <= 4 ? 90 : baseMatches <= 8 ? 68 : 56;
+  const headerHeight = EXPORT_LAYOUT.headerTop;
+  const roundHeaderHeight = EXPORT_LAYOUT.roundHeaderHeight;
+  const padding = EXPORT_LAYOUT.padding;
   const sideRoundCount = leftRounds.length;
   const width = padding * 2 + sideRoundCount * columnWidth + sideRoundCount * gap + finalWidth + sideRoundCount * gap + sideRoundCount * columnWidth;
-  const height = Math.max(710, headerHeight + roundHeaderHeight + baseMatches * rowHeight + padding);
-  const scale = Math.min(1.5, EXPORT_MAX_CANVAS_DIMENSION / Math.max(width, height));
+  const height = Math.max(620, headerHeight + roundHeaderHeight + baseMatches * rowHeight + padding);
+  const scale = Math.min(EXPORT_PIXEL_SCALE, EXPORT_MAX_CANVAS_DIMENSION / Math.max(width, height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(width * scale);
   canvas.height = Math.ceil(height * scale);
@@ -542,31 +589,26 @@ export async function renderHololiveBracketExportPng(bracket: HololiveBracket): 
 
   const images = await loadThumbnails(bracket);
   const rects = new Map<string, MatchRect>();
+  const roundHeaders: RoundHeader[] = [];
 
   drawChampionHero(
     ctx,
     bracket.champion,
     images.get(bracket.champion.youtubeVideoId),
     width / 2,
-    82,
-    Math.min(620, Math.max(520, finalWidth + gap * 7))
+    72,
+    Math.min(510, Math.max(450, finalWidth + gap * 6))
   );
 
   const drawRound = (round: HololiveBracketRound, x: number, side: "left" | "right" | "final") => {
     const state = roundState(round, bracket);
     const columnSize = side === "final" ? finalWidth : columnWidth;
-    const accent = state === "complete" ? "#7de7bf" : state === "current" ? "#ffd426" : "#82dfff";
-    const headerY = headerHeight + 2;
-    ctx.fillStyle = accent;
-    ctx.fillRect(x + 4, headerY + 19, columnSize - 8, 1);
-    ctx.fillStyle = accent;
-    ctx.font = "850 11px Segoe UI, Arial, sans-serif";
-    ctx.fillText(round.label, x + 4, headerHeight + 15);
-    ctx.fillStyle = "#82dfff";
-    ctx.font = "800 9px Segoe UI, Arial, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(String(round.matches.length), x + columnSize - 4, headerHeight + 15);
-    ctx.textAlign = "left";
+    roundHeaders.push({
+      label: displayHololiveBracketRoundLabel(round.label),
+      x,
+      width: columnSize,
+      state
+    });
 
     const columnTop = headerHeight + roundHeaderHeight + 6;
     const usableHeight = baseMatches * rowHeight;
@@ -636,6 +678,10 @@ export async function renderHololiveBracketExportPng(bracket: HololiveBracket): 
         drawMatch(ctx, match, rect, images, story);
       }
     }
+  }
+
+  for (const header of roundHeaders) {
+    drawRoundHeader(ctx, header, headerHeight);
   }
 
   try {

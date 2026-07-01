@@ -6,7 +6,7 @@ import packageJson from "../package.json" with { type: "json" };
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exePath = path.join(projectRoot, "release", "win-unpacked", "Holoshelf.exe");
-const iconPath = path.join(projectRoot, "icon.ico");
+const iconPath = path.join(projectRoot, "ico.ico");
 const windowsVersion = toWindowsVersion(packageJson.version);
 
 if (!fs.existsSync(exePath)) {
