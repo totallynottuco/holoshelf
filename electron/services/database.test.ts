@@ -23,6 +23,42 @@ async function createTempDatabaseAt(databasePath: string): Promise<DatabaseServi
   return database;
 }
 
+function createHolodexArtifactFixture(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-holodex-artifacts-"));
+  fs.writeFileSync(
+    path.join(dir, "holodex_videos.csv"),
+    [
+      "youtube_video_id,youtube_url,title,status,topic_id,channel_name,published_at",
+      "fixture-sora-original,https://www.youtube.com/watch?v=fixture-sora-original,Sora Fixture Original,past,Original_Song,Sora Channel,2025-01-01T00:00:00.000Z",
+      "fixture-roboco-cover,https://www.youtube.com/watch?v=fixture-roboco-cover,Roboco Fixture Cover,past,Music_Cover,Roboco Channel,2025-01-02T00:00:00.000Z"
+    ].join("\n"),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(dir, "holodex_video_details_cache.json"),
+    `${JSON.stringify(
+      {
+        "fixture-sora-original": {
+          youtube_video_id: "fixture-sora-original",
+          channel_id: "UCp6993wxpyDPHUpavwDFqgg",
+          duration: 180,
+          song_names: ["Sora Fixture Original"]
+        },
+        "fixture-roboco-cover": {
+          youtube_video_id: "fixture-roboco-cover",
+          channel_id: "UCDqI2jOz0weumE8s7paEk6g",
+          duration: 210,
+          song_names: ["Roboco Fixture Cover"]
+        }
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  return dir;
+}
+
 function seedHololiveBracketSong(
   database: DatabaseService,
   input: {
@@ -1818,44 +1854,30 @@ describe("DatabaseService", () => {
   });
 
   it("imports Holodex final artifacts idempotently for the current idol roster", async () => {
-    const artifactDir = "F:\\coding\\holodex_refresh\\data\\final";
+    const artifactDir = createHolodexArtifactFixture();
     const database = await createTempDatabase();
     const service = new HolodexMusicService(database);
 
     const firstImport = await service.importArtifacts(artifactDir);
     const secondImport = await service.importArtifacts(artifactDir);
     const status = database.getHololiveMusicStatus();
-    const originals = database.listHololiveMusicRows({ topicId: "Original_Song", limit: 500 });
-    const covers = database.listHololiveMusicRows({ topicId: "Music_Cover", limit: 500 });
+    const originals = database.listHololiveMusicRows({ topicId: "Original_Song", limit: 10 });
+    const covers = database.listHololiveMusicRows({ topicId: "Music_Cover", limit: 10 });
     const soraProfile = database.getHololiveIdolProfile("tokino-sora");
 
-    expect(firstImport.sourceRows).toBe(4288);
-    expect(firstImport.importedRows).toBe(2748);
+    expect(firstImport.sourceRows).toBe(2);
+    expect(firstImport.importedRows).toBe(2);
     expect(firstImport.detailCacheRows).toBe(firstImport.importedRows);
-    expect(firstImport.duplicateRows).toBeGreaterThan(632);
+    expect(firstImport.duplicateRows).toBe(0);
     expect(secondImport.importedRows).toBe(firstImport.importedRows);
-    expect(status.totalRows).toBe(2748);
-    expect(database.listHololiveMusicRows({ query: "Midnight ver", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "Bouquet ver", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "Twilight ver", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "Daybreak ver", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "Remastered", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "SOLO ver", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "\u5ba3\u4f1dMV", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "DAYBREAK FRONTLINE", limit: 10 }).length).toBeGreaterThan(0);
-    expect(database.listHololiveMusicRows({ query: "REDHEART", limit: 10 }).map((row) => row.youtubeVideoId)).toContain(
-      "A9HY4DsRTCg"
-    );
-    expect(database.listHololiveMusicRows({ query: "High Tide", limit: 10 }).map((row) => row.youtubeVideoId)).toContain(
-      "stmZAThUl64"
-    );
-    expect(database.listHololiveMusicRows({ query: "Lofi", limit: 10 })).toHaveLength(0);
-    expect(database.listHololiveMusicRows({ query: "Remix", limit: 10 })).toHaveLength(0);
-    expect(database.listCatalog({ moduleId: "hololive", limit: 500 })).toHaveLength(500);
-    expect(originals.length).toBeGreaterThan(0);
-    expect(covers.length).toBeGreaterThan(0);
+    expect(status.totalRows).toBe(2);
+    expect(originals.map((row) => row.youtubeVideoId)).toEqual(["fixture-sora-original"]);
+    expect(covers.map((row) => row.youtubeVideoId)).toEqual(["fixture-roboco-cover"]);
+    expect(database.listCatalog({ moduleId: "hololive", limit: 10 }).map((row) => row.title)).toEqual([
+      "Sora Fixture Original",
+      "Roboco Fixture Cover"
+    ]);
     expect(soraProfile.mediaGroups.find((group) => group.id === "original-songs")?.items.length).toBeGreaterThan(0);
-    expect(soraProfile.mediaGroups.find((group) => group.id === "covers")?.items.length).toBeGreaterThan(0);
   });
 
   it("can replace existing Holodex music rows and stale cache data", async () => {

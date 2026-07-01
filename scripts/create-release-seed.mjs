@@ -34,6 +34,7 @@ const SQL = await initSqlJs({
 
 if (!fs.existsSync(sourceDatabasePath)) {
   if (fs.existsSync(seedDatabasePath)) {
+    sanitizeSeedArtifactSummary();
     const summary = verifySeedDatabase();
     assertSeedSummary(summary);
     writeSeedManifest(summary);
@@ -97,6 +98,18 @@ function copyDirectoryIfExists(source, target) {
     return;
   }
   fs.cpSync(source, target, { recursive: true });
+}
+
+function sanitizeSeedArtifactSummary() {
+  const summaryPath = path.join(seedArtifactsDirectory, "summary.json");
+  if (!fs.existsSync(summaryPath)) {
+    return;
+  }
+
+  const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+  summary.databasePath = "resources/seed/holoshelf-template.sqlite";
+  summary.artifactDirectory = "resources/seed/holodex-refresh/latest";
+  fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 }
 
 function removeRowsWithCustomIdReferences(tableName, textColumns, customIds) {
@@ -247,6 +260,7 @@ database.close();
 
 copyDirectoryIfExists(sourceImagesDirectory, seedImagesDirectory);
 copyDirectoryIfExists(sourceArtifactsDirectory, seedArtifactsDirectory);
+sanitizeSeedArtifactSummary();
 
 const summary = verifySeedDatabase();
 assertSeedSummary(summary);
