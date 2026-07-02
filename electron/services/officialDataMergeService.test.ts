@@ -38,6 +38,8 @@ function createBundle(
     songName: string;
     topicId?: HololiveMusicTopic;
     publishedAt?: string;
+    channelId?: string;
+    channelName?: string;
   }>
 ): HolodexArtifactBundle {
   return {
@@ -47,8 +49,8 @@ function createBundle(
       title: row.title,
       status: "past",
       topicId: row.topicId ?? "Original_Song",
-      channelId: SORA_CHANNEL_ID,
-      channelName: "SoraCh.",
+      channelId: row.channelId ?? SORA_CHANNEL_ID,
+      channelName: row.channelName ?? "SoraCh.",
       publishedAt: row.publishedAt ?? "2026-01-01T00:00:00.000Z"
     })),
     detailCache: Object.fromEntries(
@@ -56,7 +58,7 @@ function createBundle(
         row.youtubeVideoId,
         normalizeVideoDetail(row.youtubeVideoId, {
           youtubeVideoId: row.youtubeVideoId,
-          channelId: SORA_CHANNEL_ID,
+          channelId: row.channelId ?? SORA_CHANNEL_ID,
           duration: 180,
           songNames: [row.songName],
           relationshipsLoaded: true
@@ -236,6 +238,121 @@ describe("mergeBundledOfficialData", () => {
     ]);
     expect(fs.existsSync(path.join(user.hololiveImageDirectory, "tokino-sora-icon-v6.webp"))).toBe(true);
     expect(fs.existsSync(path.join(user.dataDirectory, "holodex-refresh", "latest", "summary.json"))).toBe(true);
+  });
+
+  it("keeps custom talents and their imported songs during official data merges", async () => {
+    const user = await createTempDatabase("holoshelf-official-custom-");
+    const seedDirectory = await createSeedDirectory("2026-06-30");
+    const customTalentId = upsertCustomTalent(user.database);
+
+    user.database.importHolodexMusicArtifacts(
+      createBundle([
+        {
+          youtubeVideoId: "custom-local-song",
+          title: "Local Custom Talent Song",
+          songName: "Local Custom Song",
+          channelId: "UCofficialMergeCustom",
+          channelName: "Local Merge Talent"
+        }
+      ])
+    );
+    user.database.setHololiveMusicMarker({ youtubeVideoId: "custom-local-song", marker: "like" });
+    const playlistId = user.database.createHololiveMusicPlaylist("Custom Songs").playlists.find(
+      (playlist) => playlist.name === "Custom Songs"
+    )?.id;
+    expect(playlistId).toBeTruthy();
+    user.database.addHololiveMusicPlaylistItem({ playlistId: playlistId ?? "", youtubeVideoId: "custom-local-song" });
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-06-30T12:00:00.000Z"
+    });
+
+    expect(user.database.listHololiveIdols().find((idol) => idol.id === customTalentId)).toMatchObject({
+      id: customTalentId,
+      source: "custom"
+    });
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["custom-local-song"] })[0]).toMatchObject({
+      youtubeVideoId: "custom-local-song",
+      idolId: customTalentId,
+      title: "Local Custom Talent Song",
+      songName: "Local Custom Song",
+      marker: "like"
+    });
+    expect(
+      user.database
+        .getHololiveMusicPlayerData()
+        .playlists.find((playlist) => playlist.id === playlistId)
+        ?.items?.map((item) => item.youtubeVideoId)
+    ).toEqual(["custom-local-song"]);
+  });
+
+  it("does not overwrite user-imported songs assigned to official talents", async () => {
+    const user = await createTempDatabase("holoshelf-official-custom-song-");
+    const seedDirectory = await createSeedDirectory("2026-06-30");
+    const seedDatabase = new DatabaseService(
+      path.join(seedDirectory, "holoshelf-template.sqlite"),
+      path.join(path.dirname(seedDirectory), "seed-custom-song-backups")
+    );
+    await seedDatabase.init();
+    seedDatabase.importHolodexMusicArtifacts(
+      createBundle([
+        {
+          youtubeVideoId: "abcDEF12345",
+          title: "Bundled Official Version",
+          songName: "Bundled Official Song",
+          publishedAt: "2026-02-03T00:00:00.000Z"
+        }
+      ])
+    );
+    seedDatabase.upsertHololiveMusicVideoStats([
+      { youtubeVideoId: "abcDEF12345", viewCount: 999999, fetchedAt: "2026-06-30T00:00:00.000Z" }
+    ]);
+    seedDatabase.flush();
+
+    user.database.upsertHololiveCustomSong({
+      youtubeUrl: "https://youtu.be/abcDEF12345",
+      title: "My Local Official Talent Import",
+      songName: "My Local Song",
+      topicId: "Original_Song",
+      ownerIdolIds: ["tokino-sora"],
+      featuredIdolIds: [],
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-01",
+      viewCount: 777,
+      fetchedAt: "2026-07-01T00:00:00.000Z"
+    });
+    user.database.setHololiveMusicMarker({ youtubeVideoId: "abcDEF12345", marker: "favorite" });
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-06-30T12:00:00.000Z"
+    });
+
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["abcDEF12345"] })[0]).toMatchObject({
+      youtubeVideoId: "abcDEF12345",
+      title: "My Local Official Talent Import",
+      songName: "My Local Song",
+      sourceKind: "user",
+      marker: "favorite",
+      viewCount: 777
+    });
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["official-added"] })[0]).toMatchObject({
+      youtubeVideoId: "official-added",
+      sourceKind: "official"
+    });
   });
 
   it("skips packaged merge when the user database already has the bundled official data version", async () => {

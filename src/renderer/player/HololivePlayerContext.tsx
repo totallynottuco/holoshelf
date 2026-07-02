@@ -37,6 +37,7 @@ import { HololiveMusicMarkerMenu } from "../components/HololiveMusicMarkerMenu";
 import { hololiveResolvedItemTitle } from "../components/HololiveMusicText";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
 import { useHololiveActionToast } from "../components/HololiveActionToast";
+import { useDismissableLayer } from "../lib/useDismissableLayer";
 
 declare global {
   interface Window {
@@ -718,10 +719,27 @@ function HololivePersistentPlayerSurface({
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false);
   const [confirmExclude, setConfirmExclude] = useState(false);
   const [pendingAction, setPendingAction] = useState<"playlist" | "marker" | null>(null);
+  const playlistMenuRef = useRef<HTMLSpanElement | null>(null);
+  const markerMenuRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     latestMiniBoundsRef.current = miniBounds;
   }, [miniBounds]);
+
+  useDismissableLayer({
+    enabled: playlistMenuOpen,
+    ref: playlistMenuRef,
+    onDismiss: () => setPlaylistMenuOpen(false)
+  });
+
+  useDismissableLayer({
+    enabled: markerMenuOpen,
+    ref: markerMenuRef,
+    onDismiss: () => {
+      setMarkerMenuOpen(false);
+      setConfirmExclude(false);
+    }
+  });
 
   useEffect(
     () => () => {
@@ -1046,7 +1064,7 @@ function HololivePersistentPlayerSurface({
             >
               <Repeat size={12} />
             </button>
-            <span className="hololive-mini-player-menu-anchor">
+            <span className="hololive-mini-player-menu-anchor" ref={playlistMenuRef}>
               <button
                 type="button"
                 onClick={() => {
@@ -1081,7 +1099,7 @@ function HololivePersistentPlayerSurface({
             >
               <PanelRightOpen size={12} />
             </button>
-            <span className="hololive-mini-player-menu-anchor">
+            <span className="hololive-mini-player-menu-anchor" ref={markerMenuRef}>
               <button
                 className={`marker ${marker ?? "unmarked"}`}
                 type="button"

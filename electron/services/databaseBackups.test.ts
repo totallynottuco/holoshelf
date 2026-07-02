@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
-import { createRollingDatabaseBackup, createTimestampedDatabaseBackup, validateSqliteDatabaseFile } from "./databaseBackups";
+import {
+  createRollingDatabaseBackup,
+  createTimestampedDatabaseBackup,
+  ensureHoloshelfBackupExtension,
+  exportDatabaseBackupToFile,
+  validateSqliteDatabaseFile
+} from "./databaseBackups";
 
 describe("database backups", () => {
   async function createSqliteFile(filePath: string, label: string) {
@@ -91,5 +97,36 @@ describe("database backups", () => {
     expect(result.filePath).toContain("holoshelf.manual.");
     expect(result.filePath ? fs.existsSync(result.filePath) : false).toBe(true);
     expect(result.filePath ? validateSqliteDatabaseFile(result.filePath, SQL) : false).toBe(true);
+  });
+
+  it("exports user backup files with the Holoshelf backup extension", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-backups-export-"));
+    const databasePath = path.join(root, "holoshelf.sqlite");
+    const exportPath = path.join(root, "exports", "Holoshelf Backup");
+    const SQL = await createSqliteFile(databasePath, "exported");
+
+    const result = exportDatabaseBackupToFile(databasePath, exportPath, SQL);
+
+    expect(result).toMatchObject({ exported: true });
+    expect(result.filePath).toBe(`${exportPath}.holoshelf-backup`);
+    expect(fs.existsSync(result.filePath)).toBe(true);
+    expect(validateSqliteDatabaseFile(result.filePath, SQL)).toBe(true);
+  });
+
+  it("rejects export when the active database is invalid", async () => {
+    const SQL = await initSqlJs();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-backups-export-invalid-"));
+    const databasePath = path.join(root, "holoshelf.sqlite");
+    fs.writeFileSync(databasePath, "not sqlite");
+
+    expect(() => exportDatabaseBackupToFile(databasePath, path.join(root, "backup"), SQL)).toThrow(
+      "The active Holoshelf database failed its integrity check."
+    );
+  });
+
+  it("only appends the Holoshelf backup extension when the export path has no extension", () => {
+    expect(ensureHoloshelfBackupExtension("backup")).toBe("backup.holoshelf-backup");
+    expect(ensureHoloshelfBackupExtension("backup.sqlite")).toBe("backup.sqlite");
+    expect(ensureHoloshelfBackupExtension("backup.holoshelf-backup")).toBe("backup.holoshelf-backup");
   });
 });

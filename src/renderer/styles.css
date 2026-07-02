@@ -840,7 +840,7 @@ select {
   display: grid;
   gap: 4px;
   min-width: 0;
-  padding: 9px;
+  padding: 8px;
   border: 1px solid rgba(64, 171, 210, 0.2);
   border-radius: 7px;
   background: rgba(5, 18, 27, 0.62);
@@ -917,6 +917,14 @@ select {
   color: #edf8ff;
 }
 
+.hololive-custom-import-page {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .hololive-tier-workspace {
   min-width: 0;
   background: transparent;
@@ -973,13 +981,97 @@ select {
   background: rgba(39, 131, 169, 0.28);
 }
 
-.hololive-talents-workspace {
+.hololive-custom-import-workspace {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 8px;
   min-width: 0;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.hololive-custom-song-rows {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.hololive-custom-song-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(64, 171, 210, 0.18);
+  border-radius: 6px;
+  background: rgba(4, 18, 28, 0.58);
+}
+
+.hololive-custom-song-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hololive-custom-song-row-main strong,
+.hololive-custom-song-row-main span,
+.hololive-custom-song-row-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hololive-custom-song-row-main strong {
+  color: #f2fdff;
+  font-size: 12px;
+  font-weight: 880;
+}
+
+.hololive-custom-song-row-main span {
+  color: #8feaff;
+  font-size: 10.5px;
+  font-weight: 760;
+}
+
+.hololive-custom-song-row-main small {
+  color: #76b5c8;
+  font-size: 9.5px;
+  font-weight: 720;
+}
+
+.hololive-custom-song-row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 27px;
+  padding: 0 8px;
+  border: 1px solid rgba(64, 171, 210, 0.34);
+  border-radius: 6px;
+  background: rgba(7, 29, 42, 0.74);
+  color: #dff8ff;
+  font: inherit;
+  font-size: 10.8px;
+  font-weight: 820;
+  cursor: pointer;
+}
+
+.hololive-custom-song-row > button:hover,
+.hololive-custom-song-row > button:focus-visible {
+  border-color: rgba(122, 226, 255, 0.58);
+  background: rgba(18, 65, 88, 0.82);
+  outline: none;
+}
+
+.hololive-custom-song-row > button:disabled {
+  cursor: default;
+  opacity: 0.54;
 }
 
 .hololive-brackets-page {
@@ -989,7 +1081,7 @@ select {
   align-content: stretch;
 }
 
-.hololive-brackets-workspace {
+.hololive-bracket-workspace {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
@@ -1002,7 +1094,7 @@ select {
   grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(64, 171, 210, 0.35);
   border-radius: 8px;
   background: rgba(7, 20, 30, 0.74);
@@ -1133,9 +1225,11 @@ select {
   left: 0;
   z-index: 12;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.28fr) minmax(0, 0.92fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 8px;
-  width: 430px;
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(640px, calc(100vh - 126px));
   padding: 10px;
   border: 1px solid rgba(64, 171, 210, 0.42);
   border-radius: 8px;
@@ -1224,13 +1318,15 @@ select {
 
 .hololive-bracket-exclusions {
   display: grid;
+  grid-column: 1 / -1;
   gap: 6px;
   min-width: 0;
+  min-height: 0;
 }
 
 .hololive-bracket-filter-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -1313,11 +1409,13 @@ select {
 
 .hololive-bracket-exclusions-body {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
   min-width: 0;
-  max-height: min(560px, calc(100vh - 220px));
+  min-height: 0;
+  max-height: none;
   overflow: auto;
-  padding: 8px;
+  padding: 9px;
   border: 1px solid rgba(64, 171, 210, 0.2);
   border-radius: 7px;
   background: rgba(3, 15, 23, 0.5);
@@ -1327,8 +1425,35 @@ select {
   display: grid;
   gap: 6px;
   min-width: 0;
-  padding-bottom: 7px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(64, 171, 210, 0.14);
+}
+
+.hololive-bracket-filter-group.song-pool {
+  grid-column: 1 / -1;
+  gap: 0;
+}
+
+.hololive-bracket-filter-group.song-pool > h4 {
+  display: none;
+}
+
+.hololive-bracket-filter-group.avoid-previous-results,
+.hololive-bracket-filter-group.variety-rules-group {
+  align-content: start;
+  padding-top: 8px;
+  padding-bottom: 0;
+  border-top: 1px solid rgba(64, 171, 210, 0.14);
+  border-bottom: 0;
+}
+
+.hololive-bracket-filter-group.variety-rules-group {
+  padding-left: 10px;
+  border-left: 1px solid rgba(64, 171, 210, 0.14);
+}
+
+.hololive-bracket-filter-group.avoid-previous-results .hololive-bracket-exclusion-list {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .hololive-bracket-filter-group:last-child {
@@ -1340,7 +1465,7 @@ select {
   display: flex;
   align-items: center;
   min-height: 12px;
-  margin: 0;
+  margin: 0 0 5px;
   color: #79dcf4;
   font-size: 9.5px;
   font-weight: 900;
@@ -1352,7 +1477,7 @@ select {
 .hololive-bracket-exclusion-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 7px;
+  gap: 5px 9px;
   align-items: center;
   min-width: 0;
 }
@@ -1362,32 +1487,112 @@ select {
 }
 
 .hololive-bracket-exclusion-list.rating-buckets {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.hololive-bracket-exclusion-list.talent-statuses {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.hololive-bracket-filter-subsection {
+.hololive-bracket-exclusion-list.compact-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hololive-bracket-filter-line {
   display: grid;
-  gap: 5px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0;
+  min-width: 0;
+  padding: 5px 0;
+  border-top: 1px solid rgba(64, 171, 210, 0.14);
+}
+
+.hololive-bracket-filter-group.song-pool h4 + .hololive-bracket-filter-line {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.hololive-bracket-filter-line:last-child {
+  padding-bottom: 0;
+}
+
+.hololive-bracket-filter-line-label {
+  display: none;
+  align-items: center;
+  min-height: 26px;
+  color: #9feaff;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.hololive-bracket-filter-line-control,
+.hololive-bracket-filter-line-grid,
+.hololive-bracket-filter-fieldset {
   min-width: 0;
 }
 
-.hololive-bracket-filter-subsection > span {
+.hololive-bracket-filter-line-control {
+  display: grid;
+}
+
+.hololive-bracket-filter-line-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.hololive-bracket-filter-line-grid.talent-history-row {
+  grid-template-columns: minmax(230px, 286px) minmax(0, 1fr);
+}
+
+.hololive-bracket-filter-fieldset {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.hololive-bracket-filter-fieldset.talent-picker-field {
+  width: 100%;
+}
+
+.hololive-bracket-filter-fieldset-label {
   display: flex;
   align-items: center;
   min-height: 12px;
-  color: #9feaff;
-  font-size: 9.5px;
-  font-weight: 850;
+  color: #79dcf4;
+  font-size: 9.2px;
+  font-weight: 900;
   line-height: 1;
+  text-transform: uppercase;
+}
+
+.hololive-bracket-history-select,
+.hololive-bracket-history-select .compact-select-button {
+  width: 100%;
+}
+
+.hololive-bracket-history-select .compact-select-button {
+  height: 26px;
+  justify-content: space-between;
+  border-color: rgba(64, 171, 210, 0.32);
+  background: rgba(5, 18, 27, 0.78);
+  font-size: 10.8px;
+}
+
+.hololive-bracket-exclusion-list.talent-statuses,
+.hololive-bracket-exclusion-list.compact-pair {
+  min-height: 26px;
+  align-items: center;
 }
 
 .hololive-bracket-talent-selector {
   position: relative;
   min-width: 0;
-}
-
-.hololive-bracket-filter-subsection.talent-selector {
-  gap: 0;
 }
 
 .hololive-bracket-toolbar .hololive-bracket-talent-selector-button {
@@ -1452,8 +1657,10 @@ select {
   padding: 5px 6px 5px 5px;
   border: 1px solid rgba(64, 171, 210, 0.34);
   border-radius: 7px;
-  background: rgba(5, 18, 27, 0.98);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+  background: #05121b;
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.52),
+    0 0 0 1px rgba(19, 73, 95, 0.62) inset;
 }
 
 .hololive-bracket-create-popover .hololive-bracket-talent-selector-menu input {
@@ -1479,6 +1686,7 @@ select {
   gap: 0;
   max-height: 230px;
   padding-right: 7px;
+  background: #05121b;
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -1565,9 +1773,9 @@ select {
   display: grid;
   grid-template-columns: 13px minmax(0, 1fr);
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
-  min-height: 18px;
+  min-height: 20px;
   padding: 0 2px;
 }
 
@@ -1592,7 +1800,7 @@ select {
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 16px;
+  min-height: 17px;
   cursor: help;
   line-height: 1;
 }
@@ -1608,12 +1816,72 @@ select {
   white-space: nowrap;
 }
 
+.hololive-bracket-filter-group.song-pool .hololive-bracket-exclusion-option strong {
+  font-size: 10.4px;
+}
+
+.hololive-bracket-filter-group.song-pool .hololive-bracket-exclusion-option {
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 5px;
+  padding: 0;
+}
+
+.hololive-bracket-variety-rules {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.hololive-bracket-coverage-control {
+  display: inline-grid;
+  grid-template-columns: auto 78px;
+  align-items: center;
+  justify-content: start;
+  justify-self: start;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hololive-bracket-coverage-control > input {
+  width: 78px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid rgba(64, 171, 210, 0.32);
+  border-radius: 5px;
+  background: rgba(5, 18, 27, 0.78);
+  color: #e9fbff;
+  font-size: 10.8px;
+  font-weight: 780;
+  text-align: center;
+}
+
+.hololive-bracket-coverage-control > input:disabled {
+  color: #83b8c7;
+  opacity: 0.58;
+}
+
 .hololive-bracket-filter-fields {
   display: grid;
   gap: 7px;
   min-width: 0;
-  padding-bottom: 7px;
+  padding-bottom: 6px;
   border-bottom: 1px solid rgba(64, 171, 210, 0.14);
+}
+
+.hololive-bracket-filter-group.song-pool .hololive-bracket-filter-fields {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 10px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.hololive-bracket-filter-group.song-pool .hololive-bracket-date-filters,
+.hololive-bracket-filter-group.song-pool .hololive-bracket-number-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
 }
 
 .hololive-bracket-filter-fields:last-child {
@@ -1649,13 +1917,13 @@ select {
   justify-self: end;
   width: auto;
   min-width: 0;
-  height: 26px;
-  padding: 0 9px;
+  height: 24px;
+  padding: 0 7px;
   border-color: rgba(125, 188, 122, 0.34);
   background:
     linear-gradient(180deg, rgba(34, 76, 58, 0.72), rgba(10, 34, 34, 0.82));
   color: #d9fff2;
-  font-size: 10.8px;
+  font-size: 10.5px;
   font-weight: 840;
   box-shadow: 0 0 0 1px rgba(18, 58, 55, 0.38) inset;
 }
@@ -2944,9 +3212,11 @@ select {
 .hololive-talents-grid {
   display: grid;
   grid-template-columns: minmax(340px, 0.85fr) minmax(440px, 1.15fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .hololive-talents-panel {
@@ -3198,6 +3468,15 @@ select {
 }
 
 .hololive-custom-talent-list {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.hololive-custom-song-list {
+  grid-column: 1;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
@@ -5313,6 +5592,19 @@ select {
   white-space: nowrap;
 }
 
+.hololive-library-title-line em {
+  flex: 0 0 auto;
+  padding: 1px 5px 2px;
+  border: 1px solid rgba(118, 232, 255, 0.3);
+  border-radius: 999px;
+  color: #b7f4ff;
+  background: rgba(45, 149, 192, 0.13);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1;
+}
+
 .hololive-player-song-list li.active .hololive-player-song-main strong,
 .hololive-library-row.playing strong {
   color: #f2fdff;
@@ -6205,6 +6497,432 @@ select {
   font-size: 11.5px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.hololive-custom-song-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 26000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+  padding: 62px 14px 20px;
+  background: rgba(2, 9, 15, 0.68);
+  backdrop-filter: blur(2px);
+}
+
+.hololive-custom-song-sheet {
+  display: grid;
+  width: min(650px, calc(100vw - 28px));
+  min-width: 0;
+  overflow: visible;
+  border: 1px solid rgba(74, 188, 225, 0.44);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(7, 25, 37, 0.99), rgba(4, 16, 25, 0.99));
+  box-shadow:
+    0 24px 52px rgba(0, 0, 0, 0.56),
+    0 0 0 1px rgba(14, 68, 92, 0.34) inset;
+}
+
+.hololive-custom-song-head,
+.hololive-custom-song-actions,
+.hololive-custom-song-actions-left,
+.hololive-custom-song-actions-right,
+.hololive-custom-song-title,
+.hololive-custom-song-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.hololive-custom-song-head {
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid rgba(64, 171, 210, 0.2);
+  background: rgba(4, 19, 29, 0.84);
+}
+
+.hololive-custom-song-title {
+  min-width: 0;
+}
+
+.hololive-custom-song-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.hololive-custom-song-title-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(92, 209, 242, 0.34);
+  border-radius: 7px;
+  background: rgba(15, 56, 77, 0.58);
+  color: #9cecff;
+}
+
+.hololive-custom-song-head strong {
+  color: #f2fdff;
+  font-size: 13.5px;
+  font-weight: 880;
+  line-height: 1.15;
+}
+
+.hololive-custom-song-title span {
+  min-width: 0;
+  overflow: hidden;
+  color: #82cee1;
+  font-size: 10.5px;
+  font-weight: 760;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hololive-custom-song-head-actions > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid rgba(64, 171, 210, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 31, 45, 0.72);
+  color: #8ddfee;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.hololive-custom-song-close,
+.hololive-custom-song-source button,
+.hololive-custom-song-type button,
+.hololive-custom-song-actions button,
+.hololive-custom-song-picker > button {
+  border: 1px solid rgba(64, 171, 210, 0.34);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(12, 43, 60, 0.82), rgba(5, 22, 33, 0.9));
+  color: #dff8ff;
+  font-weight: 820;
+}
+
+.hololive-custom-song-close {
+  display: grid;
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.hololive-custom-song-close:hover,
+.hololive-custom-song-close:focus-visible {
+  border-color: rgba(122, 226, 255, 0.62);
+  background: rgba(18, 65, 88, 0.86);
+  outline: none;
+}
+
+.hololive-custom-song-source,
+.hololive-custom-song-section {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.hololive-custom-song-section {
+  border-top: 1px solid rgba(64, 171, 210, 0.16);
+}
+
+.hololive-custom-song-field,
+.hololive-custom-song-type-field,
+.hololive-custom-song-picker {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #82cee1;
+  font-size: 10px;
+  font-weight: 880;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.hololive-custom-song-field > span,
+.hololive-custom-song-type-field > span,
+.hololive-custom-song-picker > span,
+.hololive-custom-song-type-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 13px;
+}
+
+.hololive-custom-song-required {
+  color: #ff6f8f;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow: 0 0 10px rgba(255, 78, 117, 0.36);
+}
+
+.hololive-custom-song-url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.hololive-custom-song-field input,
+.hololive-custom-song-picker-menu input {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  border: 1px solid rgba(64, 171, 210, 0.34);
+  border-radius: 6px;
+  outline: none;
+  background: rgba(3, 14, 22, 0.78);
+  color: #f2fdff;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.hololive-custom-song-field input:focus,
+.hololive-custom-song-picker-menu input:focus {
+  border-color: rgba(122, 226, 255, 0.62);
+  box-shadow: 0 0 0 2px rgba(64, 171, 210, 0.12);
+}
+
+.hololive-custom-song-source button,
+.hololive-custom-song-actions button,
+.hololive-custom-song-type button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 31px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.hololive-custom-song-source button:hover,
+.hololive-custom-song-source button:focus-visible,
+.hololive-custom-song-actions button:hover,
+.hololive-custom-song-actions button:focus-visible,
+.hololive-custom-song-type button:hover,
+.hololive-custom-song-type button:focus-visible {
+  border-color: rgba(122, 226, 255, 0.58);
+  background: linear-gradient(180deg, rgba(20, 73, 98, 0.86), rgba(7, 29, 43, 0.94));
+  outline: none;
+}
+
+.hololive-custom-song-source button:disabled,
+.hololive-custom-song-actions button:disabled,
+.hololive-custom-song-type button:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.hololive-custom-song-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.hololive-custom-song-meta span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 7px 3px;
+  border: 1px solid rgba(64, 171, 210, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 30, 43, 0.62);
+  color: #a8eafa;
+  font-size: 10.5px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hololive-custom-song-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hololive-custom-song-type {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(78px, 112px));
+  align-items: center;
+  gap: 6px;
+}
+
+.hololive-custom-song-type button.selected,
+.hololive-custom-song-picker > button:hover,
+.hololive-custom-song-picker.open > button {
+  border-color: rgba(93, 212, 244, 0.68);
+  background: linear-gradient(180deg, rgba(31, 112, 146, 0.68), rgba(10, 45, 65, 0.92));
+  color: #ffffff;
+}
+
+.hololive-custom-song-picker {
+  position: relative;
+}
+
+.hololive-custom-song-picker > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 31px;
+  min-width: 0;
+  padding: 0 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hololive-custom-song-picker > button strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-transform: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hololive-custom-song-picker.open > button svg {
+  transform: rotate(180deg);
+}
+
+.hololive-custom-song-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 26020;
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: min(300px, 80vw);
+  max-height: clamp(140px, calc(100vh - 390px), 240px);
+  overflow: hidden;
+  padding: 5px 6px 6px;
+  border: 1px solid rgba(64, 171, 210, 0.44);
+  border-radius: 7px;
+  background: rgba(5, 18, 27, 0.98);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(13, 61, 80, 0.32) inset;
+  text-transform: none;
+}
+
+.hololive-custom-song-picker-menu > div {
+  display: grid;
+  gap: 0;
+  max-height: clamp(105px, calc(100vh - 445px), 175px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.hololive-custom-song-picker-menu button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  align-items: center;
+  min-height: 25px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #c9eff8;
+  padding: 3px 7px;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 760;
+  line-height: 1.25;
+  text-align: left;
+  text-transform: none;
+}
+
+.hololive-custom-song-picker-menu button svg {
+  opacity: 0;
+  color: #8ef2ff;
+}
+
+.hololive-custom-song-picker-menu button.selected svg {
+  opacity: 1;
+}
+
+.hololive-custom-song-picker-menu button:hover,
+.hololive-custom-song-picker-menu button:focus-visible,
+.hololive-custom-song-picker-menu button.selected {
+  background: rgba(45, 149, 192, 0.18);
+  color: #ffffff;
+  outline: none;
+}
+
+.hololive-custom-song-picker-menu button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.hololive-custom-song-picker-empty {
+  display: block;
+  padding: 6px 7px;
+  color: #82cee1;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.hololive-custom-song-actions {
+  justify-content: space-between;
+  min-height: 45px;
+  padding: 8px 10px 9px 12px;
+  border-top: 1px solid rgba(64, 171, 210, 0.2);
+  background: rgba(4, 17, 26, 0.74);
+}
+
+.hololive-custom-song-actions-left,
+.hololive-custom-song-actions-right {
+  min-width: 0;
+}
+
+.hololive-custom-song-actions button {
+  min-width: 68px;
+  padding-inline: 9px;
+}
+
+.hololive-custom-song-actions button.primary {
+  border-color: rgba(93, 212, 244, 0.58);
+  background: linear-gradient(180deg, rgba(35, 133, 173, 0.66), rgba(12, 53, 76, 0.94));
+}
+
+.hololive-custom-song-actions button.danger,
+.hololive-library-actions button.danger {
+  border-color: rgba(255, 105, 134, 0.44);
+  background: linear-gradient(180deg, rgba(116, 27, 49, 0.72), rgba(74, 16, 31, 0.86));
+  color: #ffd4dc;
+}
+
+@media (max-width: 720px) {
+  .hololive-custom-song-panel {
+    padding-inline: 10px;
+  }
+
+  .hololive-custom-song-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hololive-custom-song-url-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .hololive-library-bulk-actions {

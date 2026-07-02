@@ -131,6 +131,21 @@ function seedTableExists(seedDatabase: Database, tableName: string): boolean {
   );
 }
 
+function seedTableColumns(seedDatabase: Database, tableName: string): Set<string> {
+  return new Set(selectSeedRows<{ name: string }>(seedDatabase, `PRAGMA table_info(${quoteIdentifier(tableName)})`).map((row) => row.name));
+}
+
+function userOwnedMusicVideoIds(database: DatabaseService): Set<string> {
+  return new Set(
+    database
+      .select<{ youtube_video_id: string }>(
+        "SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'"
+      )
+      .map((row) => row.youtube_video_id)
+      .filter(Boolean)
+  );
+}
+
 function upsertRows(
   database: DatabaseService,
   tableName: string,
@@ -311,6 +326,7 @@ function pruneMissingOfficialMusicRows(
      FROM hololive_music_videos v
      INNER JOIN hololive_idols i ON i.id = v.idol_id
      WHERE i.source = 'official'
+       AND COALESCE(v.source_kind, 'official') = 'official'
      ORDER BY v.youtube_video_id`
   );
   const missingRows = rows.filter((row) => !officialYoutubeVideoIds.has(row.youtube_video_id));
@@ -389,7 +405,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
     const channelRows = seedTableExists(seedDatabase, "hololive_channels")
       ? selectSeedRows(seedDatabase, "SELECT * FROM hololive_channels ORDER BY id")
       : [];
-    const catalogRows = seedTableExists(seedDatabase, "catalog_items")
+    let catalogRows = seedTableExists(seedDatabase, "catalog_items")
       ? selectSeedRows(
           seedDatabase,
           `SELECT *
@@ -398,14 +414,14 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
            ORDER BY id`
         )
       : [];
-    const sourceRefRows = seedTableExists(seedDatabase, "source_refs")
+    let sourceRefRows = seedTableExists(seedDatabase, "source_refs")
       ? selectSeedRows(seedDatabase, `SELECT 'holodex-source:' || source_key AS id, item_id, source_id, source_key, detail_url, cover_url, created_at, updated_at
            FROM source_refs
            WHERE source_id = 'holodex'
              AND item_id IN (SELECT item_id FROM hololive_music_videos)
            ORDER BY source_key`)
       : [];
-    const tagRows = seedTableExists(seedDatabase, "item_tags")
+    let tagRows = seedTableExists(seedDatabase, "item_tags")
       ? selectSeedRows(
           seedDatabase,
           `SELECT item_id, tag
@@ -414,7 +430,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
            ORDER BY item_id, tag`
         )
       : [];
-    const trackedRows = seedTableExists(seedDatabase, "tracked_entries")
+    let trackedRows = seedTableExists(seedDatabase, "tracked_entries")
       ? selectSeedRows(seedDatabase, `SELECT 'official-tracked:' || item_id AS id, item_id, 'planned' AS status,
                   NULL AS rating, NULL AS notes, NULL AS started_at, NULL AS completed_at,
                   created_at, updated_at
@@ -422,26 +438,49 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
            WHERE item_id IN (SELECT item_id FROM hololive_music_videos)
            ORDER BY item_id`)
       : [];
-    const detailRows = seedTableExists(seedDatabase, "hololive_music_detail_cache")
+    let detailRows = seedTableExists(seedDatabase, "hololive_music_detail_cache")
       ? selectSeedRows(seedDatabase, "SELECT * FROM hololive_music_detail_cache ORDER BY youtube_video_id")
       : [];
-    const duplicateRows = seedTableExists(seedDatabase, "hololive_music_duplicate_removals")
+    let duplicateRows = seedTableExists(seedDatabase, "hololive_music_duplicate_removals")
       ? selectSeedRows(seedDatabase, `SELECT removed_youtube_video_id, removed_title, kept_youtube_video_id, kept_title, reason,
                   song_name, removed_published_at, kept_published_at, NULL AS source_run_id, updated_at
            FROM hololive_music_duplicate_removals
            ORDER BY removed_youtube_video_id`)
       : [];
-    const musicRows = seedTableExists(seedDatabase, "hololive_music_videos")
+    const seedMusicColumns = seedTableExists(seedDatabase, "hololive_music_videos")
+      ? seedTableColumns(seedDatabase, "hololive_music_videos")
+      : new Set<string>();
+    const sourceKindSelect = seedMusicColumns.has("source_kind") ? "source_kind" : "'official' AS source_kind";
+    let musicRows = seedTableExists(seedDatabase, "hololive_music_videos")
       ? selectSeedRows(seedDatabase, `SELECT youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id,
                   channel_id, channel_name, published_at, duration_seconds, song_name, original_channel_id,
                   provided_to_youtube, participants_json, participant_idol_ids_json, canonical_song_key,
-                  canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json, NULL AS source_run_id,
+                  canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json, ${sourceKindSelect}, NULL AS source_run_id,
                   updated_at
            FROM hololive_music_videos
+           WHERE ${seedMusicColumns.has("source_kind") ? "source_kind = 'official'" : "1 = 1"}
            ORDER BY youtube_video_id`)
       : [];
+    const userVideoIds = userOwnedMusicVideoIds(options.database);
+    if (userVideoIds.size > 0) {
+      musicRows = musicRows.filter((row) => !userVideoIds.has(String(row.youtube_video_id ?? "")));
+    }
+    const officialMusicItemIds = new Set(musicRows.map((row) => String(row.item_id ?? "")).filter(Boolean));
+    const officialMusicVideoIds = new Set(musicRows.map((row) => String(row.youtube_video_id ?? "")).filter(Boolean));
+    catalogRows = catalogRows.filter((row) => officialMusicItemIds.has(String(row.id ?? "")));
+    sourceRefRows = sourceRefRows.filter((row) => officialMusicItemIds.has(String(row.item_id ?? "")));
+    tagRows = tagRows.filter((row) => officialMusicItemIds.has(String(row.item_id ?? "")));
+    trackedRows = trackedRows.filter((row) => officialMusicItemIds.has(String(row.item_id ?? "")));
+    detailRows = detailRows.filter((row) => officialMusicVideoIds.has(String(row.youtube_video_id ?? "")));
+    duplicateRows = duplicateRows.filter((row) => {
+      const removedId = String(row.removed_youtube_video_id ?? "");
+      const keptId = String(row.kept_youtube_video_id ?? "");
+      return officialMusicVideoIds.has(removedId) && (!keptId || officialMusicVideoIds.has(keptId));
+    });
     const statsRows = seedTableExists(seedDatabase, "hololive_music_video_stats")
-      ? selectSeedRows(seedDatabase, "SELECT * FROM hololive_music_video_stats ORDER BY youtube_video_id")
+      ? selectSeedRows(seedDatabase, "SELECT * FROM hololive_music_video_stats ORDER BY youtube_video_id").filter((row) =>
+          officialMusicVideoIds.has(String(row.youtube_video_id ?? ""))
+        )
       : [];
     const imageCacheRows = seedTableExists(seedDatabase, "hololive_image_cache")
       ? selectSeedRows(seedDatabase, `SELECT c.*
@@ -496,6 +535,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         statsRows: upsertOfficialStats(options.database, statsRows),
         imageCacheRows: upsertRows(options.database, "hololive_image_cache", imageCacheRows, ["idol_id", "kind"])
       };
+      options.database.repairHololiveMusicClassifications();
 
       const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);
       prunedMissingRows = pruneResult.prunedMissingRows;

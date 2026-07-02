@@ -2103,6 +2103,40 @@ function HololiveSongList({
   const [pendingPlaylistId, setPendingPlaylistId] = useState<string | null>(null);
   const [confirmExcludeId, setConfirmExcludeId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!openMarkerId && !openPlaylistId) {
+      return;
+    }
+
+    function closeOpenMenus() {
+      setOpenMarkerId(null);
+      setOpenPlaylistId(null);
+      setConfirmExcludeId(null);
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".hololive-song-player-actions, .hololive-song-marker-cell")) {
+        return;
+      }
+      closeOpenMenus();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeOpenMenus();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [openMarkerId, openPlaylistId]);
+
   async function setMarker(item: HololiveProfileSongItem, marker: HololiveMusicMarker | null) {
     setPendingMarkerId(item.id);
     try {

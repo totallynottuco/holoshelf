@@ -167,38 +167,40 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
     }
   }
 
-  async function createBackup() {
+  async function exportBackup(): Promise<boolean> {
     setDataSafetyBusy(true);
     try {
-      const result = await api.invoke("app:data-backup:create", null);
+      const result = await api.invoke("app:data-backup:export", null);
       showToast({
-        message: result.filePath ? "Backup created" : "No backup was created",
+        message: result.exported ? "Backup exported" : "Export cancelled",
         detail: result.filePath ? fileNameFromPath(result.filePath) : undefined,
-        tone: result.filePath ? "success" : "info"
+        tone: result.exported ? "success" : "info"
       });
+      return result.exported;
     } catch (error) {
       showToast({
-        message: "Could not create a backup",
+        message: "Could not export backup",
         detail: error instanceof Error ? error.message : "Try again.",
         tone: "error"
       });
+      return false;
     } finally {
       setDataSafetyBusy(false);
     }
   }
 
-  async function performRestoreBackup() {
+  async function performImportBackup() {
     setDataSafetyBusy(true);
     try {
-      const result = await api.invoke("app:data-backup:restore", null);
+      const result = await api.invoke("app:data-backup:import", null);
       showToast({
-        message: result.restored ? "Backup restored" : "Restore cancelled",
-        detail: result.restored ? "Restarting Holoshelf." : undefined,
-        tone: result.restored ? "success" : "info"
+        message: result.imported ? "Backup imported" : "Import cancelled",
+        detail: result.imported ? "Restarting Holoshelf." : undefined,
+        tone: result.imported ? "success" : "info"
       });
     } catch (error) {
       showToast({
-        message: "Could not restore from backup",
+        message: "Could not import backup",
         detail: error instanceof Error ? error.message : "Try another backup file.",
         tone: "error"
       });
@@ -207,13 +209,13 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
     }
   }
 
-  function restoreBackup() {
+  function importBackup() {
     showToast({
-      message: "Restore from backup?",
-      detail: "Holoshelf creates a safety backup first, then restarts after restoring.",
+      message: "Import backup?",
+      detail: "This replaces local data with the selected backup after creating an internal safety backup.",
       tone: "info",
-      actionLabel: "Restore",
-      onAction: performRestoreBackup
+      actionLabel: "Import",
+      onAction: performImportBackup
     });
   }
 
@@ -240,9 +242,38 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
   function resetLocalData() {
     showToast({
       message: "Reset local data?",
-      detail: "Holoshelf creates a safety backup first, then returns this profile to bundled defaults.",
+      detail: "This will erase local tier lists, playlists, ratings, brackets, custom talents, and custom songs.",
       tone: "error",
-      actionLabel: "Reset",
+      actionLabel: "Continue",
+      onAction: offerResetBackupExport
+    });
+  }
+
+  async function exportBackupBeforeReset() {
+    const exported = await exportBackup();
+    if (exported) {
+      confirmResetLocalData();
+    }
+  }
+
+  function offerResetBackupExport() {
+    showToast({
+      message: "Export a backup first?",
+      detail: "Save a backup outside Holoshelf before erasing this local profile.",
+      tone: "error",
+      actionLabel: "Export backup",
+      onAction: exportBackupBeforeReset,
+      secondaryActionLabel: "Skip",
+      onSecondaryAction: confirmResetLocalData
+    });
+  }
+
+  function confirmResetLocalData() {
+    showToast({
+      message: "Are you sure?",
+      detail: "A safety backup is created first, then this profile is reset to bundled defaults.",
+      tone: "error",
+      actionLabel: "Erase data",
       onAction: performResetLocalData
     });
   }
@@ -400,16 +431,16 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                       <strong>Open data folder</strong>
                     </span>
                   </button>
-                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void createBackup()}>
+                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void exportBackup()}>
                     <Archive size={16} />
                     <span>
-                      <strong>Create backup</strong>
+                      <strong>Export backup</strong>
                     </span>
                   </button>
-                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void restoreBackup()}>
+                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void importBackup()}>
                     <Upload size={16} />
                     <span>
-                      <strong>Restore backup</strong>
+                      <strong>Import backup</strong>
                     </span>
                   </button>
                   <button className="settings-action-tile danger" disabled={dataSafetyBusy} onClick={() => void resetLocalData()}>

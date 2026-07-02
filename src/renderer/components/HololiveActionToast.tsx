@@ -11,6 +11,8 @@ interface HololiveToastRequest {
   tone?: HololiveToastTone;
   actionLabel?: string | null;
   onAction?: () => void | Promise<void>;
+  secondaryActionLabel?: string | null;
+  onSecondaryAction?: () => void | Promise<void>;
 }
 
 interface HololiveUndoToastRequest extends HololiveToastRequest {
@@ -82,6 +84,34 @@ export function HololiveActionToastProvider({ children }: { children: ReactNode 
     setToast((current) => (current ? { ...current, busy: true, error: null } : current));
     try {
       await toast.onAction();
+      setToast((current) => (current?.id === actionToastId ? null : current));
+    } catch (error) {
+      const retryId = crypto.randomUUID();
+      setToast((current) =>
+        current
+          ? {
+              ...current,
+              id: retryId,
+              busy: false,
+              fading: false,
+              error: error instanceof Error ? error.message : "That action failed."
+            }
+          : current
+      );
+      scheduleDismiss(retryId);
+    }
+  }
+
+  async function applySecondaryAction() {
+    if (!toast?.onSecondaryAction || toast.busy) {
+      return;
+    }
+
+    const actionToastId = toast.id;
+    clearTimers();
+    setToast((current) => (current ? { ...current, busy: true, error: null } : current));
+    try {
+      await toast.onSecondaryAction();
       setToast((current) => (current?.id === actionToastId ? null : current));
     } catch (error) {
       const retryId = crypto.randomUUID();
@@ -177,7 +207,20 @@ export function HololiveActionToastProvider({ children }: { children: ReactNode 
             >
               <span>{toast.busy ? "Working" : toast.actionLabel ?? "Confirm"}</span>
             </button>
-          ) : toast.undoToken ? (
+          ) : null}
+          {toast.onSecondaryAction ? (
+            <button
+              type="button"
+              disabled={toast.busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                void applySecondaryAction();
+              }}
+            >
+              <span>{toast.busy ? "Working" : toast.secondaryActionLabel ?? "Cancel"}</span>
+            </button>
+          ) : null}
+          {!toast.onAction && !toast.onSecondaryAction && toast.undoToken ? (
             <button
               type="button"
               disabled={toast.busy}

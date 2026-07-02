@@ -58,6 +58,7 @@ import {
 } from "../components/HololiveMusicText";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
 import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
+import { useDismissableLayer } from "../lib/useDismissableLayer";
 import { useHololivePlayer } from "../player/HololivePlayerContext";
 
 const LIBRARY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
@@ -140,6 +141,40 @@ export function HololivePlayerPage() {
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [libraryRefreshVersion, setLibraryRefreshVersion] = useState(0);
   const libraryRequestIdRef = useRef(0);
+  const playerPlaylistMenuRef = useRef<HTMLSpanElement | null>(null);
+  const playerMarkerMenuRef = useRef<HTMLSpanElement | null>(null);
+  const talentFilterRef = useRef<HTMLDivElement | null>(null);
+  const bulkActionsRef = useRef<HTMLDivElement | null>(null);
+
+  useDismissableLayer({
+    enabled: playerPlaylistOpen,
+    ref: playerPlaylistMenuRef,
+    onDismiss: () => setPlayerPlaylistOpen(false)
+  });
+
+  useDismissableLayer({
+    enabled: playerMarkerOpen,
+    ref: playerMarkerMenuRef,
+    onDismiss: () => {
+      setPlayerMarkerOpen(false);
+      setPlayerConfirmExclude(false);
+    }
+  });
+
+  useDismissableLayer({
+    enabled: talentFilterOpen,
+    ref: talentFilterRef,
+    onDismiss: () => {
+      setTalentFilterOpen(false);
+      setTalentFilterQuery("");
+    }
+  });
+
+  useDismissableLayer({
+    enabled: bulkPlaylistOpen,
+    ref: bulkActionsRef,
+    onDismiss: () => setBulkPlaylistOpen(false)
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -905,6 +940,7 @@ export function HololivePlayerPage() {
               </button>
               <span
                 className="hololive-player-control-menu"
+                ref={playerPlaylistMenuRef}
                 onBlur={(event) => {
                   if (!event.currentTarget.contains(event.relatedTarget)) {
                     setPlayerPlaylistOpen(false);
@@ -937,6 +973,7 @@ export function HololivePlayerPage() {
               </span>
               <span
                 className="hololive-player-control-menu"
+                ref={playerMarkerMenuRef}
                 onBlur={(event) => {
                   if (!event.currentTarget.contains(event.relatedTarget)) {
                     setPlayerMarkerOpen(false);
@@ -1256,6 +1293,7 @@ export function HololivePlayerPage() {
               />
               <div
                 className={["hololive-talent-filter", talentFilterOpen ? "open" : ""].filter(Boolean).join(" ")}
+                ref={talentFilterRef}
                 onBlur={(event) => {
                   const nextFocus = event.relatedTarget;
                   if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) {
@@ -1327,6 +1365,7 @@ export function HololivePlayerPage() {
               />
               <div
                 className="hololive-library-bulk-actions"
+                ref={bulkActionsRef}
                 onBlur={(event) => {
                   if (!event.currentTarget.contains(event.relatedTarget)) {
                     setBulkPlaylistOpen(false);
@@ -1383,6 +1422,7 @@ export function HololivePlayerPage() {
                     <div>
                       <span className="hololive-library-title-line">
                         <strong title={songTitle(row)}>{songTitle(row)}</strong>
+                        {row.sourceKind === "user" ? <em>Custom</em> : null}
                       </span>
                       <SongMetadata music={row} />
                     </div>
@@ -1505,6 +1545,7 @@ interface LibraryMarkerControlProps {
 
 function LibraryMarkerControl({ row, open, pending, onToggle, onSetMarker, onExclude }: LibraryMarkerControlProps) {
   const [confirmExclude, setConfirmExclude] = useState(false);
+  const menuRef = useRef<HTMLSpanElement | null>(null);
   const markerLabel = musicMarkerLabel(row.marker);
 
   useEffect(() => {
@@ -1513,9 +1554,19 @@ function LibraryMarkerControl({ row, open, pending, onToggle, onSetMarker, onExc
     }
   }, [open]);
 
+  useDismissableLayer({
+    enabled: open,
+    ref: menuRef,
+    onDismiss: () => {
+      setConfirmExclude(false);
+      onToggle();
+    }
+  });
+
   return (
     <span
       className="hololive-library-menu-cell hololive-library-marker-cell"
+      ref={menuRef}
       onBlur={(event) => {
         if (open && !event.currentTarget.contains(event.relatedTarget)) {
           setConfirmExclude(false);
@@ -1564,9 +1615,18 @@ interface LibraryPlaylistMenuProps {
 }
 
 function LibraryPlaylistMenu({ row, playlists, open, pending, onToggle, onAdd }: LibraryPlaylistMenuProps) {
+  const menuRef = useRef<HTMLSpanElement | null>(null);
+
+  useDismissableLayer({
+    enabled: open,
+    ref: menuRef,
+    onDismiss: onToggle
+  });
+
   return (
     <span
       className="hololive-library-menu-cell"
+      ref={menuRef}
       onBlur={(event) => {
         if (open && !event.currentTarget.contains(event.relatedTarget)) {
           onToggle();
@@ -1707,6 +1767,7 @@ function SortableSongItem({
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [confirmExclude, setConfirmExclude] = useState(false);
   const [pendingAction, setPendingAction] = useState<"marker" | "playlist" | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
   });
@@ -1717,6 +1778,16 @@ function SortableSongItem({
   const marker = item.music?.marker ?? null;
   const markerLabel = musicMarkerLabel(marker);
   const title = itemTitle(item);
+
+  useDismissableLayer({
+    enabled: markerOpen || playlistOpen,
+    ref: actionsRef,
+    onDismiss: () => {
+      setMarkerOpen(false);
+      setPlaylistOpen(false);
+      setConfirmExclude(false);
+    }
+  });
 
   async function setMarker(nextMarker: HololiveMusicMarker | null) {
     if (!onMarkerChange) {
@@ -1793,6 +1864,7 @@ function SortableSongItem({
       </button>
       <div
         className="hololive-player-song-actions"
+        ref={actionsRef}
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) {
             setMarkerOpen(false);

@@ -140,6 +140,7 @@ export interface HololiveProfileChannel {
 }
 
 export type HololiveMusicTopic = "Original_Song" | "Music_Cover";
+export type HololiveMusicSourceKind = "official" | "user";
 
 export type HololiveChannelKind = "idol" | "topic" | "group" | "unknown";
 
@@ -251,7 +252,24 @@ export interface HololiveMusicRow {
   viewCountFetchedAt?: string | null;
   markerKey: string;
   marker?: HololiveMusicMarker | null;
+  sourceKind?: HololiveMusicSourceKind | null;
   updatedAt: string;
+}
+
+export interface HololiveCustomSongPreview {
+  youtubeVideoId: string;
+  youtubeUrl: string;
+  title?: string | null;
+  songName?: string | null;
+  channelId?: string | null;
+  channelName?: string | null;
+  publishedAt?: string | null;
+  durationSeconds?: number | null;
+  viewCount?: number | null;
+  fetchedAt?: string | null;
+  thumbnailUrl?: string | null;
+  usedApi: boolean;
+  apiKeyMissing: boolean;
 }
 
 export type HololiveMusicRepeatMode = "off" | "all" | "one";
@@ -302,12 +320,26 @@ export type HololiveBracketSize = "RO16" | "RO32" | "RO64" | "RO128" | "RO256";
 export type HololiveBracketStatus = "active" | "complete";
 export type HololiveBracketGenerationStyle = "top_songs" | "random_songs";
 export type HololiveBracketRatingBucket = "unrated" | "favorite" | "like" | "neutral" | "dislike";
+export type HololiveBracketVocalScope = "solo" | "group";
+export type HololiveBracketTalentStatusFilter = "active" | "alumni" | "custom";
+export type HololiveBracketHistoryParticipation = "never" | "appeared" | "top8" | "top4" | "finalist" | "winner";
+
+export interface HololiveBracketCreateWarning {
+  code: "talent_cap_relaxed";
+  message: string;
+  requestedMaxEntriesPerTalent: number;
+}
 
 export interface HololiveBracketGenerationFilters {
   excludeDisliked?: boolean;
   excludeRated?: boolean;
   ratingBuckets?: HololiveBracketRatingBucket[];
   includedTalentIds?: string[];
+  vocalScopes?: HololiveBracketVocalScope[];
+  talentStatuses?: HololiveBracketTalentStatusFilter[];
+  historyParticipation?: HololiveBracketHistoryParticipation | null;
+  maxEntriesPerTalent?: number | null;
+  preferTopicSplitPerTalent?: boolean | null;
   excludeTopViewedPerTalent?: boolean;
   excludePreviousChampions?: boolean;
   excludePreviousFinalists?: boolean;

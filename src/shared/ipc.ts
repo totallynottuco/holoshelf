@@ -8,12 +8,14 @@ import type {
   HolodexChannel,
   HololiveBracket,
   HololiveBracketArchiveSummary,
+  HololiveBracketCreateWarning,
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketSize,
   HololiveBracketStatsOverview,
   HololiveBracketSummary,
   HololiveChannelRefreshResult,
+  HololiveCustomSongPreview,
   HololiveCustomTalentInput,
   HololiveCustomTalentPreview,
   HololiveCustomTalentRecord,
@@ -31,6 +33,7 @@ import type {
   HololiveMusicRepeatMode,
   HololiveMusicRefreshRun,
   HololiveMusicRow,
+  HololiveMusicSourceKind,
   HololiveMusicTopic,
   HololiveMusicVideoStatsRefreshResult,
   HololiveProfileMediaGroupId,
@@ -83,17 +86,16 @@ export interface OpenPathResponse {
   opened: boolean;
 }
 
-export interface DataSafetyBackupResponse {
-  created: boolean;
+export interface DataSafetyExportResponse {
+  exported: boolean;
   filePath: string | null;
-  reason: string;
-  skippedReason?: string;
+  canceled: boolean;
 }
 
-export interface DataSafetyRestoreResponse {
-  restored: boolean;
+export interface DataSafetyImportResponse {
+  imported: boolean;
   backupFilePath: string | null;
-  restoredFromPath?: string | null;
+  importedFromPath?: string | null;
   requiresRestart: boolean;
 }
 
@@ -255,6 +257,7 @@ export interface HololiveMusicLibraryRequest {
   topicId?: HololiveMusicTopic | null;
   marker?: HololiveMusicMarker | null;
   sort?: HololiveMusicLibrarySort | null;
+  sourceKind?: HololiveMusicSourceKind | null;
   talentId?: string | null;
   collabScope?: HololiveMusicLibraryCollabScope | null;
   offset?: number | null;
@@ -289,6 +292,29 @@ export interface HololiveMusicUnavailableResponse {
   replacementYoutubeVideoId?: string | null;
   replacementTitle?: string | null;
   data: HololiveMusicPlayerData;
+}
+
+export interface HololiveCustomSongPreviewRequest {
+  youtubeUrl: string;
+}
+
+export interface HololiveCustomSongUpsertRequest {
+  youtubeUrl: string;
+  title: string;
+  songName?: string | null;
+  topicId: HololiveMusicTopic;
+  ownerIdolIds: string[];
+  featuredIdolIds?: string[] | null;
+  channelId?: string | null;
+  channelName?: string | null;
+  publishedAt?: string | null;
+  durationSeconds?: number | null;
+  viewCount?: number | null;
+  fetchedAt?: string | null;
+}
+
+export interface HololiveCustomSongDeleteRequest {
+  youtubeVideoId: string;
 }
 
 export interface UndoableResponse<TData> {
@@ -412,6 +438,11 @@ export interface HololiveBracketCreateRequest {
   name?: string | null;
 }
 
+export interface HololiveBracketCreateResponse {
+  bracket: HololiveBracket;
+  warnings: HololiveBracketCreateWarning[];
+}
+
 export interface HololiveBracketGetRequest {
   bracketId: string;
 }
@@ -444,6 +475,7 @@ export interface HololiveUndoApplyRequest {
 
 export type HololiveUndoKind =
   | "music-exclusion"
+  | "custom-song-delete"
   | "playlist-item-remove"
   | "queue-item-remove"
   | "bracket-archive-delete"
@@ -488,13 +520,13 @@ export interface IpcChannelMap {
     request: OpenPathRequest;
     response: OpenPathResponse;
   };
-  "app:data-backup:create": {
+  "app:data-backup:export": {
     request: null;
-    response: DataSafetyBackupResponse;
+    response: DataSafetyExportResponse;
   };
-  "app:data-backup:restore": {
+  "app:data-backup:import": {
     request: null;
-    response: DataSafetyRestoreResponse;
+    response: DataSafetyImportResponse;
   };
   "app:data:reset": {
     request: null;
@@ -636,6 +668,18 @@ export interface IpcChannelMap {
     request: HololiveMusicUnavailableRequest;
     response: HololiveMusicUnavailableResponse;
   };
+  "hololive:custom-songs:preview": {
+    request: HololiveCustomSongPreviewRequest;
+    response: HololiveCustomSongPreview;
+  };
+  "hololive:custom-songs:upsert": {
+    request: HololiveCustomSongUpsertRequest;
+    response: HololiveMusicRow;
+  };
+  "hololive:custom-songs:delete": {
+    request: HololiveCustomSongDeleteRequest;
+    response: UndoableResponse<HololiveMusicPlayerData>;
+  };
   "hololive:channels:refresh": {
     request: null;
     response: HololiveChannelRefreshResult;
@@ -746,7 +790,7 @@ export interface IpcChannelMap {
   };
   "hololive:brackets:create": {
     request: HololiveBracketCreateRequest;
-    response: HololiveBracket;
+    response: HololiveBracketCreateResponse;
   };
   "hololive:brackets:get": {
     request: HololiveBracketGetRequest;

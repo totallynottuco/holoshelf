@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseService } from "./database";
 import { HolodexMusicService } from "./holodexMusicService";
-import { YouTubeVideoStatsService } from "./youtubeVideoStatsService";
+import { parseYouTubeVideoId, YouTubeVideoStatsService } from "./youtubeVideoStatsService";
 import { DEFAULT_HOLOLIVE_BOARD_NAME, DEFAULT_HOLOLIVE_TIERS, HOLOLIVE_IDOLS } from "../../src/modules/hololive/idols";
 import { normalizeVideoDetail } from "../../src/modules/hololive/music/cleanup";
-import type { HololiveBracket, HololiveCustomTalentPreview } from "../../src/shared/contracts";
+import type {
+  HololiveBracket,
+  HololiveBracketHistoryParticipation,
+  HololiveCustomTalentPreview,
+  HololiveMusicSourceKind,
+  HololiveMusicTopic
+} from "../../src/shared/contracts";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
 
 async function createTempDatabase(): Promise<DatabaseService> {
@@ -70,6 +76,7 @@ function seedHololiveBracketSong(
     viewCount: number;
     publishedAt?: string;
     canonicalPerformanceKey?: string;
+    sourceKind?: HololiveMusicSourceKind;
   }
 ): void {
   const now = new Date().toISOString();
@@ -95,8 +102,8 @@ function seedHololiveBracketSong(
        (youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id, channel_id, channel_name,
         published_at, duration_seconds, song_name, original_channel_id, provided_to_youtube,
         participants_json, participant_idol_ids_json, source_run_id, updated_at,
-        canonical_song_key, canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json)
-     VALUES (?, ?, ?, ?, ?, 'past', ?, ?, ?, ?, 210, ?, NULL, 0, ?, ?, NULL, ?, ?, ?, ?, '[]')`,
+        canonical_song_key, canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json, source_kind)
+     VALUES (?, ?, ?, ?, ?, 'past', ?, ?, ?, ?, 210, ?, NULL, 0, ?, ?, NULL, ?, ?, ?, ?, '[]', ?)`,
     [
       youtubeVideoId,
       itemId,
@@ -113,7 +120,8 @@ function seedHololiveBracketSong(
       now,
       `${input.idolId}:${input.topicId}`,
       canonicalPerformanceKey,
-      JSON.stringify([input.idolId])
+      JSON.stringify([input.idolId]),
+      input.sourceKind ?? "official"
     ]
   );
   database.upsertHololiveMusicVideoStats([
@@ -123,6 +131,88 @@ function seedHololiveBracketSong(
       fetchedAt: now
     }
   ]);
+}
+
+function archiveHololiveBracketVideos(
+  database: DatabaseService,
+  archiveId: string,
+  videos: Array<{
+    youtubeVideoId: string;
+    isChampion?: boolean;
+    isFinalist?: boolean;
+    isTop4?: boolean;
+    isTop8?: boolean;
+  }>
+): void {
+  const now = new Date().toISOString();
+  database.run(
+    `INSERT INTO hololive_bracket_archives
+       (id, source_bracket_id, name, size, generation_style, generation_filters_json, seed,
+        total_entries, total_matches, completed_matches, champion_youtube_video_id, champion_title,
+        champion_idol_id, champion_idol_name, created_at, completed_at, archived_at, updated_at)
+     VALUES (?, ?, ?, 'RO16', 'top_songs', '{}', ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?)`,
+    [archiveId, `${archiveId}:source`, archiveId, archiveId, videos.length, now, now, now, now]
+  );
+
+  videos.forEach((video, index) => {
+    const row = database.select<{
+      youtube_video_id: string;
+      title: string;
+      song_name: string | null;
+      topic_id: HololiveMusicTopic;
+      youtube_url: string;
+      channel_name: string;
+      idol_id: string;
+      canonical_performance_key: string;
+      published_at: string | null;
+      duration_seconds: number | null;
+      view_count: number | null;
+    }>(
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.youtube_url, v.channel_name,
+              v.idol_id, v.canonical_performance_key, v.published_at, v.duration_seconds, stats.view_count
+       FROM hololive_music_videos v
+       LEFT JOIN hololive_music_video_stats stats ON stats.youtube_video_id = v.youtube_video_id
+      WHERE v.youtube_video_id = ?`,
+      [video.youtubeVideoId]
+    )[0];
+    if (!row) {
+      throw new Error(`Missing archive seed video: ${video.youtubeVideoId}`);
+    }
+    const idol = database.listHololiveIdols().find((candidate) => candidate.id === row.idol_id);
+    if (!idol) {
+      throw new Error(`Missing archive seed video: ${video.youtubeVideoId}`);
+    }
+    database.run(
+      `INSERT INTO hololive_bracket_archive_entries
+         (id, archive_id, source_entry_id, slot_index, youtube_video_id, title_snapshot, song_name_snapshot,
+          topic_id, youtube_url_snapshot, channel_name_snapshot, idol_id_snapshot, idol_name_snapshot,
+          canonical_performance_key, view_count_snapshot, published_at_snapshot, duration_seconds_snapshot,
+          wins, losses, final_rank, eliminated_round_index, eliminated_by_youtube_video_id,
+          first_round_eliminated, is_champion, is_finalist, is_top4, is_top8, is_top16)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, 0, ?, ?, ?, ?, 0)`,
+      [
+        `${archiveId}:entry:${index}`,
+        archiveId,
+        index,
+        row.youtube_video_id,
+        row.title,
+        row.song_name,
+        row.topic_id,
+        row.youtube_url,
+        row.channel_name,
+        row.idol_id,
+        idol.displayName,
+        row.canonical_performance_key,
+        row.view_count,
+        row.published_at,
+        row.duration_seconds,
+        video.isChampion ? 1 : 0,
+        video.isFinalist || video.isChampion ? 1 : 0,
+        video.isTop4 || video.isFinalist || video.isChampion ? 1 : 0,
+        video.isTop8 || video.isTop4 || video.isFinalist || video.isChampion ? 1 : 0
+      ]
+    );
+  });
 }
 
 function expectNoFirstRoundSameTalent(bracket: HololiveBracket): void {
@@ -302,24 +392,35 @@ describe("DatabaseService", () => {
     expect(ids("solo")).toEqual(["tokino-sora-solo"]);
   });
 
-  it("creates manual backups and replaces the database only from valid SQLite files", async () => {
+  it("exports manual backups and replaces the database only from valid backup files", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-manual-backup-"));
     const databasePath = path.join(dir, "test.sqlite");
-    const replacementPath = path.join(dir, "replacement.sqlite");
+    const exportedPath = path.join(dir, "exports", "User Backup");
+    const replacementPath = path.join(dir, "replacement.holoshelf-backup");
+    const legacyReplacementPath = path.join(dir, "replacement.db");
     const database = await createTempDatabaseAt(databasePath);
     database.setSetting("data-safety.test", "original");
 
-    const backup = database.createManualDatabaseBackup("manual");
-    expect(backup.created).toBe(true);
-    expect(backup.filePath ? fs.existsSync(backup.filePath) : false).toBe(true);
+    const exported = database.exportDatabaseBackupToFile(exportedPath);
+    expect(exported).toMatchObject({ exported: true });
+    expect(exported.filePath).toBe(`${exportedPath}.holoshelf-backup`);
+    expect(fs.existsSync(exported.filePath)).toBe(true);
 
     const replacement = await createTempDatabaseAt(replacementPath);
     replacement.setSetting("data-safety.test", "replacement");
-    database.replaceDatabaseFromFile(replacementPath, "restore");
+    const importResult = database.replaceDatabaseFromFile(replacementPath, "import");
+    expect(importResult.backup.created).toBe(true);
+    expect(importResult.backup.filePath ? fs.existsSync(importResult.backup.filePath) : false).toBe(true);
 
     const reopened = await createTempDatabaseAt(databasePath);
     expect(reopened.getSettings()["data-safety.test"]).toBe("replacement");
-    expect(() => reopened.replaceDatabaseFromFile(path.join(dir, "missing.sqlite"), "restore")).toThrow(
+    const legacyReplacement = await createTempDatabaseAt(legacyReplacementPath);
+    legacyReplacement.setSetting("data-safety.test", "legacy");
+    reopened.replaceDatabaseFromFile(legacyReplacementPath, "import");
+
+    const reopenedLegacy = await createTempDatabaseAt(databasePath);
+    expect(reopenedLegacy.getSettings()["data-safety.test"]).toBe("legacy");
+    expect(() => reopenedLegacy.replaceDatabaseFromFile(path.join(dir, "missing.sqlite"), "import")).toThrow(
       "The selected file is not a valid Holoshelf SQLite database."
     );
   });
@@ -906,6 +1007,122 @@ describe("DatabaseService", () => {
     expect(bracket.entries.every((entry) => entry.topicId === "Music_Cover")).toBe(true);
   });
 
+  it("applies and relaxes max-per-talent bracket coverage", async () => {
+    const database = await createTempDatabase();
+    const capIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 16);
+
+    capIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `cap-channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "cap-original",
+        viewCount: 1_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `cap-channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "cap-cover",
+        viewCount: 900_000 - index
+      });
+    });
+
+    const cappedResult = database.createHololiveBracketResult({
+      size: "RO16",
+      filters: {
+        includedTalentIds: capIdols.map((idol) => idol.id),
+        maxEntriesPerTalent: 1
+      }
+    });
+    expect(cappedResult.warnings).toEqual([]);
+    expect(cappedResult.bracket.entries).toHaveLength(16);
+    expect(new Set(cappedResult.bracket.entries.map((entry) => entry.idolId)).size).toBe(16);
+    expectNoFirstRoundSameTalent(cappedResult.bracket);
+
+    const relaxedIdols = capIdols.slice(0, 8);
+    const relaxedResult = database.createHololiveBracketResult({
+      size: "RO16",
+      filters: {
+        includedTalentIds: relaxedIdols.map((idol) => idol.id),
+        maxEntriesPerTalent: 1
+      }
+    });
+    const relaxedCounts = new Map<string, number>();
+    for (const entry of relaxedResult.bracket.entries) {
+      relaxedCounts.set(entry.idolId, (relaxedCounts.get(entry.idolId) ?? 0) + 1);
+    }
+    expect(relaxedResult.warnings).toEqual([
+      expect.objectContaining({
+        code: "talent_cap_relaxed",
+        requestedMaxEntriesPerTalent: 1
+      })
+    ]);
+    expect(relaxedResult.bracket.entries).toHaveLength(16);
+    expect([...relaxedCounts.values()].some((count) => count > 1)).toBe(true);
+    expectNoFirstRoundSameTalent(relaxedResult.bracket);
+  });
+
+  it("uses the original-cover split preference when max-per-talent allows two entries", async () => {
+    const database = await createTempDatabase();
+    const splitIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 8);
+
+    splitIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `split-channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "split-original-a",
+        viewCount: 3_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `split-channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "split-original-b",
+        viewCount: 2_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `split-channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "split-cover",
+        viewCount: 1_000_000 - index
+      });
+    });
+
+    const splitPreferred = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        includedTalentIds: splitIdols.map((idol) => idol.id),
+        maxEntriesPerTalent: 2
+      }
+    });
+    const preferredEntriesByIdol = new Map<string, typeof splitPreferred.entries>();
+    for (const entry of splitPreferred.entries) {
+      preferredEntriesByIdol.set(entry.idolId, [...(preferredEntriesByIdol.get(entry.idolId) ?? []), entry]);
+    }
+    expect([...preferredEntriesByIdol.values()].every((entries) => new Set(entries.map((entry) => entry.topicId)).size === 2)).toBe(true);
+    expectNoFirstRoundSameTalent(splitPreferred);
+
+    const splitDisabled = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        includedTalentIds: splitIdols.map((idol) => idol.id),
+        maxEntriesPerTalent: 2,
+        preferTopicSplitPerTalent: false
+      }
+    });
+    expect(splitDisabled.generationFilters.preferTopicSplitPerTalent).toBe(false);
+    expect(splitDisabled.entries.every((entry) => entry.topicId === "Original_Song")).toBe(true);
+    expectNoFirstRoundSameTalent(splitDisabled);
+  });
+
   it("applies bracket creation filters before selecting entries", async () => {
     const database = await createTempDatabase();
     const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 24);
@@ -1023,6 +1240,147 @@ describe("DatabaseService", () => {
     expect(new Set(bracket.entries.map((entry) => entry.idolId))).toEqual(new Set(includedIdols.map((idol) => idol.id)));
     expect(bracket.entries.some((entry) => excludedIdols.some((idol) => entry.idolId === idol.id))).toBe(false);
     expectNoFirstRoundSameTalent(bracket);
+  });
+
+  it("filters bracket generation by talent status, including custom talents", async () => {
+    const database = await createTempDatabase();
+    const activeIdols = database
+      .listHololiveIdols()
+      .filter((idol) => idol.source === "official" && idol.status !== "alum" && idol.status !== "retired")
+      .slice(0, 8);
+    const alumniIdols = database
+      .listHololiveIdols()
+      .filter((idol) => idol.source === "official" && (idol.status === "alum" || idol.status === "retired"))
+      .slice(0, 8);
+    const customIdols = Array.from({ length: 8 }, (_, index) =>
+      database.upsertHololiveCustomTalent({
+        channelId: `custom-status-channel-${index}`,
+        displayName: `Custom Status ${index + 1}`,
+        slug: `custom-status-${index + 1}`,
+        branch: "Custom",
+        generation: "Custom",
+        officialUrl: `https://youtube.com/channel/custom-status-channel-${index}`,
+        iconUrl: "",
+        profileImageUrl: "",
+        youtubeChannelUrl: `https://youtube.com/channel/custom-status-channel-${index}`
+      }).idol
+    );
+
+    expect(activeIdols).toHaveLength(8);
+    expect(alumniIdols).toHaveLength(8);
+
+    const seedStatusSongs = (
+      idols: typeof activeIdols,
+      suffix: string,
+      baseViews: number,
+      sourceKind: HololiveMusicSourceKind = "official"
+    ) => {
+      idols.forEach((idol, index) => {
+        seedHololiveBracketSong(database, {
+          idolId: idol.id,
+          idolName: idol.displayName,
+          channelId: idol.youtubeChannelId ?? `${suffix}-channel-${index}`,
+          topicId: "Original_Song",
+          suffix: `${suffix}-original`,
+          viewCount: baseViews - index,
+          sourceKind
+        });
+        seedHololiveBracketSong(database, {
+          idolId: idol.id,
+          idolName: idol.displayName,
+          channelId: idol.youtubeChannelId ?? `${suffix}-channel-${index}`,
+          topicId: "Music_Cover",
+          suffix: `${suffix}-cover`,
+          viewCount: baseViews - 1_000 - index,
+          sourceKind
+        });
+      });
+    };
+
+    seedStatusSongs(activeIdols, "status-active", 3_000_000);
+    seedStatusSongs(alumniIdols, "status-alumni", 2_000_000);
+    seedStatusSongs(customIdols, "status-custom", 1_000_000, "user");
+
+    const activeBracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: { talentStatuses: ["active"] }
+    });
+    expect(activeBracket.entries).toHaveLength(16);
+    expect(new Set(activeBracket.entries.map((entry) => entry.idolId))).toEqual(new Set(activeIdols.map((idol) => idol.id)));
+    expectNoFirstRoundSameTalent(activeBracket);
+
+    const alumniBracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: { talentStatuses: ["alumni"] }
+    });
+    expect(alumniBracket.entries).toHaveLength(16);
+    expect(new Set(alumniBracket.entries.map((entry) => entry.idolId))).toEqual(new Set(alumniIdols.map((idol) => idol.id)));
+    expectNoFirstRoundSameTalent(alumniBracket);
+
+    const customBracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: { talentStatuses: ["custom"] }
+    });
+    expect(customBracket.entries).toHaveLength(16);
+    expect(new Set(customBracket.entries.map((entry) => entry.idolId))).toEqual(new Set(customIdols.map((idol) => idol.id)));
+    expectNoFirstRoundSameTalent(customBracket);
+  });
+
+  it("filters bracket generation by solo and group vocal scope", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 24);
+    const featuredIdol = officialIdols[23];
+    if (!featuredIdol) {
+      throw new Error("Expected enough official idols for vocal scope test");
+    }
+
+    officialIdols.forEach((idol, index) => {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: "vocal-solo",
+        viewCount: 2_000_000 - index
+      });
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Music_Cover",
+        suffix: "vocal-group",
+        viewCount: 1_000_000 - index
+      });
+      database.run(
+        `UPDATE hololive_music_videos
+         SET title = ?, song_name = ?, canonical_song_key = ?
+        WHERE youtube_video_id = ?`,
+        [
+          `${idol.displayName} & ${featuredIdol.displayName} Cover`,
+          `Vocal Group Song & ${featuredIdol.displayName}`,
+          `vocal group song and ${featuredIdol.id}`,
+          `${idol.id}-vocal-group`
+        ]
+      );
+    });
+
+    const soloBracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: { vocalScopes: ["solo"] }
+    });
+    expect(soloBracket.generationFilters.vocalScopes).toEqual(["solo"]);
+    expect(soloBracket.entries).toHaveLength(16);
+    expect(soloBracket.entries.every((entry) => entry.youtubeVideoId.endsWith("-vocal-solo"))).toBe(true);
+    expectNoFirstRoundSameTalent(soloBracket);
+
+    const groupBracket = database.createHololiveBracket({
+      size: "RO16",
+      filters: { vocalScopes: ["group"] }
+    });
+    expect(groupBracket.generationFilters.vocalScopes).toEqual(["group"]);
+    expect(groupBracket.entries).toHaveLength(16);
+    expect(groupBracket.entries.every((entry) => entry.youtubeVideoId.endsWith("-vocal-group"))).toBe(true);
+    expectNoFirstRoundSameTalent(groupBracket);
   });
 
   it("treats an explicit empty talent filter as no selected talents", async () => {
@@ -1285,6 +1643,52 @@ describe("DatabaseService", () => {
     expectNoFirstRoundSameTalent(bracket);
   });
 
+  it("filters bracket generation by history participation tier", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 16);
+    const historySuffixes = ["history-never", "history-appeared", "history-top8", "history-top4", "history-finalist", "history-winner"];
+
+    officialIdols.forEach((idol, idolIndex) => {
+      historySuffixes.forEach((suffix, suffixIndex) => {
+        seedHololiveBracketSong(database, {
+          idolId: idol.id,
+          idolName: idol.displayName,
+          channelId: idol.youtubeChannelId ?? `history-channel-${idol.id}`,
+          topicId: "Original_Song",
+          suffix,
+          viewCount: 6_000_000 - suffixIndex * 100_000 - idolIndex,
+          canonicalPerformanceKey: `${idol.id}:${suffix}`
+        });
+      });
+    });
+
+    archiveHololiveBracketVideos(database, "history-participation-archive", [
+      ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-appeared` })),
+      ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-top8`, isTop8: true })),
+      ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-top4`, isTop4: true })),
+      ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-finalist`, isFinalist: true })),
+      ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-winner`, isChampion: true }))
+    ]);
+
+    const expectSuffix = (mode: HololiveBracketHistoryParticipation, allowed: string[]) => {
+      const bracket = database.createHololiveBracket({
+        size: "RO16",
+        filters: { historyParticipation: mode }
+      });
+      expect(bracket.generationFilters.historyParticipation).toBe(mode);
+      expect(bracket.entries).toHaveLength(16);
+      expect(bracket.entries.every((entry) => allowed.some((suffix) => entry.youtubeVideoId.endsWith(suffix)))).toBe(true);
+      expectNoFirstRoundSameTalent(bracket);
+    };
+
+    expectSuffix("never", ["history-never"]);
+    expectSuffix("appeared", ["history-appeared", "history-top8", "history-top4", "history-finalist", "history-winner"]);
+    expectSuffix("top8", ["history-top8", "history-top4", "history-finalist", "history-winner"]);
+    expectSuffix("top4", ["history-top4", "history-finalist", "history-winner"]);
+    expectSuffix("finalist", ["history-finalist", "history-winner"]);
+    expectSuffix("winner", ["history-winner"]);
+  });
+
   it("refuses to create a bracket when first-round same-talent matchups are unavoidable", async () => {
     const database = await createTempDatabase();
     const idol = database.listHololiveIdols().find((candidate) => candidate.source === "official");
@@ -1464,6 +1868,82 @@ describe("DatabaseService", () => {
       videoCount: 188,
       clipCount: 91
     });
+  });
+
+  it("resolves YouTube handles from channel metadata instead of unrelated channel ids", async () => {
+    const database = await createTempDatabase();
+    const requests: string[] = [];
+    const leeAndLieChannelId = "UC8THb_fnOptyVgpi3xuCd-A";
+    const vodsChannelId = "UCPnT8Fa3khqsILlxhxcCKHA";
+    const fetcher = (async (url: Parameters<typeof fetch>[0]) => {
+      const href = String(url);
+      requests.push(href);
+      if (href === "https://www.youtube.com/@LeeandLie") {
+        return new Response(
+          `<!doctype html>
+          <html><head><link rel="canonical" href="https://www.youtube.com/@LeeandLie"></head>
+          <body>
+            {"metadata":{"channelMetadataRenderer":{"title":"LeeandLie","externalId":"${leeAndLieChannelId}","vanityChannelUrl":"http://www.youtube.com/@LeeandLie","ownerUrls":["http://www.youtube.com/@LeeandLie"]}}}
+            {"channelRenderer":{"channelId":"${vodsChannelId}","title":{"simpleText":"LeeandLie VODS"}}}
+          </body></html>`,
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (href.includes(`/api/v2/channels/${leeAndLieChannelId}`)) {
+        return new Response(
+          JSON.stringify({
+            id: leeAndLieChannelId,
+            name: "LeeandLie",
+            english_name: "LeeandLie",
+            type: "vtuber",
+            org: "Independents",
+            group: "",
+            photo: "https://example.com/leeandlie.png",
+            twitter: "LeeandLie",
+            video_count: "100",
+            subscriber_count: "1,000,000",
+            clip_count: "0",
+            inactive: false
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      throw new Error(`Unexpected request: ${href}`);
+    }) as typeof fetch;
+    const service = new HolodexMusicService(database, fetcher);
+
+    const preview = await service.resolveCustomTalent({ channelInput: "@LeeandLie" });
+
+    expect(requests).toEqual([
+      "https://www.youtube.com/@LeeandLie",
+      expect.stringContaining(`/api/v2/channels/${leeAndLieChannelId}`)
+    ]);
+    expect(requests.some((request) => request.includes(vodsChannelId))).toBe(false);
+    expect(preview).toMatchObject({
+      channelId: leeAndLieChannelId,
+      displayName: "LeeandLie",
+      youtubeChannelUrl: `https://www.youtube.com/channel/${leeAndLieChannelId}`
+    });
+  });
+
+  it("rejects YouTube handle lookups that resolve to a different handle", async () => {
+    const database = await createTempDatabase();
+    const fetcher = (async (url: Parameters<typeof fetch>[0]) => {
+      const href = String(url);
+      expect(href).toBe("https://www.youtube.com/@LeeandLie");
+      return new Response(
+        `<!doctype html>
+        <html><head><link rel="canonical" href="https://www.youtube.com/@LeeandLieVODS"></head>
+        <body>{"metadata":{"channelMetadataRenderer":{"title":"LeeandLie VODS","externalId":"UCPnT8Fa3khqsILlxhxcCKHA","ownerUrls":["http://www.youtube.com/@LeeandLieVODS"]}}}</body></html>`,
+        { status: 200, headers: { "Content-Type": "text/html" } }
+      );
+    }) as typeof fetch;
+    const service = new HolodexMusicService(database, fetcher);
+
+    await expect(service.resolveCustomTalent({ channelInput: "@LeeandLie" })).rejects.toThrow(
+      /resolved @LeeandLie to @LeeandLieVODS/
+    );
   });
 
   it("persists Hololive idol moves and placement ordering", async () => {
@@ -2290,6 +2770,91 @@ describe("DatabaseService", () => {
       updatedAt: null
     });
     expect(reopened.listHololiveMusicRows({ query: "Sora Marker Song" })[0].marker).toBeNull();
+  });
+
+  it("stores referenced Hololive performers as featured talents during music import", async () => {
+    const database = await createTempDatabase();
+    const bundle: HolodexArtifactBundle = {
+      rows: [
+        {
+          youtubeVideoId: "saikai-feature",
+          youtubeUrl: "https://www.youtube.com/watch?v=saikai-feature",
+          title: "【COVER】SAIKAI | 再会【Moona x Suisei Hoshimachi | ムーナ/星街すいせい】",
+          status: "past",
+          topicId: "Music_Cover",
+          channelId: "UCP0BspO_AMEe3aQqqpo89Dg",
+          channelName: "Moona Hoshinova hololive-ID",
+          publishedAt: "2021-12-03T12:00:13.000Z"
+        }
+      ],
+      detailCache: {
+        "saikai-feature": normalizeVideoDetail("saikai-feature", {
+          youtubeVideoId: "saikai-feature",
+          channelId: "UCP0BspO_AMEe3aQqqpo89Dg",
+          duration: 243,
+          songNames: ["再会 / Saikai (feat. Hoshimachi Suisei)"],
+          mentions: [
+            {
+              channelId: "UC5CwaMl1eIgY8h02uZw7u8A",
+              name: "Suisei Channel",
+              englishName: "Hoshimachi Suisei",
+              type: "vtuber",
+              photoUrl: "",
+              org: "Hololive"
+            }
+          ],
+          relationshipsLoaded: true
+        })
+      },
+      duplicateRemovals: []
+    };
+
+    database.importHolodexMusicArtifacts(bundle, "live");
+    const row = database.listHololiveMusicRows({ youtubeVideoIds: ["saikai-feature"] })[0];
+    const suiseiFeaturedItems = database
+      .getHololiveIdolProfile("hoshimachi-suisei")
+      .mediaGroups.find((group) => group.id === "featured-in")
+      ?.items ?? [];
+
+    expect(row.ownedIdolIds).toEqual(["moona-hoshinova"]);
+    expect(row.featuredIdolIds).toEqual(["hoshimachi-suisei"]);
+    expect(row.participants.some((participant) => participant.idolId === "hoshimachi-suisei")).toBe(true);
+    expect(suiseiFeaturedItems.some((item) => item.id === "saikai-feature")).toBe(true);
+  });
+
+  it("repairs stale featured talent metadata during database startup backfill", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-feature-backfill-"));
+    const databasePath = path.join(dir, "test.sqlite");
+    const database = await createTempDatabaseAt(databasePath);
+    seedHololiveBracketSong(database, {
+      idolId: "moona-hoshinova",
+      idolName: "Moona Hoshinova",
+      channelId: "UCP0BspO_AMEe3aQqqpo89Dg",
+      topicId: "Music_Cover",
+      suffix: "stale-feature",
+      viewCount: 1_000_000
+    });
+    database.run(
+      `UPDATE hololive_music_videos
+       SET title = ?, song_name = ?, canonical_song_key = ?, canonical_performance_key = ?, featured_idol_ids_json = ?
+       WHERE youtube_video_id = ?`,
+      [
+        "【COVER】SAIKAI | 再会【Moona x Suisei Hoshimachi | ムーナ/星街すいせい】",
+        "再会 / Saikai (feat. Hoshimachi Suisei)",
+        "再会",
+        "Music_Cover:再会:moona-hoshinova",
+        "[]",
+        "moona-hoshinova-stale-feature"
+      ]
+    );
+    database.flush();
+
+    const reopened = await createTempDatabaseAt(databasePath);
+    const row = reopened.listHololiveMusicRows({ youtubeVideoIds: ["moona-hoshinova-stale-feature"] })[0];
+
+    expect(row.ownedIdolIds).toEqual(["moona-hoshinova"]);
+    expect(row.featuredIdolIds).toEqual(["hoshimachi-suisei"]);
+    expect(row.participants.some((participant) => participant.idolId === "hoshimachi-suisei")).toBe(true);
   });
 
   it("refreshes YouTube view counts into durable music stats", async () => {
@@ -3434,6 +3999,252 @@ describe("DatabaseService", () => {
     expect(requestedUrls.every((requestUrl) => !requestUrl.includes("/api/v2/search/videoSearch"))).toBe(true);
   });
 
+  it("imports recent custom talent song uploads even before Holodex topic tagging catches up", async () => {
+    const database = await createTempDatabase();
+    database.upsertHololiveCustomTalent({
+      channelId: "UCdQYcUyffHZoz0KOwuiG0lQ",
+      displayName: "Soraduki Tyra",
+      nativeName: "宙月ティラ",
+      slug: "soraduki-tyra",
+      branch: "Independents",
+      generation: "",
+      officialUrl: "https://www.youtube.com/channel/UCdQYcUyffHZoz0KOwuiG0lQ",
+      iconUrl: "",
+      profileImageUrl: "",
+      youtubeChannelUrl: "https://www.youtube.com/channel/UCdQYcUyffHZoz0KOwuiG0lQ",
+      xHandle: null,
+      xUrl: null,
+      subscriberCount: 139000,
+      videoCount: 721,
+      clipCount: null,
+      originalSongsUrl: null,
+      coversUrl: null
+    });
+
+    const service = new HolodexMusicService(
+      database,
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl === "https://holodex.net/api/v2/channels/UCdQYcUyffHZoz0KOwuiG0lQ") {
+          return new Response(
+            JSON.stringify({
+              id: "UCdQYcUyffHZoz0KOwuiG0lQ",
+              name: "宙月ティラ",
+              english_name: "Soraduki Tyra",
+              type: "vtuber",
+              org: "Independents",
+              group: "",
+              video_count: 721,
+              subscriber_count: 139000,
+              clip_count: null,
+              inactive: false
+            })
+          );
+        }
+
+        if (requestUrl.startsWith("https://holodex.net/api/v2/search/videoSearch")) {
+          expect(init?.method).toBe("POST");
+          return new Response(JSON.stringify({ total: 0, items: [] }));
+        }
+
+        if (requestUrl.startsWith("https://holodex.net/api/v2/channels/UCdQYcUyffHZoz0KOwuiG0lQ/videos")) {
+          return new Response(
+            JSON.stringify({
+              total: 1,
+              items: [
+                {
+                  id: "Z-iwk3LHFdI",
+                  title: "アフターグロウ / Astrabirth (buzzG × 宙月ティラ)【#VocaDuo2026】",
+                  type: "stream",
+                  status: "past",
+                  topic_id: "",
+                  published_at: "2026-07-01T11:00:06.000Z",
+                  duration: 260,
+                  songs: [],
+                  mentions: [],
+                  channel_id: "UCdQYcUyffHZoz0KOwuiG0lQ",
+                  channel: {
+                    id: "UCdQYcUyffHZoz0KOwuiG0lQ",
+                    name: "宙月ティラ",
+                    english_name: "Soraduki Tyra",
+                    org: "Independents",
+                    type: "vtuber"
+                  }
+                }
+              ]
+            })
+          );
+        }
+
+        if (requestUrl.startsWith("https://holodex.net/api/v2/videos/Z-iwk3LHFdI")) {
+          return new Response(
+            JSON.stringify({
+              id: "Z-iwk3LHFdI",
+              channel_id: "UCdQYcUyffHZoz0KOwuiG0lQ",
+              duration: 260,
+              original_channel_id: "",
+              description: "",
+              songs: [{ name: "アフターグロウ / Astrabirth" }],
+              mentions: [],
+              channel: {
+                id: "UCdQYcUyffHZoz0KOwuiG0lQ",
+                name: "宙月ティラ",
+                english_name: "Soraduki Tyra",
+                org: "Independents",
+                type: "vtuber"
+              }
+            })
+          );
+        }
+
+        return new Response(null, { status: 404 });
+      }) as typeof fetch
+    );
+
+    const result = await service.refreshCustomTalent({
+      idolId: "custom-soraduki-tyra",
+      includeCollabs: false,
+      includeRelationships: true
+    });
+    const rows = database.listHololiveMusicRows({ youtubeVideoIds: ["Z-iwk3LHFdI"] });
+
+    expect(result.importedRows).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      youtubeVideoId: "Z-iwk3LHFdI",
+      idolId: "custom-soraduki-tyra",
+      title: "アフターグロウ / Astrabirth (buzzG × 宙月ティラ)【#VocaDuo2026】",
+      topicId: "Original_Song",
+      sourceKind: "user"
+    });
+  });
+
+  it("keeps custom talent refresh working when the recent upload scan fails", async () => {
+    const database = await createTempDatabase();
+    const progressMessages: string[] = [];
+    const channelId = "UCstableCustomChannel123456789";
+    database.upsertHololiveCustomTalent({
+      channelId,
+      displayName: "Stable Custom",
+      nativeName: "Stable Custom",
+      slug: "stable-custom",
+      branch: "Custom",
+      generation: "",
+      officialUrl: `https://www.youtube.com/channel/${channelId}`,
+      iconUrl: "",
+      profileImageUrl: "",
+      youtubeChannelUrl: `https://www.youtube.com/channel/${channelId}`,
+      xHandle: null,
+      xUrl: null,
+      subscriberCount: null,
+      videoCount: null,
+      clipCount: null,
+      originalSongsUrl: null,
+      coversUrl: null
+    });
+
+    const service = new HolodexMusicService(
+      database,
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl === `https://holodex.net/api/v2/channels/${channelId}`) {
+          return new Response(
+            JSON.stringify({
+              id: channelId,
+              name: "Stable Custom",
+              english_name: "Stable Custom",
+              type: "vtuber",
+              org: "Custom",
+              group: "",
+              video_count: 1,
+              subscriber_count: null,
+              clip_count: null,
+              inactive: false
+            })
+          );
+        }
+
+        if (requestUrl.startsWith("https://holodex.net/api/v2/search/videoSearch")) {
+          const payload = JSON.parse(String(init?.body ?? "{}")) as { topic?: string[] };
+          if (payload.topic?.includes("Original_Song")) {
+            return new Response(
+              JSON.stringify({
+                total: 1,
+                items: [
+                  {
+                    id: "stable-song",
+                    title: "Stable Song",
+                    type: "stream",
+                    status: "past",
+                    topic_id: "Original_Song",
+                    published_at: "2026-07-01T12:00:00.000Z",
+                    duration: 180,
+                    songs: [],
+                    mentions: [],
+                    channel_id: channelId,
+                    channel: {
+                      id: channelId,
+                      name: "Stable Custom",
+                      english_name: "Stable Custom",
+                      org: "Custom",
+                      type: "vtuber"
+                    }
+                  }
+                ]
+              })
+            );
+          }
+          return new Response(JSON.stringify({ total: 0, items: [] }));
+        }
+
+        if (requestUrl.startsWith(`https://holodex.net/api/v2/channels/${channelId}/videos`)) {
+          return new Response("temporary unavailable", { status: 503 });
+        }
+
+        if (requestUrl.startsWith("https://holodex.net/api/v2/videos/stable-song")) {
+          return new Response(
+            JSON.stringify({
+              id: "stable-song",
+              channel_id: channelId,
+              duration: 180,
+              original_channel_id: "",
+              description: "",
+              songs: [{ name: "Stable Song" }],
+              mentions: [],
+              channel: {
+                id: channelId,
+                name: "Stable Custom",
+                english_name: "Stable Custom",
+                org: "Custom",
+                type: "vtuber"
+              }
+            })
+          );
+        }
+
+        return new Response(null, { status: 404 });
+      }) as typeof fetch,
+      (message) => progressMessages.push(message)
+    );
+
+    const result = await service.refreshCustomTalent({
+      idolId: "custom-stable-custom",
+      includeCollabs: false,
+      includeRelationships: true
+    });
+    const rows = database.listHololiveMusicRows({ youtubeVideoIds: ["stable-song"] });
+
+    expect(result.importedRows).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      youtubeVideoId: "stable-song",
+      idolId: "custom-stable-custom",
+      topicId: "Original_Song",
+      sourceKind: "user"
+    });
+    expect(progressMessages.some((message) => message.includes("recent scan skipped"))).toBe(true);
+  });
+
   it("imports group-channel music as featured for individual profile shelves", async () => {
     const database = await createTempDatabase();
     database.refreshHolodexChannels([
@@ -4489,5 +5300,368 @@ describe("DatabaseService", () => {
     ]);
     expect(database.listHololiveMusicRows({ idolId: "fuwawa-abyssgard" })).toHaveLength(1);
     expect(database.listHololiveMusicRows({ idolId: "mococo-abyssgard" })).toHaveLength(1);
+  });
+
+  it("parses YouTube links and supports no-key custom song preview", async () => {
+    const database = await createTempDatabase();
+    const service = new YouTubeVideoStatsService(database);
+
+    expect(parseYouTubeVideoId("https://www.youtube.com/watch?v=abcDEF12345")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("https://youtu.be/abcDEF12345?t=30")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("https://www.youtube.com/shorts/abcDEF12345")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("https://www.youtube.com/embed/abcDEF12345")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("https://m.youtube.com/live/abcDEF12345")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("abcDEF12345")).toBe("abcDEF12345");
+    expect(parseYouTubeVideoId("https://notyoutube.com/watch?v=abcDEF12345")).toBeNull();
+    expect(parseYouTubeVideoId("https://youtube.com.evil.test/watch?v=abcDEF12345")).toBeNull();
+
+    const preview = await service.previewCustomSong({ youtubeUrl: "https://youtu.be/abcDEF12345" });
+    expect(preview).toMatchObject({
+      youtubeVideoId: "abcDEF12345",
+      youtubeUrl: "https://www.youtube.com/watch?v=abcDEF12345",
+      usedApi: false,
+      apiKeyMissing: true
+    });
+  });
+
+  it("fetches custom song metadata and rejects unavailable YouTube videos when an API key is available", async () => {
+    const database = await createTempDatabase();
+    database.setSetting("sources.youtubeApiKey", "test-youtube-key");
+    const service = new YouTubeVideoStatsService(database, {
+      fetcher: async (url) => {
+        const id = new URL(String(url)).searchParams.get("id");
+        return new Response(
+          JSON.stringify({
+            items:
+              id === "private1234"
+                ? [
+                    {
+                      id,
+                      status: { uploadStatus: "processed", privacyStatus: "private", embeddable: true }
+                    }
+                  ]
+                : [
+                    {
+                      id,
+                      snippet: {
+                        title: "Fetched Custom Song",
+                        channelId: "UCcustomSong",
+                        channelTitle: "Custom Song Channel",
+                        publishedAt: "2026-07-01T00:00:00.000Z"
+                      },
+                      contentDetails: { duration: "PT3M21S" },
+                      statistics: { viewCount: "123456" },
+                      status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+                    }
+                  ]
+          }),
+          { status: 200 }
+        );
+      }
+    });
+
+    await expect(service.previewCustomSong({ youtubeUrl: "https://youtu.be/private1234" })).rejects.toThrow("private");
+    await expect(service.previewCustomSong({ youtubeUrl: "https://youtu.be/abcDEF12345" })).resolves.toMatchObject({
+      youtubeVideoId: "abcDEF12345",
+      title: "Fetched Custom Song",
+      channelId: "UCcustomSong",
+      channelName: "Custom Song Channel",
+      durationSeconds: 201,
+      viewCount: 123456,
+      usedApi: true,
+      apiKeyMissing: false
+    });
+  });
+
+  it("imports, edits, deletes, and restores custom YouTube songs without losing user state", async () => {
+    const database = await createTempDatabase();
+    const row = database.upsertHololiveCustomSong({
+      youtubeUrl: "https://youtu.be/customVid01",
+      title: "My Custom Song",
+      songName: "My Custom Song",
+      topicId: "Original_Song",
+      ownerIdolIds: ["tokino-sora"],
+      featuredIdolIds: ["roboco-san"],
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-01",
+      viewCount: 987654,
+      fetchedAt: "2026-07-01T00:00:00.000Z"
+    });
+    const playlistId = database.createHololiveMusicPlaylist("Custom Playlist").playlists.find((playlist) => playlist.name === "Custom Playlist")?.id ?? "";
+
+    database.setHololiveMusicMarker({ youtubeVideoId: row.youtubeVideoId, marker: "favorite" });
+    database.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: row.youtubeVideoId });
+    database.addHololiveMusicQueueItem({ youtubeVideoId: row.youtubeVideoId, placement: "end" });
+
+    const edited = database.upsertHololiveCustomSong({
+      youtubeUrl: row.youtubeUrl,
+      title: "My Custom Song Edited",
+      songName: "My Custom Song Edited",
+      topicId: "Music_Cover",
+      ownerIdolIds: ["tokino-sora"],
+      featuredIdolIds: [],
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-02",
+      viewCount: 987655,
+      fetchedAt: "2026-07-01T00:01:00.000Z"
+    });
+
+    expect(edited).toMatchObject({
+      youtubeVideoId: "customVid01",
+      title: "My Custom Song Edited",
+      topicId: "Music_Cover",
+      publishedAt: "2026-07-02T00:00:00.000Z",
+      sourceKind: "user",
+      marker: "favorite"
+    });
+    expect(database.getHololiveMusicPlayerData().queue.map((item) => item.youtubeVideoId)).toEqual(["customVid01"]);
+    expect(
+      database.getHololiveMusicPlayerData().playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)
+    ).toEqual(["customVid01"]);
+
+    database.deleteHololiveCustomSong("customVid01");
+    expect(database.listHololiveMusicRows({ youtubeVideoIds: ["customVid01"] })).toHaveLength(0);
+    const undo = database.consumeLatestHololiveUndo("custom-song-delete");
+    expect(undo?.undoToken).toBeTruthy();
+    database.applyHololiveUndo(undo?.undoToken ?? "");
+
+    expect(database.listHololiveMusicRows({ youtubeVideoIds: ["customVid01"] })[0]).toMatchObject({
+      youtubeVideoId: "customVid01",
+      sourceKind: "user",
+      marker: "favorite"
+    });
+    expect(database.getHololiveMusicPlayerData().queue.map((item) => item.youtubeVideoId)).toEqual(["customVid01"]);
+  });
+
+  it("requires and normalizes custom song published dates", async () => {
+    const database = await createTempDatabase();
+    const baseInput = {
+      youtubeUrl: "https://youtu.be/customDate1",
+      title: "Published Date Song",
+      songName: "Published Date Song",
+      topicId: "Original_Song" as const,
+      ownerIdolIds: ["tokino-sora"],
+      channelName: "Manual Channel"
+    };
+
+    expect(() => database.upsertHololiveCustomSong(baseInput)).toThrow("published date is required");
+    expect(() => database.upsertHololiveCustomSong({ ...baseInput, publishedAt: "not a date" })).toThrow("YYYY-MM-DD");
+
+    const row = database.upsertHololiveCustomSong({ ...baseInput, publishedAt: "2026-07-01" });
+    expect(row).toMatchObject({
+      youtubeVideoId: "customDate1",
+      publishedAt: "2026-07-01T00:00:00.000Z",
+      channelName: "Manual Channel"
+    });
+  });
+
+  it("enriches custom song upserts from YouTube metadata without overwriting manual fields", async () => {
+    const database = await createTempDatabase();
+    database.setSetting("sources.youtubeApiKey", "test-youtube-key");
+    const service = new YouTubeVideoStatsService(database, {
+      fetcher: async (url) =>
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "customMeta1",
+                snippet: {
+                  title: "Fetched Metadata Song",
+                  channelId: "UCmetadataChannel",
+                  channelTitle: "Metadata Channel",
+                  publishedAt: "2026-07-03T12:30:00.000Z"
+                },
+                contentDetails: { duration: "PT4M05S" },
+                statistics: { viewCount: "98765" },
+                status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+              }
+            ]
+          })
+        )
+    });
+
+    const enriched = await service.enrichCustomSongUpsert({
+      youtubeUrl: "https://youtu.be/customMeta1",
+      title: "Manual Title",
+      songName: "Manual Song Name",
+      topicId: "Original_Song",
+      ownerIdolIds: ["tokino-sora"],
+      featuredIdolIds: [],
+      channelName: "",
+      publishedAt: "",
+      durationSeconds: null,
+      viewCount: null,
+      fetchedAt: null
+    });
+    expect(enriched).toMatchObject({
+      youtubeUrl: "https://www.youtube.com/watch?v=customMeta1",
+      title: "Manual Title",
+      channelId: "UCmetadataChannel",
+      channelName: "Metadata Channel",
+      publishedAt: "2026-07-03",
+      durationSeconds: 245,
+      viewCount: 98765
+    });
+
+    const saved = database.upsertHololiveCustomSong(enriched);
+    expect(saved).toMatchObject({
+      youtubeVideoId: "customMeta1",
+      title: "Manual Title",
+      channelName: "Metadata Channel",
+      publishedAt: "2026-07-03T00:00:00.000Z",
+      durationSeconds: 245,
+      viewCount: 98765
+    });
+
+    const manual = await service.enrichCustomSongUpsert({
+      youtubeUrl: "https://youtu.be/customMeta1",
+      title: "Manual Title",
+      topicId: "Original_Song",
+      ownerIdolIds: ["tokino-sora"],
+      channelId: "UCmanualChannel",
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-04",
+      durationSeconds: 111,
+      viewCount: 222,
+      fetchedAt: "2026-07-04T01:00:00.000Z"
+    });
+    expect(manual).toMatchObject({
+      channelId: "UCmanualChannel",
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-04",
+      durationSeconds: 111,
+      viewCount: 222,
+      fetchedAt: "2026-07-04T01:00:00.000Z"
+    });
+  });
+
+  it("keeps user-owned custom songs during replace refreshes and bracket generation", async () => {
+    const database = await createTempDatabase();
+    const custom = database.upsertHololiveCustomSong({
+      youtubeUrl: "https://youtu.be/customVid02",
+      title: "Bracket Custom Song",
+      songName: "Bracket Custom Song",
+      topicId: "Original_Song",
+      ownerIdolIds: ["tokino-sora"],
+      channelName: "Manual Channel",
+      publishedAt: "2026-07-01",
+      viewCount: 99_000_000,
+      fetchedAt: "2026-07-01T00:00:00.000Z"
+    });
+    const protectedHolodexVideoId = "tokino-sora-custom-holodex-user";
+    const protectedHolodexItemId = `holodex:${protectedHolodexVideoId}`;
+    seedHololiveBracketSong(database, {
+      idolId: "tokino-sora",
+      idolName: "Tokino Sora",
+      channelId: "UCp6993wxpyDPHUpavwDFqgg",
+      topicId: "Music_Cover",
+      suffix: "custom-holodex-user",
+      viewCount: 88_000_000,
+      sourceKind: "user"
+    });
+    database.run("INSERT OR IGNORE INTO item_tags (item_id, tag) VALUES (?, ?)", [protectedHolodexItemId, "protected-custom-tag"]);
+    database.run(
+      `INSERT OR REPLACE INTO hololive_music_detail_cache
+         (youtube_video_id, channel_id, duration_seconds, original_channel_id, provided_to_youtube,
+          song_names_json, mentions_json, collab_channel_ids_json, relationships_loaded, updated_at)
+       VALUES (?, ?, ?, NULL, 0, ?, '[]', '[]', 0, ?)`,
+      [protectedHolodexVideoId, "custom-protected-channel", 321, JSON.stringify(["Protected Custom Song"]), "2026-07-01T00:00:00.000Z"]
+    );
+    const bundle: HolodexArtifactBundle = {
+      rows: [
+        {
+          youtubeVideoId: "official-after-replace",
+          youtubeUrl: "https://www.youtube.com/watch?v=official-after-replace",
+          title: "Official After Replace",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: "UCp6993wxpyDPHUpavwDFqgg",
+          channelName: "Sora Channel",
+          publishedAt: "2026-07-01T00:00:00.000Z"
+        },
+        {
+          youtubeVideoId: protectedHolodexVideoId,
+          youtubeUrl: `https://www.youtube.com/watch?v=${protectedHolodexVideoId}`,
+          title: "Official Collision Title",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: "UCp6993wxpyDPHUpavwDFqgg",
+          channelName: "Official Collision Channel",
+          publishedAt: "2026-07-02T00:00:00.000Z"
+        }
+      ],
+      detailCache: {
+        "official-after-replace": normalizeVideoDetail("official-after-replace", {
+          youtubeVideoId: "official-after-replace",
+          channelId: "UCp6993wxpyDPHUpavwDFqgg",
+          duration: 180,
+          songNames: ["Official After Replace"]
+        }),
+        [protectedHolodexVideoId]: normalizeVideoDetail(protectedHolodexVideoId, {
+          youtubeVideoId: protectedHolodexVideoId,
+          channelId: "UCp6993wxpyDPHUpavwDFqgg",
+          duration: 999,
+          songNames: ["Official Collision Title"]
+        })
+      },
+      duplicateRemovals: [
+        {
+          removedYoutubeVideoId: protectedHolodexVideoId,
+          removedTitle: "Official Collision Title",
+          keptYoutubeVideoId: "official-after-replace",
+          keptTitle: "Official After Replace",
+          reason: "protected-user-owned-collision"
+        }
+      ]
+    };
+
+    database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: true });
+    expect(database.listHololiveMusicRows({ youtubeVideoIds: [custom.youtubeVideoId] })[0]).toMatchObject({
+      youtubeVideoId: custom.youtubeVideoId,
+      sourceKind: "user"
+    });
+    expect(database.listHololiveMusicRows({ youtubeVideoIds: [protectedHolodexVideoId] })[0]).toMatchObject({
+      youtubeVideoId: protectedHolodexVideoId,
+      sourceKind: "user"
+    });
+    expect(
+      database.select<{ count: number }>("SELECT COUNT(*) AS count FROM item_tags WHERE item_id = ? AND tag = ?", [
+        protectedHolodexItemId,
+        "protected-custom-tag"
+      ])[0]?.count
+    ).toBe(1);
+    expect(
+      database.select<{ channel_id: string; duration_seconds: number }>(
+        "SELECT channel_id, duration_seconds FROM hololive_music_detail_cache WHERE youtube_video_id = ?",
+        [protectedHolodexVideoId]
+      )[0]
+    ).toMatchObject({ channel_id: "custom-protected-channel", duration_seconds: 321 });
+    expect(
+      database.select<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ? OR kept_youtube_video_id = ?",
+        [protectedHolodexVideoId, protectedHolodexVideoId]
+      )[0]?.count
+    ).toBe(0);
+    expect(database.listHololiveMusicLibrary({ sourceKind: "user" }).rows.map((row) => row.youtubeVideoId)).toEqual(
+      expect.arrayContaining([custom.youtubeVideoId, protectedHolodexVideoId])
+    );
+    expect(database.listHololiveMusicLibrary({ sourceKind: "official" }).rows.map((row) => row.youtubeVideoId)).not.toEqual(
+      expect.arrayContaining([custom.youtubeVideoId, protectedHolodexVideoId])
+    );
+
+    const bracketTalents = HOLOLIVE_IDOLS.filter((idol) => idol.source === "official").slice(0, 15);
+    for (const [index, idol] of bracketTalents.entries()) {
+      seedHololiveBracketSong(database, {
+        idolId: idol.id,
+        idolName: idol.displayName,
+        channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+        topicId: "Original_Song",
+        suffix: `custom-bracket-${index}`,
+        viewCount: 10_000_000 - index
+      });
+    }
+
+    const bracket = database.createHololiveBracket({ size: "RO16", generationStyle: "top_songs" });
+    expect(bracket.entries.map((entry) => entry.youtubeVideoId)).toContain(custom.youtubeVideoId);
   });
 });

@@ -23,7 +23,13 @@ export interface TimestampedDatabaseBackupResult {
   skippedReason?: string;
 }
 
+export interface DatabaseExportResult {
+  exported: boolean;
+  filePath: string;
+}
+
 const BACKUP_SLOTS = 3;
+const HOLOSHELF_BACKUP_EXTENSION = ".holoshelf-backup";
 
 function isValidSqliteDatabase(SQL: SqlJsApi, bytes: Buffer): boolean {
   if (bytes.length === 0) {
@@ -68,6 +74,61 @@ function sanitizeBackupReason(reason: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "manual"
   );
+}
+
+export function ensureHoloshelfBackupExtension(filePath: string): string {
+  const trimmedPath = filePath.trim();
+  if (!trimmedPath) {
+    return trimmedPath;
+  }
+
+  return path.extname(trimmedPath) ? trimmedPath : `${trimmedPath}${HOLOSHELF_BACKUP_EXTENSION}`;
+}
+
+export function exportDatabaseBackupToFile(
+  databasePath: string,
+  destinationPath: string,
+  SQL: SqlJsApi
+): DatabaseExportResult {
+  const filePath = ensureHoloshelfBackupExtension(destinationPath);
+  if (!filePath) {
+    throw new Error("Choose where to export the backup.");
+  }
+
+  const resolvedDatabase = path.resolve(databasePath);
+  const resolvedDestination = path.resolve(filePath);
+  if (resolvedDatabase.toLowerCase() === resolvedDestination.toLowerCase()) {
+    throw new Error("Choose a backup file instead of the active database.");
+  }
+
+  if (!fs.existsSync(databasePath)) {
+    throw new Error("The active Holoshelf database was not found.");
+  }
+
+  const bytes = fs.readFileSync(databasePath);
+  if (!isValidSqliteDatabase(SQL, bytes)) {
+    throw new Error("The active Holoshelf database failed its integrity check.");
+  }
+
+  fs.mkdirSync(path.dirname(resolvedDestination), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(resolvedDestination),
+    `.${path.basename(resolvedDestination)}.tmp-${process.pid}-${Date.now()}`
+  );
+
+  try {
+    fs.writeFileSync(tempPath, bytes);
+    if (!validateSqliteDatabaseFile(tempPath, SQL)) {
+      throw new Error("The exported backup failed its integrity check.");
+    }
+    fs.rmSync(resolvedDestination, { force: true });
+    fs.renameSync(tempPath, resolvedDestination);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+
+  return { exported: true, filePath: resolvedDestination };
 }
 
 export function createRollingDatabaseBackup(

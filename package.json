@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.0.35",
+  "version": "1.0.53",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -82,6 +82,9 @@
         "releaseType": "draft"
       }
     ],
+    "releaseInfo": {
+      "releaseNotes": "- Functionality additions\n- Bug fixes"
+    },
     "win": {
       "icon": "ico.ico",
       "signAndEditExecutable": false,

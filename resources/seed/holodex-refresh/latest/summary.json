@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-07-01T01:55:05.295Z",
-  "completedAt": "2026-07-01T02:04:56.671Z",
+  "startedAt": "2026-07-01T22:20:50.249Z",
+  "completedAt": "2026-07-01T22:29:08.904Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-07-01T015505Z",
+  "officialDataVersion": "2026-07-01T222050Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -12,41 +12,41 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-07-01T01:55:08.594Z"
+    "updatedAt": "2026-07-01T22:20:57.272Z"
   },
   "musicRefresh": {
     "sourceRows": 2999,
-    "importedRows": 2952,
-    "filteredRows": 47,
+    "importedRows": 2951,
+    "filteredRows": 48,
     "duplicateRows": 1132,
     "run": {
-      "id": "624b2181-87da-4db6-84e4-7b2798119b26",
+      "id": "a5311dd6-db13-416e-8fb4-b088966c6c51",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-07-01T02:04:48.657Z",
-      "completedAt": "2026-07-01T02:04:50.744Z",
+      "startedAt": "2026-07-01T22:28:55.536Z",
+      "completedAt": "2026-07-01T22:29:02.723Z",
       "fetchedRows": 2999,
-      "keptRows": 2952,
-      "filteredRows": 47,
+      "keptRows": 2951,
+      "filteredRows": 48,
       "duplicateRows": 1132,
       "error": null
     }
   },
   "videoStatsRefresh": {
-    "requestedVideos": 2944,
+    "requestedVideos": 2943,
     "updatedVideos": 2943,
-    "missingVideos": 1,
-    "unavailableVideos": 1,
+    "missingVideos": 0,
+    "unavailableVideos": 0,
     "failedBatches": 0,
     "batches": 59,
-    "fetchedAt": "2026-07-01T02:04:50.988Z"
+    "fetchedAt": "2026-07-01T22:29:02.971Z"
   },
   "counts": {
     "totalMusicRows": 2951,
     "totalChannels": 177,
     "officialIdols": 74,
     "customIdols": 0,
-    "statsRows": 2946,
+    "statsRows": 2947,
     "detailCacheRows": 2951,
     "duplicateRemovalRows": 1111
   }

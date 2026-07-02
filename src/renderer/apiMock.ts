@@ -51,10 +51,10 @@ const MOCK_FAVORITES_PLAYLIST_ID = "system:favorites";
 let mockHolodexChannels: HolodexChannel[] = [];
 const mockUndoActions = new Map<string, { kind: HololiveUndoKind; apply: () => void }>();
 
-function createMockUndo(kind: HololiveUndoKind, apply: () => void): { undoToken: string; undoLabel: string } {
+function createMockUndo(kind: HololiveUndoKind, apply: () => void, undoLabel = "Undo"): { undoToken: string; undoLabel: string } {
   const undoToken = `mock-undo-${crypto.randomUUID()}`;
   mockUndoActions.set(undoToken, { kind, apply });
-  return { undoToken, undoLabel: "Undo" };
+  return { undoToken, undoLabel };
 }
 
 const mockHololiveMusicRows: HololiveMusicRow[] = [
@@ -485,6 +485,7 @@ function upsertMockCustomTalent(input: IpcChannelMap["hololive:custom-talents:up
       durationSeconds: 203,
       markerKey: `${idol.id}-mock-original|${idol.id}`,
       marker: null,
+      sourceKind: "user",
       updatedAt: now
     },
     {
@@ -516,6 +517,7 @@ function upsertMockCustomTalent(input: IpcChannelMap["hololive:custom-talents:up
       durationSeconds: 184,
       markerKey: `${idol.id}-mock-cover|${idol.id}`,
       marker: null,
+      sourceKind: "user",
       updatedAt: now
     }
   );
@@ -545,6 +547,192 @@ function deleteMockCustomTalent(idolId: string): void {
     });
   }
   refreshMockBoardSummary();
+}
+
+function parseMockYouTubeVideoId(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+  try {
+    const url = new URL(trimmed);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (host === "youtu.be") {
+      const id = url.pathname.split("/").filter(Boolean)[0] ?? "";
+      return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+    }
+    if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+      const watchId = url.searchParams.get("v") ?? "";
+      if (/^[a-zA-Z0-9_-]{11}$/.test(watchId)) {
+        return watchId;
+      }
+      const parts = url.pathname.split("/").filter(Boolean);
+      const markerIndex = parts.findIndex((part) => ["shorts", "embed", "live"].includes(part));
+      const id = markerIndex >= 0 ? parts[markerIndex + 1] ?? "" : "";
+      return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function mockYouTubeUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+function toMockDateInputValue(value?: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(trimmed)) {
+    return trimmed;
+  }
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function normalizeMockCustomSongPublishedAt(value?: string | null): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    throw new Error("A published date is required.");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(trimmed)) {
+    throw new Error("Use YYYY-MM-DD for the published date.");
+  }
+  const date = new Date(`${trimmed}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || !date.toISOString().startsWith(trimmed)) {
+    throw new Error("Use YYYY-MM-DD for the published date.");
+  }
+  return date.toISOString();
+}
+
+function upsertMockCustomSong(input: IpcChannelMap["hololive:custom-songs:upsert"]["request"]): HololiveMusicRow {
+  const youtubeVideoId = parseMockYouTubeVideoId(input.youtubeUrl);
+  if (!youtubeVideoId) {
+    throw new Error("Enter a valid YouTube video link.");
+  }
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error("A song title is required.");
+  }
+  const ownerIdolIds = [...new Set(input.ownerIdolIds.map((id) => id.trim()).filter(Boolean))];
+  if (ownerIdolIds.length === 0) {
+    throw new Error("Choose at least one owner talent.");
+  }
+  const ownerIdols = ownerIdolIds.map((id) => mockHololiveTierData.idols.find((idol) => idol.id === id)).filter(Boolean);
+  if (ownerIdols.length === 0) {
+    throw new Error("Choose at least one owner talent.");
+  }
+  const ownerSet = new Set(ownerIdolIds);
+  const featuredIdolIds = [...new Set((input.featuredIdolIds ?? []).map((id) => id.trim()).filter(Boolean))]
+    .filter((id) => !ownerSet.has(id));
+  const featuredIdols = featuredIdolIds.map((id) => mockHololiveTierData.idols.find((idol) => idol.id === id)).filter(Boolean);
+  const primaryOwner = ownerIdols[0]!;
+  const existing = mockHololiveMusicRows.find((row) => row.youtubeVideoId === youtubeVideoId);
+  if (existing && existing.sourceKind !== "user") {
+    throw new Error("That YouTube video is already in the official Hololive music library.");
+  }
+  const usedApi = /prefill|api/i.test(input.youtubeUrl);
+  const songName = input.songName?.trim() || title;
+  const youtubeUrl = mockYouTubeUrl(youtubeVideoId);
+  const channelId = input.channelId?.trim() || (usedApi ? "UCmockImportedSong" : "") || primaryOwner.youtubeChannelId || `custom:${primaryOwner.id}`;
+  const channelName = input.channelName?.trim() || (usedApi ? "Mock Import Channel" : "") || primaryOwner.displayName;
+  const publishedAt = normalizeMockCustomSongPublishedAt(input.publishedAt || (usedApi ? toMockDateInputValue(now) : null));
+  const row: HololiveMusicRow = {
+    youtubeVideoId,
+    idolId: primaryOwner.id,
+    title,
+    songName,
+    canonicalSongKey: songName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || youtubeVideoId,
+    canonicalPerformanceKey: `${input.topicId}:${youtubeVideoId}:${ownerIdolIds.join("+")}`,
+    topicId: input.topicId,
+    status: "past",
+    youtubeUrl,
+    channelId,
+    channelName,
+    uploaderChannelKind: "unknown",
+    uploaderChannelGroup: null,
+    participants: [
+      ...ownerIdols.map((idol) => ({
+        youtubeVideoId,
+        idolId: idol!.id,
+        idolName: idol!.displayName,
+        role: "primary" as const,
+        channelId: idol!.youtubeChannelId ?? null
+      })),
+      ...featuredIdols.map((idol) => ({
+        youtubeVideoId,
+        idolId: idol!.id,
+        idolName: idol!.displayName,
+        role: "collab" as const,
+        channelId: idol!.youtubeChannelId ?? null
+      }))
+    ],
+    ownedIdolIds: ownerIdolIds,
+    featuredIdolIds,
+    publishedAt,
+    durationSeconds: input.durationSeconds ?? null,
+    viewCount: input.viewCount ?? null,
+    viewCountFetchedAt: input.fetchedAt ?? null,
+    markerKey: `video:${youtubeVideoId}`,
+    marker: mockHololiveMusicMarkers[youtubeVideoId]?.marker ?? null,
+    sourceKind: "user",
+    updatedAt: new Date().toISOString()
+  };
+  const index = mockHololiveMusicRows.findIndex((candidate) => candidate.youtubeVideoId === youtubeVideoId);
+  if (index >= 0) {
+    mockHololiveMusicRows[index] = row;
+  } else {
+    mockHololiveMusicRows.push(row);
+  }
+  return row;
+}
+
+function deleteMockCustomSong(youtubeVideoId: string): IpcChannelMap["hololive:custom-songs:delete"]["response"] {
+  const row = mockHololiveMusicRows.find((candidate) => candidate.youtubeVideoId === youtubeVideoId);
+  if (!row || row.sourceKind !== "user") {
+    throw new Error("Only custom songs can be deleted.");
+  }
+  const rowsSnapshot = structuredClone(mockHololiveMusicRows);
+  const markersSnapshot = structuredClone(mockHololiveMusicMarkers);
+  const playerSnapshot = structuredClone(mockHololivePlayerData);
+  mockHololiveMusicRows.splice(
+    0,
+    mockHololiveMusicRows.length,
+    ...mockHololiveMusicRows.filter((candidate) => candidate.youtubeVideoId !== youtubeVideoId)
+  );
+  delete mockHololiveMusicMarkers[youtubeVideoId];
+  mockHololivePlayerData = {
+    ...mockHololivePlayerData,
+    queue: mockHololivePlayerData.queue.filter((item) => item.youtubeVideoId !== youtubeVideoId),
+    playlists: mockHololivePlayerData.playlists.map((playlist) => ({
+      ...playlist,
+      items: (playlist.items ?? []).filter((item) => item.youtubeVideoId !== youtubeVideoId)
+    })),
+    state:
+      mockHololivePlayerData.state.currentYoutubeVideoId === youtubeVideoId
+        ? {
+            ...mockHololivePlayerData.state,
+            playbackSourceType: "library",
+            currentQueueItemId: null,
+            currentPlaylistId: null,
+            currentPlaylistItemId: null,
+            currentYoutubeVideoId: null,
+            updatedAt: new Date().toISOString()
+          }
+        : mockHololivePlayerData.state
+  };
+  return {
+    data: refreshMockHololivePlayerData(),
+    ...createMockUndo("custom-song-delete", () => {
+      mockHololiveMusicRows.splice(0, mockHololiveMusicRows.length, ...rowsSnapshot);
+      Object.keys(mockHololiveMusicMarkers).forEach((key) => delete mockHololiveMusicMarkers[key]);
+      Object.assign(mockHololiveMusicMarkers, markersSnapshot);
+      mockHololivePlayerData = playerSnapshot;
+    }, "Restore custom song")
+  };
 }
 
 function loadMockHololiveBoard(boardId?: string | null): void {
@@ -1679,17 +1867,17 @@ const mockBridge: HoloshelfBridge = {
         return { filePath: "mock-bracket-export.png" } as IpcChannelMap[C]["response"];
       case "app:open-path":
         return { opened: true } as IpcChannelMap[C]["response"];
-      case "app:data-backup:create":
+      case "app:data-backup:export":
         return {
-          created: true,
-          filePath: "data\\backups\\holoshelf.manual.mock.sqlite",
-          reason: "manual"
+          exported: true,
+          filePath: "Documents\\Holoshelf Backups\\Holoshelf Backup mock.holoshelf-backup",
+          canceled: false
         } as IpcChannelMap[C]["response"];
-      case "app:data-backup:restore":
+      case "app:data-backup:import":
         return {
-          restored: true,
-          backupFilePath: "data\\backups\\holoshelf.pre-restore.mock.sqlite",
-          restoredFromPath: "data\\backups\\holoshelf.manual.mock.sqlite",
+          imported: true,
+          backupFilePath: "data\\backups\\holoshelf.pre-import.mock.sqlite",
+          importedFromPath: "Documents\\Holoshelf Backups\\Holoshelf Backup mock.holoshelf-backup",
           requiresRestart: true
         } as IpcChannelMap[C]["response"];
       case "app:data:reset":
@@ -1881,6 +2069,9 @@ const mockBridge: HoloshelfBridge = {
           let rows = visibleMockHololiveMusicRows();
           if (payload?.topicId) {
             rows = rows.filter((row) => row.topicId === payload.topicId);
+          }
+          if (payload?.sourceKind) {
+            rows = rows.filter((row) => (row.sourceKind ?? "official") === payload.sourceKind);
           }
           if (payload?.talentId) {
             rows = rows.filter(
@@ -2133,6 +2324,34 @@ const mockBridge: HoloshelfBridge = {
             data: refreshMockHololivePlayerData()
           } as IpcChannelMap[C]["response"];
         }
+      case "hololive:custom-songs:preview":
+        {
+          const payload = _payload as IpcChannelMap["hololive:custom-songs:preview"]["request"];
+          const youtubeVideoId = parseMockYouTubeVideoId(payload.youtubeUrl);
+          if (!youtubeVideoId) {
+            throw new Error("Enter a valid YouTube video link.");
+          }
+          const usedApi = /prefill|api/i.test(payload.youtubeUrl);
+          return {
+            youtubeVideoId,
+            youtubeUrl: mockYouTubeUrl(youtubeVideoId),
+            title: usedApi ? "Mock Imported Song" : null,
+            songName: usedApi ? "Mock Imported Song" : null,
+            channelId: usedApi ? "UCmockImportedSong" : null,
+            channelName: usedApi ? "Mock Import Channel" : null,
+            publishedAt: usedApi ? now : null,
+            durationSeconds: usedApi ? 201 : null,
+            viewCount: usedApi ? 123456 : null,
+            fetchedAt: usedApi ? now : null,
+            thumbnailUrl: null,
+            usedApi,
+            apiKeyMissing: !usedApi
+          } as IpcChannelMap[C]["response"];
+        }
+      case "hololive:custom-songs:upsert":
+        return upsertMockCustomSong(_payload as IpcChannelMap["hololive:custom-songs:upsert"]["request"]) as IpcChannelMap[C]["response"];
+      case "hololive:custom-songs:delete":
+        return deleteMockCustomSong((_payload as IpcChannelMap["hololive:custom-songs:delete"]["request"]).youtubeVideoId) as IpcChannelMap[C]["response"];
       case "hololive:channels:refresh":
         return { refreshedChannels: mockHolodexChannels.length, classifiedChannels: mockHololiveTierData.idols.length, updatedAt: now } as IpcChannelMap[C]["response"];
       case "hololive:channels:list":
@@ -2493,9 +2712,23 @@ const mockBridge: HoloshelfBridge = {
       case "hololive:brackets:list":
         return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
       case "hololive:brackets:create":
-        return createMockHololiveBracket(
-          _payload as IpcChannelMap["hololive:brackets:create"]["request"]
-        ) as IpcChannelMap[C]["response"];
+        {
+          const payload = _payload as IpcChannelMap["hololive:brackets:create"]["request"];
+          const maxEntriesPerTalent = payload.filters?.maxEntriesPerTalent;
+          const shouldWarnAboutRelaxedCap = typeof maxEntriesPerTalent === "number" && maxEntriesPerTalent <= 1;
+          return {
+            bracket: createMockHololiveBracket(payload),
+            warnings: shouldWarnAboutRelaxedCap
+              ? [
+                  {
+                    code: "talent_cap_relaxed",
+                    requestedMaxEntriesPerTalent: maxEntriesPerTalent,
+                    message: `Max per talent was relaxed from ${maxEntriesPerTalent} so the bracket could be filled.`
+                  }
+                ]
+              : []
+          } as IpcChannelMap[C]["response"];
+        }
       case "hololive:brackets:get":
         return getMockHololiveBracket(
           (_payload as IpcChannelMap["hololive:brackets:get"]["request"]).bracketId

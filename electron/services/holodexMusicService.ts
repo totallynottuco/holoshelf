@@ -4,7 +4,8 @@ import type {
   HololiveCustomTalentInput,
   HololiveCustomTalentPreview,
   HololiveCustomTalentRecord,
-  HololiveMusicImportResult
+  HololiveMusicImportResult,
+  HololiveMusicTopic
 } from "../../src/shared/contracts";
 import {
   HolodexApiClient,
@@ -34,6 +35,9 @@ const HOLODEX_FULL_REFRESH_RATE_LIMIT = { maxRequests: 76, windowMs: 120_000, ma
 const HOLODEX_MUSIC_TOPICS = ["Music_Cover", "Original_Song"] as const;
 // Holodex calls normal YouTube video uploads "stream"; this is not a request for clip videos.
 const HOLODEX_VIDEO_TYPES = ["stream"] as const;
+const CUSTOM_CHANNEL_RECENT_MUSIC_PAGE_LIMIT = 1;
+const CUSTOM_CHANNEL_RECENT_MUSIC_PAGE_SIZE = 25;
+const CUSTOM_CHANNEL_RECENT_MUSIC_TIMEOUT_MS = 10_000;
 
 interface HolodexMusicServiceOptions {
   apiKey?: string | null;
@@ -156,11 +160,16 @@ export class HolodexMusicService {
           });
     const records = [...direct.records, ...collabs];
     const rows = this.filterRowsToKnownHolodexChannels(makeCatalogRowsFromRecords(records), collabChannelIdsByVideoId);
+    const directDetailIds = new Set(Object.keys(direct.detailCache));
     const detailCache = {
       ...direct.detailCache,
-      ...(await this.fetchDetailsForRows(client, rows.map((row) => row.youtubeVideoId), {
-        includeRelationships: input.includeRelationships !== false
-      }))
+      ...(await this.fetchDetailsForRows(
+        client,
+        rows.map((row) => row.youtubeVideoId).filter((videoId) => !directDetailIds.has(videoId)),
+        {
+          includeRelationships: input.includeRelationships !== false
+        }
+      ))
     };
     for (const [videoId, channelIds] of collabChannelIdsByVideoId) {
       if (detailCache[videoId]) {
@@ -394,7 +403,7 @@ export class HolodexMusicService {
 
     try {
       const parsed = new URL(text);
-      if (!parsed.hostname.includes("youtube.com")) {
+      if (!this.isYouTubeHost(parsed.hostname)) {
         return null;
       }
       const handleSegment = parsed.pathname.split("/").find((segment) => segment.startsWith("@"));
@@ -417,14 +426,49 @@ export class HolodexMusicService {
     }
 
     const html = await response.text();
-    const match =
-      html.match(/"channelId":"(UC[^"]+)"/) ??
-      html.match(/"externalId":"(UC[^"]+)"/) ??
-      html.match(/"browseId":"(UC[^"]+)"/);
-    if (!match?.[1]) {
+    const resolvedHandle = this.extractCanonicalYouTubeHandleFromHtml(html);
+    if (resolvedHandle && resolvedHandle.toLowerCase() !== handle.toLowerCase()) {
+      throw new Error(`YouTube resolved ${handle} to ${resolvedHandle}; use the exact channel URL or channel ID instead.`);
+    }
+
+    const channelId = this.extractChannelIdFromYouTubeChannelHtml(html);
+    if (!channelId) {
       throw new Error(`Could not find a channel id for ${handle}`);
     }
-    return match[1];
+    return channelId;
+  }
+
+  private isYouTubeHost(hostname: string): boolean {
+    const host = hostname.toLowerCase().replace(/^www\./, "");
+    return host === "youtube.com" || host.endsWith(".youtube.com");
+  }
+
+  private extractCanonicalYouTubeHandleFromHtml(html: string): string | null {
+    const handleMatches = [
+      html.match(/"ownerUrls":\["(?:https?:)?\/\/(?:www\.)?youtube\.com\/(@[\w.-]+)"\]/u),
+      html.match(/"vanityChannelUrl":"(?:https?:)?\/\/(?:www\.)?youtube\.com\/(@[\w.-]+)"/u),
+      html.match(/<link rel="canonical" href="(?:https?:)?\/\/(?:www\.)?youtube\.com\/(@[\w.-]+)"/u)
+    ];
+    return handleMatches.find((match) => match?.[1])?.[1] ?? null;
+  }
+
+  private extractChannelIdFromYouTubeChannelHtml(html: string): string | null {
+    const metadataMatches = [
+      html.match(/"metadata":\{"channelMetadataRenderer":\{[\s\S]*?"externalId":"(UC[^"]+)"/u),
+      html.match(/"channelMetadataRenderer":\{[\s\S]*?"externalId":"(UC[^"]+)"/u),
+      html.match(/<meta itemprop="channelId" content="(UC[^"]+)"/u)
+    ];
+    const metadataId = metadataMatches.find((match) => match?.[1])?.[1];
+    if (metadataId) {
+      return metadataId;
+    }
+
+    return (
+      html.match(/"externalId":"(UC[^"]+)"/u)?.[1] ??
+      html.match(/"browseId":"(UC[^"]+)"/u)?.[1] ??
+      html.match(/"channelId":"(UC[^"]+)"/u)?.[1] ??
+      null
+    );
   }
 
   private slugifyTalent(value: string): string {
@@ -688,6 +732,15 @@ export class HolodexMusicService {
       }
     }
 
+    const recent = await this.fetchRecentCustomChannelLikelyMusicRecordsBestEffort(client, channelId, {
+      pageSize,
+      pageLimit: input.pageLimit
+    });
+    if (recent.records.length > 0) {
+      this.reportProgress(`Holodex custom ${channelId}: recent scan found ${recent.records.length} likely untagged song(s)`);
+    }
+    records.push(...recent.records);
+
     const rowsForDetails = makeCatalogRowsFromRecords(records);
     Object.assign(
       detailCache,
@@ -700,6 +753,134 @@ export class HolodexMusicService {
       records: [...new Map(records.map((record) => [record.youtubeVideoId, record])).values()],
       detailCache
     };
+  }
+
+  private async fetchRecentCustomChannelLikelyMusicRecordsBestEffort(
+    client: HolodexApiClient,
+    channelId: string,
+    input: {
+      pageLimit: number | null;
+      pageSize: number;
+    }
+  ): Promise<{ records: HolodexVideoRecord[] }> {
+    let didTimeout = false;
+    let timeoutId: NodeJS.Timeout | null = null;
+    const emptyResult = { records: [] };
+    const scanPromise = this.fetchRecentCustomChannelLikelyMusicRecords(client, channelId, input).catch((error) => {
+      if (!didTimeout) {
+        this.reportProgress(
+          `Holodex custom ${channelId}: recent scan skipped (${error instanceof Error ? error.message : "unknown error"})`
+        );
+      }
+      return emptyResult;
+    });
+    const timeoutPromise = new Promise<{ records: HolodexVideoRecord[] }>((resolve) => {
+      timeoutId = setTimeout(() => {
+        didTimeout = true;
+        this.reportProgress(`Holodex custom ${channelId}: recent scan skipped after 10s`);
+        resolve(emptyResult);
+      }, CUSTOM_CHANNEL_RECENT_MUSIC_TIMEOUT_MS);
+    });
+
+    const result = await Promise.race([scanPromise, timeoutPromise]);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    return result;
+  }
+
+  private async fetchRecentCustomChannelLikelyMusicRecords(
+    client: HolodexApiClient,
+    channelId: string,
+    input: {
+      pageLimit: number | null;
+      pageSize: number;
+    }
+  ): Promise<{ records: HolodexVideoRecord[] }> {
+    const records: HolodexVideoRecord[] = [];
+    const pageLimit = Math.min(
+      Math.max(1, Math.round(input.pageLimit ?? CUSTOM_CHANNEL_RECENT_MUSIC_PAGE_LIMIT)),
+      CUSTOM_CHANNEL_RECENT_MUSIC_PAGE_LIMIT
+    );
+    const pageSize = Math.min(input.pageSize, CUSTOM_CHANNEL_RECENT_MUSIC_PAGE_SIZE);
+
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+      const page = await client.fetchChannelVideos({
+        channelId,
+        type: "videos",
+        pageNumber,
+        pageSize,
+        includeRelationships: false
+      });
+      const normalized = this.normalizePageItems(page.items, undefined, pageNumber, [{ type: "channel", value: channelId }]);
+      for (const record of normalized) {
+        if (record.topicId === "Original_Song" || record.topicId === "Music_Cover") {
+          continue;
+        }
+
+        const inferredTopic = this.inferCustomChannelMusicTopic(record);
+        if (!inferredTopic) {
+          continue;
+        }
+        records.push({ ...record, topicId: inferredTopic });
+      }
+
+      if (page.items.length < pageSize) {
+        break;
+      }
+    }
+
+    return {
+      records: [...new Map(records.map((record) => [record.youtubeVideoId, record])).values()]
+    };
+  }
+
+  private inferCustomChannelMusicTopic(record: HolodexVideoRecord): HololiveMusicTopic | null {
+    const title = record.title.trim();
+    const normalizedTitle = title.normalize("NFKC").toLowerCase();
+    if (!title || record.itemType !== "stream" || record.status === "missing") {
+      return null;
+    }
+
+    if (
+      /(\u6b4c\u67a0|\u96d1\u8ac7|\u8010\u4e45|\u914d\u4fe1|\u540c\u6642\u8996\u8074|\u304a\u77e5\u3089\u305b|\u544a\u77e5)/u.test(title)
+    ) {
+      return null;
+    }
+
+    if (/(\u30ab\u30d0\u30fc|\u6b4c\u3063\u3066\u307f\u305f)/u.test(title)) {
+      return "Music_Cover";
+    }
+
+    if (
+      /(#?vocaduo|#?\u30dc\u30ab\u30c7\u30e5\u30aa|\u30aa\u30ea\u30b8\u30ca\u30eb(?:\u66f2|\u30bd\u30f3\u30b0)?|\u30aa\u30ea\u66f2|\u697d\u66f2|\u30df\u30e5\u30fc\u30b8\u30c3\u30af\u30d3\u30c7\u30aa)/iu.test(title)
+    ) {
+      return "Original_Song";
+    }
+
+    if (
+      /\b(karaoke|singing\s+stream|free\s+chat|schedule|watchalong|gameplay|zatsudan|asmr)\b/iu.test(normalizedTitle) ||
+      /(歌枠|雑談|耐久|配信|同時視聴|お知らせ|告知)/u.test(title)
+    ) {
+      return null;
+    }
+
+    if (/\b(cover|covered\s+by|歌ってみた)\b/iu.test(normalizedTitle) || /(カバー|歌ってみた)/u.test(title)) {
+      return "Music_Cover";
+    }
+
+    if (
+      /\b(original\s+song|official\s+(?:music\s+)?video|music\s+video|voca\s*duo|vocaduo)\b/iu.test(normalizedTitle) ||
+      /(#?vocaduo|#?ボカデュオ|オリジナル(?:曲|ソング)?|オリ曲|楽曲|ミュージックビデオ)/iu.test(title)
+    ) {
+      return "Original_Song";
+    }
+
+    if (/\s\/\s/u.test(title) && !/\b(cover|covered\s+by)\b/iu.test(normalizedTitle)) {
+      return "Original_Song";
+    }
+
+    return null;
   }
 
   private collectOfficialMusicVideoPage(

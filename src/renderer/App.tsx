@@ -4,10 +4,12 @@ import type { AppBootstrap } from "../shared/contracts";
 import { api } from "./api";
 import { Shell } from "./components/Shell";
 
-const HololiveBracketsPage = lazy(() => import("./pages/HololiveBracketsPage").then((module) => ({ default: module.HololiveBracketsPage })));
+const HololiveBracketPage = lazy(() => import("./pages/HololiveBracketPage").then((module) => ({ default: module.HololiveBracketPage })));
 const HololivePage = lazy(() => import("./pages/HololivePage").then((module) => ({ default: module.HololivePage })));
 const HololivePlayerPage = lazy(() => import("./pages/HololivePlayerPage").then((module) => ({ default: module.HololivePlayerPage })));
-const HololiveTalentsPage = lazy(() => import("./pages/HololiveTalentsPage").then((module) => ({ default: module.HololiveTalentsPage })));
+const HololiveCustomImportPage = lazy(() =>
+  import("./pages/HololiveCustomImportPage").then((module) => ({ default: module.HololiveCustomImportPage }))
+);
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
 export function App() {
@@ -58,8 +60,10 @@ export function App() {
           <Route element={<Shell />}>
             <Route index element={<Navigate to="/module/hololive" replace />} />
             <Route path="/module/hololive/player" element={<HololivePlayerPage />} />
-            <Route path="/module/hololive/talents" element={<HololiveTalentsPage />} />
-            <Route path="/module/hololive/brackets" element={<HololiveBracketsPage />} />
+            <Route path="/module/hololive/bracket" element={<HololiveBracketPage />} />
+            <Route path="/module/hololive/brackets" element={<Navigate to="/module/hololive/bracket" replace />} />
+            <Route path="/module/hololive/custom-import" element={<HololiveCustomImportPage />} />
+            <Route path="/module/hololive/talents" element={<Navigate to="/module/hololive/custom-import" replace />} />
             <Route path="/module/hololive/settings" element={<SettingsPage bootstrap={bootstrap} />} />
             <Route path="/module/hololive" element={<HololivePage />} />
             <Route path="/settings" element={<Navigate to="/module/hololive/settings" replace />} />

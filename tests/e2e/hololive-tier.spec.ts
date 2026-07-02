@@ -170,9 +170,9 @@ test("renders the Hololive tier list route", async ({ page }) => {
 });
 
 test("adds a custom talent from a channel handle", async ({ page }) => {
-  await page.getByRole("link", { name: "Talents" }).click();
-  await expect(page).toHaveURL(/\/module\/hololive\/talents/);
-  await expect(page.locator(".hololive-talents-workspace")).toBeVisible();
+  await page.getByRole("link", { name: "Custom Import" }).click();
+  await expect(page).toHaveURL(/\/module\/hololive\/custom-import/);
+  await expect(page.locator(".hololive-custom-import-workspace")).toBeVisible();
   await expect(page.locator(".hololive-custom-talent-row")).toHaveCount(0);
 
   await page.getByLabel("Channel").fill("@SoradukiTyra");
@@ -190,9 +190,59 @@ test("adds a custom talent from a channel handle", async ({ page }) => {
   await expect(page.locator(".hololive-action-toast")).toContainText("Custom refresh complete");
   await expect(page.locator(".hololive-action-toast")).toContainText("view counts");
 
-  await page.getByRole("link", { name: "Tier Lists" }).click();
+  await page.getByRole("link", { name: "Tier List" }).click();
   await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(75);
   await expect(page.locator('.hololive-pool .hololive-idol-tile[data-idol-id="custom-soraduki-tyra"]')).toBeVisible();
+});
+
+test("requires complete custom song metadata before import save", async ({ page }) => {
+  await page.getByRole("link", { name: "Custom Import" }).click();
+  await page.getByRole("button", { name: "Import Song" }).click();
+  const sheet = page.locator(".hololive-custom-song-sheet");
+  const saveButton = sheet.getByRole("button", { name: "Save" });
+
+  await expect(sheet).toBeVisible();
+  await expect(saveButton).toBeDisabled();
+
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await page.getByRole("button", { name: "Import Song" }).click();
+  await expect(sheet).toBeVisible();
+  await page.locator(".hololive-custom-song-panel").click({ position: { x: 4, y: 4 } });
+  await expect(sheet).toBeHidden();
+  await page.getByRole("button", { name: "Import Song" }).click();
+  await expect(sheet).toBeVisible();
+
+  await sheet.getByLabel("YouTube link").fill("https://youtu.be/manual12345");
+  await sheet.getByLabel("Title").fill("Manual Import Song");
+  await sheet.getByRole("button", { name: "Choose owners" }).click();
+  await page.getByRole("button", { name: "Tokino Sora" }).click();
+  await sheet.getByLabel("Channel").fill("Manual Channel");
+  await expect(saveButton).toBeDisabled();
+
+  await sheet.getByLabel("Published").fill("not a date");
+  await expect(saveButton).toBeDisabled();
+  await sheet.getByLabel("Published").fill("2026-07-01");
+  await expect(saveButton).toBeEnabled();
+
+  await sheet.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Import Song" }).click();
+  const apiSheet = page.locator(".hololive-custom-song-sheet");
+  const apiSaveButton = apiSheet.getByRole("button", { name: "Save" });
+  await apiSheet.getByLabel("YouTube link").fill("https://youtu.be/apiSong1234");
+  await apiSheet.getByRole("button", { name: "Load" }).click();
+  await expect(apiSheet.getByLabel("Title")).toHaveValue("Mock Imported Song");
+  await expect(apiSheet.getByLabel("Channel")).toHaveValue("Mock Import Channel");
+  await apiSheet.getByRole("button", { name: "Choose owners" }).click();
+  await page.getByRole("button", { name: "Tokino Sora" }).click();
+  await expect(apiSaveButton).toBeEnabled();
+  await apiSaveButton.click();
+  await expect(apiSheet).toBeHidden();
+
+  const customSongRow = page.locator(".hololive-custom-song-row").filter({ hasText: "Mock Imported Song" });
+  await expect(customSongRow).toBeVisible();
+  await customSongRow.getByRole("button", { name: /Edit/ }).click();
+  await expect(page.locator(".hololive-custom-song-sheet")).toContainText("Edit Song");
 });
 
 test("creates and plays through a Hololive bracket matchup", async ({ page }) => {
@@ -204,9 +254,9 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await page.locator(".hololive-action-toast").filter({ hasText: "Playlist created" }).click();
   await expect(page.locator(".hololive-action-toast")).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Brackets" }).click();
-  await expect(page).toHaveURL(/\/module\/hololive\/brackets/);
-  await expect(page.locator(".hololive-brackets-workspace")).toBeVisible();
+  await page.getByRole("link", { name: "Bracket" }).click();
+  await expect(page).toHaveURL(/\/module\/hololive\/bracket/);
+  await expect(page.locator(".hololive-bracket-workspace")).toBeVisible();
   await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
   await expect(page.locator(".hololive-bracket-toolbar .compact-select")).toHaveCount(1);
   await expect(page.locator(".hololive-bracket-create-popover")).toHaveCount(0);
@@ -217,8 +267,32 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await expect(page.getByRole("radio", { name: "RO16" })).toBeChecked();
   await page.getByRole("radio", { name: "Random Songs" }).click();
   await expect(page.getByRole("radio", { name: "Random Songs" })).toBeChecked();
+  const createPopover = page.locator(".hololive-bracket-create-popover");
+  await createPopover.getByRole("button", { name: /Edit Filters/ }).click();
+  await expect(createPopover.getByRole("checkbox", { name: "Active", exact: true })).toBeChecked();
+  await expect(createPopover.getByRole("checkbox", { name: "Alumni", exact: true })).toBeChecked();
+  await expect(createPopover.getByRole("checkbox", { name: "Custom", exact: true })).toBeChecked();
+  await createPopover.getByRole("checkbox", { name: "Alumni", exact: true }).uncheck();
+  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Active + Custom");
+  await createPopover.getByRole("combobox", { name: "History participation" }).click();
+  await createPopover.getByRole("option", { name: "Never appeared" }).click();
+  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Never appeared");
+  await expect(createPopover.getByLabel("Solo songs")).toBeChecked();
+  await expect(createPopover.getByLabel("Group Songs")).toBeChecked();
+  await createPopover.getByLabel("Group Songs").uncheck();
+  await expect(createPopover.getByLabel("Solo songs")).toBeDisabled();
+  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Solo only");
+  await expect(createPopover.getByLabel("Max songs per talent")).toBeDisabled();
+  await createPopover.getByRole("checkbox", { name: "Max per talent", exact: true }).check();
+  await createPopover.getByLabel("Max songs per talent").fill("1");
+  await createPopover.getByRole("checkbox", { name: "Prefer original/cover split", exact: true }).uncheck();
+  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Max 1 per talent");
+  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("No type split");
   await page.locator(".hololive-bracket-create-popover").getByLabel("Name").fill("Singer Showdown");
   await page.getByRole("button", { name: "Create Bracket" }).click();
+  const relaxedCapToast = page.locator(".hololive-action-toast").filter({ hasText: "Max per talent was relaxed" });
+  await expect(relaxedCapToast).toBeVisible();
+  await relaxedCapToast.click();
 
   const savedBracketSelect = page.getByRole("combobox", { name: "Saved bracket" });
   await expect(savedBracketSelect).toContainText("Random");
@@ -565,7 +639,7 @@ test("uses the Hololive player route with playlists and queue actions", async ({
   await expect(secondSong).toHaveClass(/playing/);
 
   for (let index = 0; index < 3; index += 1) {
-    await page.getByRole("link", { name: "Tier Lists" }).click();
+    await page.getByRole("link", { name: "Tier List" }).click();
     await expect(page.locator(".hololive-tier-board")).toBeVisible();
     await page.getByRole("link", { name: "Player" }).click();
     await expect(page.locator(".hololive-player-workspace")).toBeVisible();
@@ -583,7 +657,7 @@ test("plays a profile song and adds it to a playlist", async ({ page }) => {
   await page.getByLabel("New playlist name").fill("Shelf Picks");
   await page.getByTitle("Create new playlist").click();
   await expect(page.locator(".hololive-playlist-stack")).toContainText("Shelf Picks");
-  await page.getByRole("link", { name: "Tier Lists" }).click();
+  await page.getByRole("link", { name: "Tier List" }).click();
 
   const tokinoTile = page.locator('.hololive-pool .hololive-idol-tile[data-idol-id="tokino-sora"]').first();
 
@@ -601,6 +675,8 @@ test("plays a profile song and adds it to a playlist", async ({ page }) => {
     )
     .toBe("tokino-sora-mock-original");
   const miniPlayer = page.locator(".hololive-persistent-player.mini");
+  await expect(miniPlayer).toBeVisible();
+  await page.locator(".hololive-profile-content").click({ position: { x: 8, y: 8 } });
   await expect(miniPlayer).toBeVisible();
   await expect(miniPlayer.locator("iframe")).toHaveAttribute("src", /tokino-sora-mock-original/);
   const expectedEmbedOrigin = await page.evaluate(() => encodeURIComponent(window.location.origin));
@@ -735,7 +811,7 @@ test("plays a profile song and adds it to a playlist", async ({ page }) => {
   await expect(shelfPicks.locator(".hololive-player-song-list li")).toHaveCount(2);
   await expect(shelfPicks).toContainText("Tokino Sora Original Song");
 
-  await page.getByRole("link", { name: "Tier Lists" }).click();
+  await page.getByRole("link", { name: "Tier List" }).click();
   const reopenedMiniPlayer = page.locator(".hololive-persistent-player.mini");
   await expect(reopenedMiniPlayer).toBeVisible();
   await reopenedMiniPlayer.getByRole("button", { name: "Close mini player" }).click();
@@ -788,11 +864,18 @@ test("does not open an idol profile while dragging", async ({ page }) => {
 test("uses Hololive view tabs without a sidebar", async ({ page }) => {
   await expect(page.locator(".sidebar")).toHaveCount(0);
   await expect(page.locator(".nav-item")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Tier Lists" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Tier List" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Player" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Talents" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Brackets" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Bracket" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Custom Import" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(page.locator(".hololive-view-switch a")).toHaveText([
+    "Tier List",
+    "Player",
+    "Bracket",
+    "Custom Import",
+    "Settings"
+  ]);
 
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/module\/hololive\/settings$/);
@@ -802,14 +885,41 @@ test("uses Hololive view tabs without a sidebar", async ({ page }) => {
   await expect(page.getByRole("button", { name: /^Save$/ })).toBeVisible();
   await page.getByRole("button", { name: /Data Safety/ }).click();
   await expect(page.getByRole("button", { name: "Open data folder" })).toBeVisible();
-  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByRole("button", { name: "Export backup" }).click();
   const backupToast = page.locator(".hololive-action-toast");
-  await expect(backupToast).toContainText("Backup created");
+  await expect(backupToast).toContainText("Backup exported");
+  await expect(backupToast).toContainText("Holoshelf Backup mock.holoshelf-backup");
   await expect(backupToast).toHaveCSS("position", "fixed");
   await expect(backupToast).toHaveCSS("top", "42px");
   await expect(backupToast.locator(".hololive-toast-progress")).toBeVisible();
   await backupToast.click();
   await expect(backupToast).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Import backup" }).click();
+  const importConfirmToast = page.locator(".hololive-action-toast");
+  await expect(importConfirmToast).toContainText("Import backup?");
+  await importConfirmToast.getByRole("button", { name: "Import" }).click();
+  const importToast = page.locator(".hololive-action-toast");
+  await expect(importToast).toContainText("Backup imported");
+  await expect(importToast).toContainText("Restarting Holoshelf.");
+  await importToast.click();
+  await expect(importToast).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Reset local data" }).click();
+  const resetWarningToast = page.locator(".hololive-action-toast");
+  await expect(resetWarningToast).toContainText("Reset local data?");
+  await expect(resetWarningToast).toContainText("custom talents");
+  await resetWarningToast.getByRole("button", { name: "Continue" }).click();
+  const resetExportToast = page.locator(".hololive-action-toast");
+  await expect(resetExportToast).toContainText("Export a backup first?");
+  await expect(resetExportToast.getByRole("button", { name: "Export backup" })).toBeVisible();
+  await resetExportToast.getByRole("button", { name: "Skip" }).click();
+  const resetFinalToast = page.locator(".hololive-action-toast");
+  await expect(resetFinalToast).toContainText("Are you sure?");
+  await expect(resetFinalToast).toContainText("reset to bundled defaults");
+  await expect(resetFinalToast.getByRole("button", { name: "Erase data" })).toBeVisible();
+  await resetFinalToast.click();
+  await expect(resetFinalToast).toHaveCount(0);
 });
 
 test("keeps the Hololive tabs sticky while the workspace scrolls", async ({ page }) => {
