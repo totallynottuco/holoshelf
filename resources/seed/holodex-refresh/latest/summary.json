@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-07-01T22:20:50.249Z",
-  "completedAt": "2026-07-01T22:29:08.904Z",
+  "startedAt": "2026-07-06T17:04:55.387Z",
+  "completedAt": "2026-07-06T17:15:14.034Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-07-01T222050Z",
+  "officialDataVersion": "2026-07-06T170455Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -12,42 +12,42 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-07-01T22:20:57.272Z"
+    "updatedAt": "2026-07-06T17:05:02.021Z"
   },
   "musicRefresh": {
-    "sourceRows": 2999,
-    "importedRows": 2951,
+    "sourceRows": 3004,
+    "importedRows": 2956,
     "filteredRows": 48,
     "duplicateRows": 1132,
     "run": {
-      "id": "a5311dd6-db13-416e-8fb4-b088966c6c51",
+      "id": "148bd2f6-2a3e-42e1-8101-248b6128eb3c",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-07-01T22:28:55.536Z",
-      "completedAt": "2026-07-01T22:29:02.723Z",
-      "fetchedRows": 2999,
-      "keptRows": 2951,
+      "startedAt": "2026-07-06T17:15:00.922Z",
+      "completedAt": "2026-07-06T17:15:07.101Z",
+      "fetchedRows": 3004,
+      "keptRows": 2956,
       "filteredRows": 48,
       "duplicateRows": 1132,
       "error": null
     }
   },
   "videoStatsRefresh": {
-    "requestedVideos": 2943,
-    "updatedVideos": 2943,
+    "requestedVideos": 2948,
+    "updatedVideos": 2948,
     "missingVideos": 0,
     "unavailableVideos": 0,
     "failedBatches": 0,
     "batches": 59,
-    "fetchedAt": "2026-07-01T22:29:02.971Z"
+    "fetchedAt": "2026-07-06T17:15:07.294Z"
   },
   "counts": {
-    "totalMusicRows": 2951,
+    "totalMusicRows": 2956,
     "totalChannels": 177,
     "officialIdols": 74,
     "customIdols": 0,
-    "statsRows": 2947,
-    "detailCacheRows": 2951,
+    "statsRows": 2951,
+    "detailCacheRows": 2956,
     "duplicateRemovalRows": 1111
   }
 }
