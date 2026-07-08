@@ -1446,6 +1446,10 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           upsetWins: 0,
           revengeWins: 0,
           giantKillerScore: 0,
+          bigGameScore: 0,
+          bigGameWins: 0,
+          punchingUpScore: 0,
+          punchingUpWins: 0,
           lastArchivedAt: bracket.updatedAt
         } satisfies HololiveBracketStatsOverview["topSongsByWins"][number]);
       song.appearances += 1;
@@ -1504,9 +1508,17 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       if (winnerSong) {
         const winnerViews = match.winner.viewCount ?? null;
         const loserViews = loser.viewCount ?? null;
+        if (loserViews != null) {
+          winnerSong.bigGameScore += loserViews;
+          winnerSong.bigGameWins += 1;
+        }
         if (winnerViews != null && loserViews != null && winnerViews < loserViews) {
           winnerSong.upsetWins += 1;
           winnerSong.giantKillerScore += loserViews - winnerViews;
+          if (winnerViews > 0 && loserViews > 0) {
+            winnerSong.punchingUpScore += Math.log2(loserViews / winnerViews);
+            winnerSong.punchingUpWins += 1;
+          }
         }
         if (previousSongResults.has(`${loser.youtubeVideoId}|${match.winner.youtubeVideoId}`)) {
           winnerSong.revengeWins += 1;
@@ -1553,6 +1565,8 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     right.wins - left.wins || right.championCount - left.championCount || right.appearances - left.appearances;
   const finalsWithoutTitle = (song: HololiveBracketStatsOverview["topSongsByWins"][number]) => Math.max(0, song.finalistCount - song.championCount);
   const giantKillerAverageScore = (song: HololiveBracketStatsOverview["topSongsByWins"][number]) => (song.upsetWins > 0 ? song.giantKillerScore / song.upsetWins : 0);
+  const bigGameAverageScore = (song: HololiveBracketStatsOverview["topSongsByWins"][number]) =>
+    song.bigGameWins > 0 ? song.bigGameScore / song.bigGameWins : 0;
   const songs = [...songStats.values()];
   const talents = [...talentStats.values()];
   const bySongTitle = (left: HololiveBracketStatsOverview["topSongsByWins"][number], right: HololiveBracketStatsOverview["topSongsByWins"][number]) =>
@@ -1595,6 +1609,39 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           giantKillerAverageScore(right) - giantKillerAverageScore(left) ||
           right.giantKillerScore - left.giantKillerScore ||
           right.upsetWins - left.upsetWins ||
+          byWins(left, right) ||
+          bySongTitle(left, right)
+      )
+      .slice(0, 10),
+    topSongsByBigGameScore: [...songs]
+      .filter((song) => song.bigGameScore > 0 && song.bigGameWins > 0)
+      .sort(
+        (left, right) =>
+          right.bigGameScore - left.bigGameScore ||
+          bigGameAverageScore(right) - bigGameAverageScore(left) ||
+          right.bigGameWins - left.bigGameWins ||
+          byWins(left, right) ||
+          bySongTitle(left, right)
+      )
+      .slice(0, 10),
+    topSongsByBigGameAverage: [...songs]
+      .filter((song) => song.bigGameScore > 0 && song.bigGameWins > 0)
+      .sort(
+        (left, right) =>
+          bigGameAverageScore(right) - bigGameAverageScore(left) ||
+          right.bigGameScore - left.bigGameScore ||
+          right.bigGameWins - left.bigGameWins ||
+          byWins(left, right) ||
+          bySongTitle(left, right)
+      )
+      .slice(0, 10),
+    topSongsByPunchingUpScore: [...songs]
+      .filter((song) => song.punchingUpScore > 0 && song.punchingUpWins > 0)
+      .sort(
+        (left, right) =>
+          right.punchingUpScore - left.punchingUpScore ||
+          right.punchingUpWins - left.punchingUpWins ||
+          right.giantKillerScore - left.giantKillerScore ||
           byWins(left, right) ||
           bySongTitle(left, right)
       )

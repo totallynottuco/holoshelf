@@ -18,6 +18,17 @@ async function dragCenterTo(
   await page.mouse.up();
 }
 
+async function createBracket(page: Page, size: string, name: string): Promise<void> {
+  await page.getByRole("button", { name: "Create" }).click();
+  const popover = page.locator(".hololive-bracket-create-popover");
+  await expect(popover).toBeVisible();
+  await popover.getByRole("radio", { name: size }).click();
+  await popover.getByRole("radio", { name: "Random Songs" }).click();
+  await popover.getByLabel("Name").fill(name);
+  await popover.getByRole("button", { name: "Create Bracket" }).click();
+  await expect(popover).toHaveCount(0);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const targetWindow = window as typeof window & {
@@ -167,6 +178,153 @@ test("renders the Hololive tier list route", async ({ page }) => {
   expect(Math.abs((rowBox?.height ?? 0) - 76)).toBeLessThanOrEqual(1);
   expect(Math.abs((firstTabBox?.x ?? 0) - ((firstResizerBox?.x ?? 0) + (firstResizerBox?.width ?? 0)))).toBeLessThanOrEqual(2);
   expect(poolBox?.height).toBeGreaterThan(100);
+});
+
+test("renders bracket result exports with bounded layouts for every bracket size", async ({ page }) => {
+  const thumbnailPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  await page.route("https://i.ytimg.com/**", (route) =>
+    route.fulfill({
+      body: thumbnailPng,
+      contentType: "image/png",
+      headers: {
+        "access-control-allow-origin": "*"
+      }
+    })
+  );
+
+  const results = await page.evaluate(async () => {
+    const { calculateHololiveBracketExportLayout, renderHololiveBracketExportPng } = await import(
+      "/src/renderer/lib/hololiveBracketExport.ts"
+    );
+
+    function roundLabel(size: number, roundIndex: number) {
+      const roundSize = size / 2 ** roundIndex;
+      if (roundSize === 2) {
+        return "Final";
+      }
+      if (roundSize === 4) {
+        return "Semi Final";
+      }
+      if (roundSize === 8) {
+        return "Quarter Final";
+      }
+      return `Round of ${roundSize}`;
+    }
+
+    function makeEntry(index: number, size: number) {
+      return {
+        id: `entry-${index}`,
+        bracketId: `export-${size}`,
+        slotIndex: index,
+        youtubeVideoId: "exportthumb",
+        title: `Export Song ${index + 1}`,
+        songName: null,
+        topicId: "Original_Song" as const,
+        youtubeUrl: "https://www.youtube.com/watch?v=exportthumb",
+        channelName: "Export Channel",
+        idolId: `idol-${index % 8}`,
+        idolName: `Talent ${index % 8}`,
+        canonicalPerformanceKey: `export-song-${index}`,
+        viewCount: 1_000_000 + index,
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        durationSeconds: 210
+      };
+    }
+
+    function makeBracket(size: number) {
+      const entries = Array.from({ length: size }, (_, index) => makeEntry(index, size));
+      const byId = new Map(entries.map((entry) => [entry.id, entry]));
+      let activeEntryIds = entries.map((entry) => entry.id);
+      const rounds = [];
+      let roundIndex = 0;
+
+      while (activeEntryIds.length > 1) {
+        const winners = [];
+        const matches = [];
+        for (let index = 0; index < activeEntryIds.length; index += 2) {
+          const entryA = byId.get(activeEntryIds[index]);
+          const entryB = byId.get(activeEntryIds[index + 1]);
+          if (!entryA || !entryB) {
+            continue;
+          }
+          winners.push(entryA.id);
+          matches.push({
+            id: `r${roundIndex}-m${index / 2}`,
+            bracketId: `export-${size}`,
+            roundIndex,
+            matchIndex: index / 2,
+            entryA,
+            entryB,
+            winnerEntryId: entryA.id,
+            winner: entryA,
+            completedAt: "2026-01-02T00:00:00.000Z",
+            updatedAt: "2026-01-02T00:00:00.000Z"
+          });
+        }
+        rounds.push({
+          roundIndex,
+          label: roundLabel(size, roundIndex),
+          matches
+        });
+        activeEntryIds = winners;
+        roundIndex += 1;
+      }
+
+      return {
+        id: `export-${size}`,
+        name: `Export RO${size}`,
+        size: `RO${size}`,
+        generationStyle: "random",
+        generationFilters: {},
+        seed: "export-test",
+        status: "completed",
+        currentMatchId: null,
+        currentMatch: null,
+        champion: entries[0],
+        entries,
+        rounds,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z"
+      };
+    }
+
+    function measureDataUrl(dataUrl: string) {
+      return new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+        image.onerror = () => reject(new Error("Could not load exported bracket image."));
+        image.src = dataUrl;
+      });
+    }
+
+    const sizes = [16, 32, 64, 128, 256];
+    const rendered = [];
+    for (const size of sizes) {
+      const bracket = makeBracket(size);
+      const baseMatches = Math.max(1, bracket.rounds[0].matches.length / 2);
+      const layout = calculateHololiveBracketExportLayout(bracket.rounds.length - 1, baseMatches);
+      const dataUrl = await renderHololiveBracketExportPng(bracket as never);
+      rendered.push({
+        size,
+        layoutWidth: layout.width,
+        layoutHeight: layout.height,
+        image: await measureDataUrl(dataUrl)
+      });
+    }
+    return rendered;
+  });
+
+  for (const result of results) {
+    expect(result.image.width).toBe(Math.ceil(result.layoutWidth * 1.25));
+    expect(result.image.height).toBe(Math.ceil(result.layoutHeight * 1.25));
+    expect(result.image.width).toBeLessThanOrEqual(8192);
+    expect(result.image.height).toBeLessThanOrEqual(8192);
+  }
+  expect(results[0].image.width).toBeLessThan(results[1].image.width);
+  expect(results.at(-1)?.image.width).toBeLessThan(3000);
 });
 
 test("adds a custom talent from a channel handle", async ({ page }) => {
@@ -361,7 +519,17 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Most Wins" })).toBeVisible();
   await expect(page.locator(".hololive-bracket-stats-column-head").first()).toContainText("Song");
   await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Upset Wins" })).toHaveAttribute("title", /Lower-view/);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Revenge Wins" })).toHaveAttribute("title", /previously eliminated/);
+  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Punching Up" })).toHaveAttribute("title", /Relative score/);
+  const punchingUpPanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Punching Up" }) });
+  await expect(punchingUpPanel).toContainText(/Score|No relative upset wins yet\./);
+  await expect(punchingUpPanel.getByRole("button")).toHaveCount(0);
+  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Big Game Wins" })).toHaveAttribute("title", /defeated opponent view count/);
+  const bigGamePanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Big Game Wins" }) });
+  const bigGameModeButton = bigGamePanel.getByRole("button", { name: /Big game wins mode/ });
+  await expect(bigGameModeButton).toContainText("Total");
+  await bigGameModeButton.click();
+  await expect(bigGameModeButton).toContainText("Avg");
+  await expect(bigGamePanel.locator("header")).toHaveAttribute("title", /Average defeated opponent view count/);
   await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Giant Killers" })).toHaveAttribute("title", /view-count gap/);
   const giantKillersPanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Giant Killers" }) });
   const giantKillerModeButton = giantKillersPanel.getByRole("button", { name: /Giant killer mode/ });
@@ -383,6 +551,51 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await page.locator(".hololive-action-toast").filter({ hasText: /Delete archived run "Singer Showdown"/ }).getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".hololive-bracket-stats-panel.history")).toContainText("Completed brackets will appear here");
   await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
+});
+
+test("sizes bracket connector overlay to the active bracket", async ({ page }) => {
+  await page.getByRole("link", { name: "Bracket" }).click();
+
+  await createBracket(page, "RO64", "Large Scroll Probe");
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(page.locator(".hololive-bracket-tree")).toBeVisible();
+  await expect(page.locator(".hololive-bracket-lines")).toBeVisible();
+
+  await createBracket(page, "RO16", "Small Scroll Probe");
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(page.locator(".hololive-bracket-tree")).toBeVisible();
+
+  const readMetrics = () =>
+    page.evaluate(() => {
+      const tree = document.querySelector<HTMLElement>(".hololive-bracket-tree");
+      const canvas = document.querySelector<HTMLElement>(".hololive-bracket-canvas");
+      const svg = document.querySelector<SVGSVGElement>(".hololive-bracket-lines");
+      if (!tree || !canvas || !svg) {
+        return null;
+      }
+      const style = window.getComputedStyle(tree);
+      const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+      return {
+        canvasWidth: Math.ceil(canvas.getBoundingClientRect().width),
+        svgWidth: Number(svg.getAttribute("width") ?? 0),
+        treeScrollWidth: tree.scrollWidth,
+        treeExpectedWidth: Math.ceil(canvas.getBoundingClientRect().width + horizontalPadding)
+      };
+    });
+
+  await expect
+    .poll(readMetrics)
+    .toMatchObject({
+      svgWidth: expect.any(Number),
+      canvasWidth: expect.any(Number),
+      treeScrollWidth: expect.any(Number),
+      treeExpectedWidth: expect.any(Number)
+    });
+
+  const metrics = await readMetrics();
+  expect(metrics).not.toBeNull();
+  expect(metrics!.svgWidth).toBeLessThanOrEqual(metrics!.canvasWidth + 2);
+  expect(metrics!.treeScrollWidth).toBeLessThanOrEqual(metrics!.treeExpectedWidth + 2);
 });
 
 test("opens a Hololive idol profile shelf from clicking an idol tile", async ({ page }) => {

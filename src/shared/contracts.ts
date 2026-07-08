@@ -459,6 +459,10 @@ export interface HololiveBracketSongStats {
   upsetWins: number;
   revengeWins: number;
   giantKillerScore: number;
+  bigGameScore: number;
+  bigGameWins: number;
+  punchingUpScore: number;
+  punchingUpWins: number;
   lastArchivedAt: string;
 }
 
@@ -506,6 +510,9 @@ export interface HololiveBracketStatsOverview {
   topSongsByRevengeWins: HololiveBracketSongStats[];
   topSongsByGiantKillerScore: HololiveBracketSongStats[];
   topSongsByGiantKillerAverage: HololiveBracketSongStats[];
+  topSongsByBigGameScore: HololiveBracketSongStats[];
+  topSongsByBigGameAverage: HololiveBracketSongStats[];
+  topSongsByPunchingUpScore: HololiveBracketSongStats[];
   topTalents: HololiveBracketTalentStats[];
   topTalentsByTop4: HololiveBracketTalentStats[];
   topRivalries: HololiveBracketRivalryStats[];

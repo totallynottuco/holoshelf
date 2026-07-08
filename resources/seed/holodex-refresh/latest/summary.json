@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-07-06T17:04:55.387Z",
-  "completedAt": "2026-07-06T17:15:14.034Z",
+  "startedAt": "2026-07-08T05:38:28.176Z",
+  "completedAt": "2026-07-08T05:47:15.401Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-07-06T170455Z",
+  "officialDataVersion": "2026-07-08T053828Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -12,42 +12,42 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-07-06T17:05:02.021Z"
+    "updatedAt": "2026-07-08T05:38:36.237Z"
   },
   "musicRefresh": {
-    "sourceRows": 3004,
-    "importedRows": 2956,
+    "sourceRows": 3010,
+    "importedRows": 2962,
     "filteredRows": 48,
-    "duplicateRows": 1132,
+    "duplicateRows": 1137,
     "run": {
-      "id": "148bd2f6-2a3e-42e1-8101-248b6128eb3c",
+      "id": "c6b716e6-439a-4926-8bf3-b5bb8342b0eb",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-07-06T17:15:00.922Z",
-      "completedAt": "2026-07-06T17:15:07.101Z",
-      "fetchedRows": 3004,
-      "keptRows": 2956,
+      "startedAt": "2026-07-08T05:47:02.579Z",
+      "completedAt": "2026-07-08T05:47:09.317Z",
+      "fetchedRows": 3010,
+      "keptRows": 2962,
       "filteredRows": 48,
-      "duplicateRows": 1132,
+      "duplicateRows": 1137,
       "error": null
     }
   },
   "videoStatsRefresh": {
-    "requestedVideos": 2948,
-    "updatedVideos": 2948,
+    "requestedVideos": 2954,
+    "updatedVideos": 2954,
     "missingVideos": 0,
     "unavailableVideos": 0,
     "failedBatches": 0,
-    "batches": 59,
-    "fetchedAt": "2026-07-06T17:15:07.294Z"
+    "batches": 60,
+    "fetchedAt": "2026-07-08T05:47:09.546Z"
   },
   "counts": {
-    "totalMusicRows": 2956,
+    "totalMusicRows": 2962,
     "totalChannels": 177,
     "officialIdols": 74,
     "customIdols": 0,
-    "statsRows": 2951,
-    "detailCacheRows": 2956,
-    "duplicateRemovalRows": 1111
+    "statsRows": 2957,
+    "detailCacheRows": 2962,
+    "duplicateRemovalRows": 1116
   }
 }

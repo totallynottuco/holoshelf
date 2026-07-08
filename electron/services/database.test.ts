@@ -648,7 +648,7 @@ describe("DatabaseService", () => {
     expect(database.getHololiveBracketStatsOverview().totals.completedBrackets).toBe(1);
   });
 
-  it("tracks bracket upset, revenge, giant killer, and rivalry stats", async () => {
+  it("tracks bracket upset, big game, punching up, giant killer, and rivalry stats", async () => {
     const database = await createTempDatabase();
     const insertArchive = (input: {
       id: string;
@@ -835,6 +835,21 @@ describe("DatabaseService", () => {
       youtubeVideoId: "low-view-song",
       revengeWins: 1
     });
+    expect(stats.topSongsByBigGameScore[0]).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      bigGameScore: 2_200_000,
+      bigGameWins: 2
+    });
+    expect(stats.topSongsByBigGameAverage[0]).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      bigGameScore: 2_200_000,
+      bigGameWins: 2
+    });
+    expect(stats.topSongsByPunchingUpScore[0]).toMatchObject({
+      youtubeVideoId: "low-view-song",
+      punchingUpWins: 1
+    });
+    expect(stats.topSongsByPunchingUpScore[0]?.punchingUpScore).toBeCloseTo(Math.log2(10));
     expect(stats.topSongsByGiantKillerScore[0]).toMatchObject({
       youtubeVideoId: "steady-upset-song",
       giantKillerScore: 1_200_000

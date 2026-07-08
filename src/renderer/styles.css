@@ -2535,7 +2535,7 @@ select {
   gap: var(--bracket-column-gap);
   width: max-content;
   min-width: max-content;
-  min-height: 100%;
+  min-height: 0;
 }
 
 .hololive-bracket-lines {

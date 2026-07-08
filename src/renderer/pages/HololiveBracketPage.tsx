@@ -161,6 +161,16 @@ type BracketConnectorPath = {
   d: string;
 };
 
+type BracketConnectorLayout = {
+  width: number;
+  height: number;
+  paths: BracketConnectorPath[];
+};
+
+function emptyBracketConnectorLayout(): BracketConnectorLayout {
+  return { width: 0, height: 0, paths: [] };
+}
+
 type BracketRoundState = "current" | "complete" | "upcoming";
 
 interface ExportToastState {
@@ -587,8 +597,23 @@ function formatBracketViewDelta(value: number): string {
   return formatted ? `+${formatted}` : "+0";
 }
 
+function formatBracketViewScore(value: number): string {
+  return formatHololiveViewCount(value).replace(/\s+views$/i, "") || "0";
+}
+
 function giantKillerAverageScore(row: HololiveBracketSongStats): number {
   return row.upsetWins > 0 ? row.giantKillerScore / row.upsetWins : 0;
+}
+
+function bigGameAverageScore(row: HololiveBracketSongStats): number {
+  return row.bigGameWins > 0 ? row.bigGameScore / row.bigGameWins : 0;
+}
+
+function formatBracketRelativeScore(value: number): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 function BracketStatsMetrics<T>({ row, metrics }: { row: T; metrics: Array<BracketStatsMetric<T>> }) {
@@ -652,16 +677,24 @@ const SONG_UPSET_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = 
   { label: "Upset wins", header: "Upsets", value: (row) => formatBracketNumber(row.upsetWins) }
 ];
 
-const SONG_REVENGE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
-  { label: "Revenge wins", header: "Wins", value: (row) => formatBracketNumber(row.revengeWins) }
-];
-
 const SONG_GIANT_KILLER_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
   { label: "Total giant killer score", header: "Total", value: (row) => formatBracketViewDelta(row.giantKillerScore) }
 ];
 
 const SONG_GIANT_KILLER_AVERAGE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
   { label: "Average giant killer score", header: "Avg", value: (row) => formatBracketViewDelta(giantKillerAverageScore(row)) }
+];
+
+const SONG_BIG_GAME_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Total views beaten", header: "Total", value: (row) => formatBracketViewScore(row.bigGameScore) }
+];
+
+const SONG_BIG_GAME_AVERAGE_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Average views beaten", header: "Avg", value: (row) => formatBracketViewScore(bigGameAverageScore(row)) }
+];
+
+const SONG_PUNCHING_UP_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
+  { label: "Relative upset score", header: "Score", value: (row) => formatBracketRelativeScore(row.punchingUpScore) }
 ];
 
 function SongStatsTable({
@@ -841,16 +874,18 @@ function BracketHistoryList({
   );
 }
 
-type GiantKillerStatsMode = "total" | "average";
+type BracketViewStatsMode = "total" | "average";
 
-function GiantKillerModeToggle({
+function BracketStatsModeToggle({
+  labelPrefix,
   mode,
   onModeChange
 }: {
-  mode: GiantKillerStatsMode;
-  onModeChange: (mode: GiantKillerStatsMode) => void;
+  labelPrefix: string;
+  mode: BracketViewStatsMode;
+  onModeChange: (mode: BracketViewStatsMode) => void;
 }) {
-  const nextMode: GiantKillerStatsMode = mode === "total" ? "average" : "total";
+  const nextMode: BracketViewStatsMode = mode === "total" ? "average" : "total";
   const label = mode === "total" ? "Total" : "Avg";
   const nextLabel = nextMode === "total" ? "Total" : "Avg";
 
@@ -858,7 +893,7 @@ function GiantKillerModeToggle({
     <button
       type="button"
       className="hololive-bracket-stat-mode-button"
-      aria-label={`Giant killer mode: ${label}. Switch to ${nextLabel}.`}
+      aria-label={`${labelPrefix} mode: ${label}. Switch to ${nextLabel}.`}
       aria-pressed={mode === "average"}
       title={`Showing ${label}. Click for ${nextLabel}.`}
       onClick={() => onModeChange(nextMode)}
@@ -881,7 +916,8 @@ function BracketStatsView({
   deletingArchiveId: string | null;
   onDeleteArchive: (archive: HololiveBracketArchiveSummary) => void;
 }) {
-  const [giantKillerMode, setGiantKillerMode] = useState<GiantKillerStatsMode>("total");
+  const [giantKillerMode, setGiantKillerMode] = useState<BracketViewStatsMode>("total");
+  const [bigGameMode, setBigGameMode] = useState<BracketViewStatsMode>("total");
 
   if (loading && !stats) {
     return (
@@ -908,6 +944,15 @@ function BracketStatsView({
     giantKillerMode === "average"
       ? "Average view-count gap per lower-view upset win."
       : "Total view-count gap beaten in lower-view upset wins.";
+  const bigGameRows =
+    bigGameMode === "average" ? stats.topSongsByBigGameAverage : stats.topSongsByBigGameScore;
+  const bigGameMetrics = bigGameMode === "average" ? SONG_BIG_GAME_AVERAGE_METRICS : SONG_BIG_GAME_METRICS;
+  const bigGameDescription =
+    bigGameMode === "average"
+      ? "Average defeated opponent view count across all archived wins."
+      : "Total defeated opponent view count across all archived wins.";
+  const punchingUpRows = stats.topSongsByPunchingUpScore;
+  const punchingUpDescription = "Relative score for lower-view songs beating higher-view opponents.";
 
   return (
     <div className="hololive-bracket-stats-view">
@@ -938,11 +983,19 @@ function BracketStatsView({
           description="Lower-view songs beating higher-view opponents."
         />
         <SongStatsTable
-          title="Revenge Wins"
-          rows={stats.topSongsByRevengeWins}
-          metrics={SONG_REVENGE_METRICS}
-          emptyText="No revenge wins yet."
-          description="Songs beating an opponent that previously eliminated them."
+          title="Punching Up"
+          rows={punchingUpRows}
+          metrics={SONG_PUNCHING_UP_METRICS}
+          emptyText="No relative upset wins yet."
+          description={punchingUpDescription}
+        />
+        <SongStatsTable
+          title="Big Game Wins"
+          rows={bigGameRows}
+          metrics={bigGameMetrics}
+          emptyText="No view-count wins yet."
+          description={bigGameDescription}
+          headerAction={<BracketStatsModeToggle labelPrefix="Big game wins" mode={bigGameMode} onModeChange={setBigGameMode} />}
         />
         <SongStatsTable
           title="Giant Killers"
@@ -950,7 +1003,7 @@ function BracketStatsView({
           metrics={giantKillerMetrics}
           emptyText="No giant-killer wins yet."
           description={giantKillerDescription}
-          headerAction={<GiantKillerModeToggle mode={giantKillerMode} onModeChange={setGiantKillerMode} />}
+          headerAction={<BracketStatsModeToggle labelPrefix="Giant killer" mode={giantKillerMode} onModeChange={setGiantKillerMode} />}
         />
         <SongStatsTable
           title="Finals Heartbreak"
@@ -1032,11 +1085,7 @@ export function HololiveBracketPage() {
   const [archiveSummaries, setArchiveSummaries] = useState<HololiveBracketArchiveSummary[]>([]);
   const [matchupMarkersByVideoId, setMatchupMarkersByVideoId] = useState<Record<string, HololiveMusicMarker | null>>({});
   const [arenaFullscreen, setArenaFullscreen] = useState(false);
-  const [connectorLayout, setConnectorLayout] = useState<{
-    width: number;
-    height: number;
-    paths: BracketConnectorPath[];
-  }>({ width: 0, height: 0, paths: [] });
+  const [connectorLayout, setConnectorLayout] = useState<BracketConnectorLayout>(() => emptyBracketConnectorLayout());
 
   const completedCount = useMemo(
     () => activeBracket?.rounds.flatMap((round) => round.matches).filter((match) => match.winnerEntryId).length ?? 0,
@@ -1306,11 +1355,24 @@ export function HololiveBracketPage() {
   const measureBracketConnectors = useCallback(() => {
     const canvas = bracketCanvasRef.current;
     if (!activeBracket || mode !== "bracket" || !canvas) {
-      setConnectorLayout({ width: 0, height: 0, paths: [] });
+      setConnectorLayout(emptyBracketConnectorLayout());
       return;
     }
 
     const canvasRect = canvas.getBoundingClientRect();
+    const contentBounds = Array.from(canvas.children).reduce(
+      (bounds, child) => {
+        if (!(child instanceof HTMLElement) || child.classList.contains("hololive-bracket-lines")) {
+          return bounds;
+        }
+        const rect = child.getBoundingClientRect();
+        return {
+          right: Math.max(bounds.right, rect.right - canvasRect.left),
+          bottom: Math.max(bounds.bottom, rect.bottom - canvasRect.top)
+        };
+      },
+      { right: canvas.clientWidth, bottom: canvas.clientHeight }
+    );
     const roundCoordinate = (value: number) => Math.round(value * 10) / 10;
     const getBodyRect = (matchId: string) => {
       const node = matchRefs.current.get(matchId);
@@ -1383,8 +1445,8 @@ export function HololiveBracketPage() {
     }
 
     const nextLayout = {
-      width: Math.ceil(canvas.scrollWidth),
-      height: Math.ceil(canvas.scrollHeight),
+      width: Math.ceil(Math.max(1, contentBounds.right)),
+      height: Math.ceil(Math.max(1, contentBounds.bottom)),
       paths
     };
     setConnectorLayout((current) => {
@@ -1402,7 +1464,7 @@ export function HololiveBracketPage() {
 
   useLayoutEffect(() => {
     if (!activeBracket || mode !== "bracket") {
-      setConnectorLayout({ width: 0, height: 0, paths: [] });
+      setConnectorLayout(emptyBracketConnectorLayout());
       return;
     }
 
@@ -1424,6 +1486,10 @@ export function HololiveBracketPage() {
       window.removeEventListener("resize", scheduleMeasure);
     };
   }, [activeBracket, measureBracketConnectors, mode]);
+
+  useLayoutEffect(() => {
+    setConnectorLayout(emptyBracketConnectorLayout());
+  }, [activeBracket?.id, activeBracket?.size, mode]);
 
   async function loadInitial() {
     setLoading(true);

@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.0.55",
+  "version": "1.0.58",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -83,7 +83,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "- Song updates"
+      "releaseNotes": "- Song updates\n- Bracket UI bug fixes\n- New brackets stats"
     },
     "win": {
       "icon": "ico.ico",

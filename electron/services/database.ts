@@ -5886,6 +5886,10 @@ export class DatabaseService {
           upsetWins: 0,
           revengeWins: 0,
           giantKillerScore: 0,
+          bigGameScore: 0,
+          bigGameWins: 0,
+          punchingUpScore: 0,
+          punchingUpWins: 0,
           lastArchivedAt: row.archived_at
         } satisfies HololiveBracketSongStats);
       song.appearances += 1;
@@ -5986,9 +5990,17 @@ export class DatabaseService {
       if (winnerSong) {
         const winnerViews = row.winner_view_count == null ? null : Number(row.winner_view_count);
         const loserViews = row.loser_view_count == null ? null : Number(row.loser_view_count);
+        if (loserViews != null) {
+          winnerSong.bigGameScore += loserViews;
+          winnerSong.bigGameWins += 1;
+        }
         if (winnerViews != null && loserViews != null && winnerViews < loserViews) {
           winnerSong.upsetWins += 1;
           winnerSong.giantKillerScore += loserViews - winnerViews;
+          if (winnerViews > 0 && loserViews > 0) {
+            winnerSong.punchingUpScore += Math.log2(loserViews / winnerViews);
+            winnerSong.punchingUpWins += 1;
+          }
         }
 
         if (previousSongResults.has(`${loserYoutubeVideoId}|${row.winner_youtube_video_id}`)) {
@@ -6052,6 +6064,7 @@ export class DatabaseService {
     const bySongTitle = (left: HololiveBracketSongStats, right: HololiveBracketSongStats) => left.title.localeCompare(right.title);
     const finalsWithoutTitle = (song: HololiveBracketSongStats) => Math.max(0, song.finalistCount - song.championCount);
     const giantKillerAverageScore = (song: HololiveBracketSongStats) => (song.upsetWins > 0 ? song.giantKillerScore / song.upsetWins : 0);
+    const bigGameAverageScore = (song: HololiveBracketSongStats) => (song.bigGameWins > 0 ? song.bigGameScore / song.bigGameWins : 0);
     const rivalries = [...rivalryStats.values()];
 
     return {
@@ -6108,6 +6121,39 @@ export class DatabaseService {
             giantKillerAverageScore(right) - giantKillerAverageScore(left) ||
             right.giantKillerScore - left.giantKillerScore ||
             right.upsetWins - left.upsetWins ||
+            right.wins - left.wins ||
+            bySongTitle(left, right)
+        )
+        .slice(0, 10),
+      topSongsByBigGameScore: [...songs]
+        .filter((song) => song.bigGameScore > 0 && song.bigGameWins > 0)
+        .sort(
+          (left, right) =>
+            right.bigGameScore - left.bigGameScore ||
+            bigGameAverageScore(right) - bigGameAverageScore(left) ||
+            right.bigGameWins - left.bigGameWins ||
+            right.wins - left.wins ||
+            bySongTitle(left, right)
+        )
+        .slice(0, 10),
+      topSongsByBigGameAverage: [...songs]
+        .filter((song) => song.bigGameScore > 0 && song.bigGameWins > 0)
+        .sort(
+          (left, right) =>
+            bigGameAverageScore(right) - bigGameAverageScore(left) ||
+            right.bigGameScore - left.bigGameScore ||
+            right.bigGameWins - left.bigGameWins ||
+            right.wins - left.wins ||
+            bySongTitle(left, right)
+        )
+        .slice(0, 10),
+      topSongsByPunchingUpScore: [...songs]
+        .filter((song) => song.punchingUpScore > 0 && song.punchingUpWins > 0)
+        .sort(
+          (left, right) =>
+            right.punchingUpScore - left.punchingUpScore ||
+            right.punchingUpWins - left.punchingUpWins ||
+            right.giantKillerScore - left.giantKillerScore ||
             right.wins - left.wins ||
             bySongTitle(left, right)
         )
