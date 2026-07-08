@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.0.58",
+  "version": "1.0.59",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -17,8 +17,12 @@
     "release:data:wizard": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-data-wizard.ps1",
     "official-data:refresh": "npm run release:data:refresh",
     "release:check-version": "node scripts/assert-release-version.mjs",
-    "release:verify": "npm run release:check-version && npm run release:seed && npm run typecheck && npm test && npm run e2e && npm run build",
+    "release:audit": "node scripts/audit-release-safety.mjs",
+    "release:verify": "npm run release:check-version && npm run release:seed && npm run release:audit && npm run typecheck && npm test && npm run e2e && npm run build",
     "release:assert": "node scripts/assert-release-artifacts.mjs",
+    "release:preflight": "npm run release:verify && npm run release:local",
+    "release:publish": "node scripts/push-release.mjs",
+    "release:verify-published": "node scripts/verify-published-release.mjs",
     "release:local": "npm run package:installer && npm run release:assert",
     "release:install:local": "npm run release:local && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-release.ps1",
     "release:update:installed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-installed-app.ps1 -Yes",

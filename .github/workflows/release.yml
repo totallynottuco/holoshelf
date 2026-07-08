@@ -57,6 +57,10 @@ jobs:
       - name: Build and publish release
         run: npm run release:ci
 
+      - name: Verify published GitHub release
+        if: github.ref_type == 'tag'
+        run: npm run release:verify-published
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
