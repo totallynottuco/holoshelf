@@ -94,6 +94,19 @@ function output(command, commandArgs) {
   return run(command, commandArgs, { capture: true }).trim();
 }
 
+function gitPush(commandArgs) {
+  return run("git", [
+    "-c",
+    "http.sslBackend=openssl",
+    "-c",
+    "http.version=HTTP/1.1",
+    "-c",
+    "http.postBuffer=524288000",
+    "push",
+    ...commandArgs
+  ]);
+}
+
 function resolveCommand(command, commandArgs) {
   if (command === "npm" && process.env.npm_execpath) {
     return {
@@ -266,8 +279,8 @@ if (!staged) {
 
 run("git", ["commit", "-m", args.commitMessage || `Release Holoshelf ${version}`]);
 run("git", ["tag", "-a", tagName, "-m", tagName]);
-run("git", ["push", "origin", "main"]);
-run("git", ["push", "origin", tagName]);
+gitPush(["origin", "main"]);
+gitPush(["origin", tagName]);
 
 if (!args.noWait) {
   await waitForPublishedRelease(parseRepoFullName(readPackageJson()), tagName, args.waitMinutes);
