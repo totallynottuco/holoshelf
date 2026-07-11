@@ -30,6 +30,15 @@ import type {
   HololiveTierListData,
   SourceHealth
 } from "../shared/contracts";
+import {
+  calculateRobustPositiveOpportunityScores,
+  calculateRobustViewStrengthScores,
+  calculateRobustWeightedSuccessRates,
+  calculateShrunkBinaryRates,
+  calculateShrunkWeightedSignedScores,
+  type RobustWeightedRateSample,
+  type ShrunkWeightedSignedScoreSample
+} from "../shared/bracketStatsMath";
 import { hololiveBracketRoundLabel } from "../shared/hololiveBracketLabels";
 import type { HololiveUndoKind, HoloshelfBridge, IpcChannel, IpcChannelMap, UpdateStatus } from "../shared/ipc";
 
@@ -1403,10 +1412,27 @@ function listMockHololiveBracketArchiveSummaries(): HololiveBracketArchiveSummar
 function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   const archives = listMockHololiveBracketArchiveSummaries();
   const archivedBrackets = [...mockHololiveBracketArchives.values()].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  const currentViewCountsByVideoId = new Map(mockHololiveMusicRows.map((row) => [row.youtubeVideoId, row.viewCount ?? null]));
+  const currentViewCountFor = (youtubeVideoId: string, snapshotViewCount: number | null | undefined) => {
+    const currentViewCount = currentViewCountsByVideoId.get(youtubeVideoId);
+    return currentViewCount ?? snapshotViewCount ?? null;
+  };
   const songStats = new Map<string, HololiveBracketStatsOverview["topSongsByWins"][number]>();
   const talentStats = new Map<string, HololiveBracketStatsOverview["topTalents"][number]>();
   const rivalryStats = new Map<string, HololiveBracketStatsOverview["topRivalries"][number]>();
+  const finalsRivalryStats = new Map<string, HololiveBracketStatsOverview["topRivalries"][number]>();
   const previousSongResults = new Set<string>();
+  const finalsConversionSamplesByTalent = new Map<string, boolean[]>();
+  const deepRunSamplesByTalent = new Map<string, boolean[]>();
+  const earlyExitSamplesByTalent = new Map<string, boolean[]>();
+  const strengthOfWinsSamplesByTalent = new Map<string, number[]>();
+  const strengthOfLossesSamplesByTalent = new Map<string, number[]>();
+  const punchingAboveSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
+  const clutchSamplesByTalent = new Map<string, boolean[]>();
+  const pressureEdgeSamplesByTalent = new Map<string, ShrunkWeightedSignedScoreSample[]>();
+  const upsetResilienceSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
+  const highStakesSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
+  const punchingUpSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
 
   for (const bracket of archivedBrackets) {
     const matches = bracket.rounds.flatMap((round) => round.matches);
@@ -1424,6 +1450,8 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       const top16Round = Math.max(0, finalRoundIndex - 3);
       const isChampion = bracket.champion?.id === entry.id ? 1 : 0;
       const isFinalist = finalistIds.has(entry.id) ? 1 : 0;
+      const isRunnerUp = isFinalist && !isChampion ? 1 : 0;
+      const earlyExit = loss && loss.roundIndex === 0 ? 1 : 0;
 
       const song =
         songStats.get(entry.youtubeVideoId) ??
@@ -1448,8 +1476,13 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           giantKillerScore: 0,
           bigGameScore: 0,
           bigGameWins: 0,
+          highStakesPerformanceRate: 0,
+          highStakesPerformanceWins: 0,
+          highStakesPerformanceLosses: 0,
+          highStakesPerformanceMatches: 0,
           punchingUpScore: 0,
           punchingUpWins: 0,
+          punchingUpOpportunities: 0,
           lastArchivedAt: bracket.updatedAt
         } satisfies HololiveBracketStatsOverview["topSongsByWins"][number]);
       song.appearances += 1;
@@ -1475,10 +1508,33 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           winRate: 0,
           championCount: 0,
           finalistCount: 0,
+          finalsConversionRate: 0,
+          runnerUpCount: 0,
           top4Count: 0,
+          deepRunRate: 0,
           top8Count: 0,
           top16Count: 0,
           firstRoundEliminations: 0,
+          earlyExitCount: 0,
+          earlyExitRate: 0,
+          strengthOfWinsScore: 0,
+          strengthOfWinsCount: 0,
+          strengthOfLossesScore: 0,
+          strengthOfLossesCount: 0,
+          punchingAboveScore: 0,
+          punchingAboveWins: 0,
+          punchingAboveOpportunities: 0,
+          clutchRate: 0,
+          clutchWins: 0,
+          clutchLosses: 0,
+          clutchMatches: 0,
+          pressureEdgeScore: 0,
+          pressureEdgeMatches: 0,
+          pressureEdgePositiveMatches: 0,
+          pressureEdgeNegativeMatches: 0,
+          upsetResilienceScore: 0,
+          upsetResilienceChecks: 0,
+          upsetResilienceUpsetLosses: 0,
           lastArchivedAt: bracket.updatedAt
         } satisfies HololiveBracketStatsOverview["topTalents"][number]);
       talent.appearances += 1;
@@ -1486,28 +1542,124 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       talent.losses += loss ? 1 : 0;
       talent.championCount += isChampion;
       talent.finalistCount += isFinalist;
+      talent.runnerUpCount += isRunnerUp;
       talent.top4Count += topRound >= top4Round ? 1 : 0;
       talent.top8Count += topRound >= top8Round ? 1 : 0;
       talent.top16Count += topRound >= top16Round ? 1 : 0;
       talent.firstRoundEliminations += loss?.roundIndex === 0 ? 1 : 0;
+      talent.earlyExitCount += earlyExit;
       talent.winRate = talent.wins + talent.losses > 0 ? talent.wins / (talent.wins + talent.losses) : 0;
       talentStats.set(entry.idolId, talent);
+
+      const deepRunSamples = deepRunSamplesByTalent.get(entry.idolId) ?? [];
+      deepRunSamples.push(topRound >= top4Round);
+      deepRunSamplesByTalent.set(entry.idolId, deepRunSamples);
+      const earlyExitSamples = earlyExitSamplesByTalent.get(entry.idolId) ?? [];
+      earlyExitSamples.push(earlyExit > 0);
+      earlyExitSamplesByTalent.set(entry.idolId, earlyExitSamples);
+      if (isFinalist) {
+        const finalsSamples = finalsConversionSamplesByTalent.get(entry.idolId) ?? [];
+        finalsSamples.push(Boolean(isChampion));
+        finalsConversionSamplesByTalent.set(entry.idolId, finalsSamples);
+      }
     }
 
     for (const match of matches) {
       if (!match.winner || !match.winnerEntryId) {
         continue;
       }
+      const winner = match.winner;
 
       const loser = [match.entryA, match.entryB].find((entry) => entry && entry.id !== match.winnerEntryId) ?? null;
       if (!loser) {
         continue;
       }
 
-      const winnerSong = songStats.get(match.winner.youtubeVideoId);
+      const winnerSong = songStats.get(winner.youtubeVideoId);
+      const loserViews = currentViewCountFor(loser.youtubeVideoId, loser.viewCount);
+      const winnerViews = currentViewCountFor(winner.youtubeVideoId, winner.viewCount);
+      const isDistinctSongResult = winner.youtubeVideoId !== loser.youtubeVideoId;
+      const isClutchRound = match.roundIndex >= Math.max(0, finalRoundIndex - 2);
+      if (isDistinctSongResult && loserViews != null && Number.isFinite(loserViews) && loserViews > 0) {
+        const samples = strengthOfWinsSamplesByTalent.get(winner.idolId) ?? [];
+        samples.push(loserViews);
+        strengthOfWinsSamplesByTalent.set(winner.idolId, samples);
+      }
+      if (isDistinctSongResult && winnerViews != null && Number.isFinite(winnerViews) && winnerViews > 0) {
+        const samples = strengthOfLossesSamplesByTalent.get(loser.idolId) ?? [];
+        samples.push(winnerViews);
+        strengthOfLossesSamplesByTalent.set(loser.idolId, samples);
+      }
+      if (
+        isDistinctSongResult &&
+        winnerViews != null &&
+        loserViews != null &&
+        Number.isFinite(winnerViews) &&
+        Number.isFinite(loserViews) &&
+        winnerViews > 0 &&
+        loserViews > 0 &&
+        winnerViews !== loserViews
+      ) {
+        const underdogTalentId = winnerViews < loserViews ? winner.idolId : loser.idolId;
+        const samples = punchingAboveSamplesByTalent.get(underdogTalentId) ?? [];
+        samples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews < loserViews
+        });
+        punchingAboveSamplesByTalent.set(underdogTalentId, samples);
+      }
+      if (isDistinctSongResult && isClutchRound) {
+        const winnerSamples = clutchSamplesByTalent.get(winner.idolId) ?? [];
+        winnerSamples.push(true);
+        clutchSamplesByTalent.set(winner.idolId, winnerSamples);
+        const loserSamples = clutchSamplesByTalent.get(loser.idolId) ?? [];
+        loserSamples.push(false);
+        clutchSamplesByTalent.set(loser.idolId, loserSamples);
+        if (winner.idolId !== loser.idolId) {
+          const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
+          const winnerPressure = pressureEdgeSamplesByTalent.get(winner.idolId) ?? [];
+          winnerPressure.push({ value: 0.5, weight: roundWeight });
+          pressureEdgeSamplesByTalent.set(winner.idolId, winnerPressure);
+          const loserPressure = pressureEdgeSamplesByTalent.get(loser.idolId) ?? [];
+          loserPressure.push({ value: -0.5, weight: roundWeight });
+          pressureEdgeSamplesByTalent.set(loser.idolId, loserPressure);
+        }
+      }
+      if (
+        isDistinctSongResult &&
+        winnerViews != null &&
+        loserViews != null &&
+        Number.isFinite(winnerViews) &&
+        Number.isFinite(loserViews) &&
+        winnerViews > 0 &&
+        loserViews > 0 &&
+        winnerViews !== loserViews
+      ) {
+        const favoredTalentId = winnerViews > loserViews ? winner.idolId : loser.idolId;
+        const samples = upsetResilienceSamplesByTalent.get(favoredTalentId) ?? [];
+        samples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews > loserViews
+        });
+        upsetResilienceSamplesByTalent.set(favoredTalentId, samples);
+      }
+      if (
+        isDistinctSongResult &&
+        winnerViews != null &&
+        loserViews != null &&
+        Number.isFinite(winnerViews) &&
+        Number.isFinite(loserViews) &&
+        winnerViews > 0 &&
+        loserViews > 0
+      ) {
+        const winnerSamples = highStakesSamplesBySong.get(winner.youtubeVideoId) ?? [];
+        winnerSamples.push({ weight: Math.log1p(loserViews), success: true });
+        highStakesSamplesBySong.set(winner.youtubeVideoId, winnerSamples);
+        const loserSamples = highStakesSamplesBySong.get(loser.youtubeVideoId) ?? [];
+        loserSamples.push({ weight: Math.log1p(winnerViews), success: false });
+        highStakesSamplesBySong.set(loser.youtubeVideoId, loserSamples);
+      }
       if (winnerSong) {
-        const winnerViews = match.winner.viewCount ?? null;
-        const loserViews = loser.viewCount ?? null;
         if (loserViews != null) {
           winnerSong.bigGameScore += loserViews;
           winnerSong.bigGameWins += 1;
@@ -1515,26 +1667,65 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         if (winnerViews != null && loserViews != null && winnerViews < loserViews) {
           winnerSong.upsetWins += 1;
           winnerSong.giantKillerScore += loserViews - winnerViews;
-          if (winnerViews > 0 && loserViews > 0) {
-            winnerSong.punchingUpScore += Math.log2(loserViews / winnerViews);
-            winnerSong.punchingUpWins += 1;
-          }
         }
-        if (previousSongResults.has(`${loser.youtubeVideoId}|${match.winner.youtubeVideoId}`)) {
+        if (previousSongResults.has(`${loser.youtubeVideoId}|${winner.youtubeVideoId}`)) {
           winnerSong.revengeWins += 1;
         }
       }
-      previousSongResults.add(`${match.winner.youtubeVideoId}|${loser.youtubeVideoId}`);
+      if (
+        isDistinctSongResult &&
+        winnerViews != null &&
+        loserViews != null &&
+        Number.isFinite(winnerViews) &&
+        Number.isFinite(loserViews) &&
+        winnerViews > 0 &&
+        loserViews > 0 &&
+        winnerViews !== loserViews
+      ) {
+        const underdogVideoId = winnerViews < loserViews ? winner.youtubeVideoId : loser.youtubeVideoId;
+        const samples = punchingUpSamplesBySong.get(underdogVideoId) ?? [];
+        samples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews < loserViews
+        });
+        punchingUpSamplesBySong.set(underdogVideoId, samples);
+      }
+      previousSongResults.add(`${winner.youtubeVideoId}|${loser.youtubeVideoId}`);
 
-      if (match.winner.idolId === loser.idolId) {
+      if (winner.idolId === loser.idolId) {
         continue;
       }
 
       const [left, right] = [
-        { id: match.winner.idolId, name: match.winner.idolName },
+        { id: winner.idolId, name: winner.idolName },
         { id: loser.idolId, name: loser.idolName }
       ].sort((leftValue, rightValue) => leftValue.name.localeCompare(rightValue.name) || leftValue.id.localeCompare(rightValue.id));
       const key = `${left.id}|${right.id}`;
+      const addRivalryResult = (target: Map<string, HololiveBracketStatsOverview["topRivalries"][number]>) => {
+        const targetRivalry =
+          target.get(key) ??
+          ({
+            key,
+            leftIdolId: left.id,
+            leftIdolName: left.name,
+            rightIdolId: right.id,
+            rightIdolName: right.name,
+            matches: 0,
+            leftWins: 0,
+            rightWins: 0,
+            lastArchivedAt: bracket.updatedAt
+          } satisfies HololiveBracketStatsOverview["topRivalries"][number]);
+        targetRivalry.matches += 1;
+        if (winner.idolId === targetRivalry.leftIdolId) {
+          targetRivalry.leftWins += 1;
+        } else {
+          targetRivalry.rightWins += 1;
+        }
+        if (bracket.updatedAt > targetRivalry.lastArchivedAt) {
+          targetRivalry.lastArchivedAt = bracket.updatedAt;
+        }
+        target.set(key, targetRivalry);
+      };
       const rivalry =
         rivalryStats.get(key) ??
         ({
@@ -1549,7 +1740,7 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           lastArchivedAt: bracket.updatedAt
         } satisfies HololiveBracketStatsOverview["topRivalries"][number]);
       rivalry.matches += 1;
-      if (match.winner.idolId === rivalry.leftIdolId) {
+      if (winner.idolId === rivalry.leftIdolId) {
         rivalry.leftWins += 1;
       } else {
         rivalry.rightWins += 1;
@@ -1558,6 +1749,9 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         rivalry.lastArchivedAt = bracket.updatedAt;
       }
       rivalryStats.set(key, rivalry);
+      if (match.roundIndex === finalRoundIndex) {
+        addRivalryResult(finalsRivalryStats);
+      }
     }
   }
 
@@ -1569,9 +1763,293 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     song.bigGameWins > 0 ? song.bigGameScore / song.bigGameWins : 0;
   const songs = [...songStats.values()];
   const talents = [...talentStats.values()];
+  for (const result of calculateRobustViewStrengthScores(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: strengthOfWinsSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.strengthOfWinsScore = result.score;
+      talent.strengthOfWinsCount = result.count;
+    }
+  }
+  for (const result of calculateRobustViewStrengthScores(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: strengthOfLossesSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.strengthOfLossesScore = result.score;
+      talent.strengthOfLossesCount = result.count;
+    }
+  }
+  for (const result of calculateShrunkBinaryRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: finalsConversionSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.finalsConversionRate = result.score;
+    }
+  }
+  for (const result of calculateShrunkBinaryRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: deepRunSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.deepRunRate = result.score;
+    }
+  }
+  for (const result of calculateShrunkBinaryRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: earlyExitSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.earlyExitRate = result.score;
+    }
+  }
+  for (const result of calculateRobustWeightedSuccessRates(
+    songs.map((song) => ({
+      id: song.youtubeVideoId,
+      samples: highStakesSamplesBySong.get(song.youtubeVideoId) ?? []
+    })),
+    3,
+    Number.POSITIVE_INFINITY
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.highStakesPerformanceRate = result.score;
+      song.highStakesPerformanceWins = result.successCount;
+      song.highStakesPerformanceLosses = result.failureCount;
+      song.highStakesPerformanceMatches = result.count;
+    }
+  }
+  for (const result of calculateRobustWeightedSuccessRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      samples: punchingAboveSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.punchingAboveScore = result.score;
+      talent.punchingAboveWins = result.successCount;
+      talent.punchingAboveOpportunities = result.count;
+    }
+  }
+  for (const result of calculateShrunkBinaryRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      values: clutchSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.clutchRate = result.score;
+      talent.clutchWins = result.successCount;
+      talent.clutchLosses = result.failureCount;
+      talent.clutchMatches = result.count;
+    }
+  }
+  for (const result of calculateShrunkWeightedSignedScores(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      samples: pressureEdgeSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.pressureEdgeScore = result.score;
+      talent.pressureEdgeMatches = result.count;
+      talent.pressureEdgePositiveMatches = result.positiveCount;
+      talent.pressureEdgeNegativeMatches = result.negativeCount;
+    }
+  }
+  for (const result of calculateRobustWeightedSuccessRates(
+    talents.map((talent) => ({
+      id: talent.idolId,
+      samples: upsetResilienceSamplesByTalent.get(talent.idolId) ?? []
+    }))
+  )) {
+    const talent = talentStats.get(result.id);
+    if (talent) {
+      talent.upsetResilienceScore = result.score;
+      talent.upsetResilienceChecks = result.count;
+      talent.upsetResilienceUpsetLosses = result.failureCount;
+    }
+  }
+  for (const result of calculateRobustPositiveOpportunityScores(
+    songs.map((song) => ({
+      id: song.youtubeVideoId,
+      samples: punchingUpSamplesBySong.get(song.youtubeVideoId) ?? []
+    }))
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.punchingUpScore = result.score;
+      song.punchingUpWins = result.successCount;
+      song.punchingUpOpportunities = result.count;
+    }
+  }
   const bySongTitle = (left: HololiveBracketStatsOverview["topSongsByWins"][number], right: HololiveBracketStatsOverview["topSongsByWins"][number]) =>
     left.title.localeCompare(right.title);
   const rivalries = [...rivalryStats.values()];
+  const finalsRivalries = [...finalsRivalryStats.values()];
+  const sortedSongsByWins = [...songs].sort(byWins);
+  const sortedTalentsByWins = [...talents].sort(byWins);
+  const sortedTalentsByTitles = [...talents]
+    .filter((talent) => talent.championCount > 0)
+    .sort((left, right) => right.championCount - left.championCount || right.finalistCount - left.finalistCount || byWins(left, right));
+  const sortedTalentsByRunnerUps = [...talents]
+    .filter((talent) => talent.runnerUpCount > 0)
+    .sort((left, right) => right.runnerUpCount - left.runnerUpCount || right.finalistCount - left.finalistCount || byWins(left, right));
+  const sortedTalentsByFinalsConversion = [...talents]
+    .filter((talent) => talent.finalistCount > 0)
+    .sort(
+      (left, right) =>
+        right.finalsConversionRate - left.finalsConversionRate ||
+        right.championCount - left.championCount ||
+        right.finalistCount - left.finalistCount ||
+        byWins(left, right)
+    );
+  const sortedTalentsByDeepRuns = [...talents]
+    .filter((talent) => talent.top4Count > 0)
+    .sort((left, right) => right.top4Count - left.top4Count || right.championCount - left.championCount || byWins(left, right));
+  const sortedTalentsByDeepRunRate = [...talents]
+    .filter((talent) => talent.appearances > 0)
+    .sort(
+      (left, right) =>
+        right.deepRunRate - left.deepRunRate ||
+        right.top4Count - left.top4Count ||
+        right.appearances - left.appearances ||
+        byWins(left, right)
+    );
+  const sortedTalentsByEarlyExits = [...talents]
+    .filter((talent) => talent.earlyExitCount > 0)
+    .sort((left, right) => right.earlyExitCount - left.earlyExitCount || right.losses - left.losses || right.appearances - left.appearances || byWins(left, right));
+  const sortedTalentsByEarlyExitRate = [...talents]
+    .filter((talent) => talent.appearances > 0)
+    .sort(
+      (left, right) =>
+        left.earlyExitRate - right.earlyExitRate ||
+        left.earlyExitCount - right.earlyExitCount ||
+        right.appearances - left.appearances ||
+        byWins(left, right)
+    );
+  const sortedTalentsByStrengthOfWins = [...talents]
+    .filter((talent) => talent.strengthOfWinsScore > 0 && talent.strengthOfWinsCount > 0)
+    .sort(
+      (left, right) =>
+        right.strengthOfWinsScore - left.strengthOfWinsScore ||
+        right.strengthOfWinsCount - left.strengthOfWinsCount ||
+        byWins(left, right)
+    );
+  const sortedTalentsByStrengthOfLosses = [...talents]
+    .filter((talent) => talent.strengthOfLossesScore > 0 && talent.strengthOfLossesCount > 0)
+    .sort(
+      (left, right) =>
+        right.strengthOfLossesScore - left.strengthOfLossesScore ||
+        right.strengthOfLossesCount - left.strengthOfLossesCount ||
+        byWins(left, right)
+    );
+  const sortedTalentsByPunchingAbove = [...talents]
+    .filter((talent) => talent.punchingAboveScore > 0 && talent.punchingAboveWins > 0)
+    .sort(
+      (left, right) =>
+        right.punchingAboveScore - left.punchingAboveScore ||
+        right.punchingAboveWins - left.punchingAboveWins ||
+        right.punchingAboveOpportunities - left.punchingAboveOpportunities ||
+        byWins(left, right)
+    );
+  const sortedTalentsByClutchRate = [...talents]
+    .filter((talent) => talent.clutchMatches > 0)
+    .sort(
+      (left, right) =>
+        right.clutchRate - left.clutchRate ||
+        right.clutchWins - left.clutchWins ||
+        right.clutchMatches - left.clutchMatches ||
+        byWins(left, right)
+    );
+  const sortedTalentsByPressureEdge = [...talents]
+    .filter((talent) => talent.pressureEdgeMatches > 0)
+    .sort(
+      (left, right) =>
+        right.pressureEdgeScore - left.pressureEdgeScore ||
+        right.pressureEdgePositiveMatches - left.pressureEdgePositiveMatches ||
+        right.pressureEdgeMatches - left.pressureEdgeMatches ||
+        byWins(left, right)
+    );
+  const sortedTalentsByUpsetResilience = [...talents]
+    .filter((talent) => talent.upsetResilienceChecks > 0)
+    .sort(
+      (left, right) =>
+        right.upsetResilienceScore - left.upsetResilienceScore ||
+        right.upsetResilienceChecks - left.upsetResilienceChecks ||
+        left.upsetResilienceUpsetLosses - right.upsetResilienceUpsetLosses ||
+        byWins(left, right)
+    );
+  const sortedRivalries = [...rivalries].sort(
+    (left, right) =>
+      right.matches - left.matches ||
+      Math.min(right.leftWins, right.rightWins) - Math.min(left.leftWins, left.rightWins) ||
+      right.lastArchivedAt.localeCompare(left.lastArchivedAt) ||
+      left.key.localeCompare(right.key)
+  );
+  const sortedFinalsRivalries = [...finalsRivalries].sort(
+    (left, right) =>
+      right.matches - left.matches ||
+      Math.min(right.leftWins, right.rightWins) - Math.min(left.leftWins, left.rightWins) ||
+      right.lastArchivedAt.localeCompare(left.lastArchivedAt) ||
+      left.key.localeCompare(right.key)
+  );
+  const buildRatingRows = <T extends { wins: number; losses: number; championCount: number; lastArchivedAt: string }>(
+    items: T[],
+    getId: (item: T) => string,
+    getLabel: (item: T) => string,
+    getDetail: (item: T) => string | null
+  ): HololiveBracketStatsOverview["topSongRatings"] =>
+    items
+      .filter((item) => item.wins + item.losses > 0)
+      .map((item) => {
+        const matches = item.wins + item.losses;
+        const winRate = matches > 0 ? item.wins / matches : 0;
+        const rating = 1500 + item.wins * 34 - item.losses * 22 + item.championCount * 38 + winRate * 70;
+        const ratingDeviation = Math.max(60, 350 - matches * 26);
+        return {
+          id: getId(item),
+          label: getLabel(item),
+          detail: getDetail(item),
+          rating,
+          conservativeRating: rating - ratingDeviation * 2,
+          ratingDeviation,
+          volatility: 0.06,
+          wins: item.wins,
+          losses: item.losses,
+          matches,
+          lastArchivedAt: item.lastArchivedAt
+        };
+      })
+      .sort(
+        (left, right) =>
+          right.conservativeRating - left.conservativeRating ||
+          right.rating - left.rating ||
+          right.matches - left.matches ||
+          right.wins - left.wins ||
+          left.label.localeCompare(right.label)
+      );
+
   return {
     totals: {
       completedBrackets: archives.length,
@@ -1579,7 +2057,11 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       uniqueSongs: songStats.size,
       uniqueTalents: talentStats.size
     },
-    topSongsByWins: [...songs].sort(byWins).slice(0, 10),
+    songStats: sortedSongsByWins,
+    talentStats: sortedTalentsByWins,
+    rivalryStats: sortedRivalries,
+    finalsRivalryStats: sortedFinalsRivalries,
+    topSongsByWins: sortedSongsByWins.slice(0, 10),
     topSongsByWinRate: [...songs].sort((left, right) => right.winRate - left.winRate || byWins(left, right)).slice(0, 10),
     topSongsByAppearances: [...songs].sort((left, right) => right.appearances - left.appearances || byWins(left, right)).slice(0, 10),
     topSongsByFinalsWithoutTitle: [...songs]
@@ -1635,31 +2117,58 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           bySongTitle(left, right)
       )
       .slice(0, 10),
+    topSongsByHighStakesPerformance: [...songs]
+      .filter((song) => song.highStakesPerformanceRate > 0 && song.highStakesPerformanceWins > 0)
+      .sort(
+        (left, right) =>
+          right.highStakesPerformanceRate - left.highStakesPerformanceRate ||
+          right.highStakesPerformanceWins - left.highStakesPerformanceWins ||
+          right.highStakesPerformanceMatches - left.highStakesPerformanceMatches ||
+          right.bigGameScore - left.bigGameScore ||
+          bySongTitle(left, right)
+      )
+      .slice(0, 10),
     topSongsByPunchingUpScore: [...songs]
       .filter((song) => song.punchingUpScore > 0 && song.punchingUpWins > 0)
       .sort(
         (left, right) =>
           right.punchingUpScore - left.punchingUpScore ||
           right.punchingUpWins - left.punchingUpWins ||
+          right.punchingUpOpportunities - left.punchingUpOpportunities ||
           right.giantKillerScore - left.giantKillerScore ||
           byWins(left, right) ||
           bySongTitle(left, right)
       )
       .slice(0, 10),
-    topTalents: [...talents].sort(byWins).slice(0, 10),
-    topTalentsByTop4: [...talents]
-      .filter((talent) => talent.top4Count > 0)
-      .sort((left, right) => right.top4Count - left.top4Count || right.championCount - left.championCount || byWins(left, right))
-      .slice(0, 10),
-    topRivalries: rivalries
-      .sort(
-        (left, right) =>
-          right.matches - left.matches ||
-          Math.min(right.leftWins, right.rightWins) - Math.min(left.leftWins, left.rightWins) ||
-          right.lastArchivedAt.localeCompare(left.lastArchivedAt) ||
-          left.key.localeCompare(right.key)
-      )
-      .slice(0, 10),
+    topTalents: sortedTalentsByWins.slice(0, 10),
+    topTalentsByWins: sortedTalentsByWins.slice(0, 10),
+    topTalentsByTitles: sortedTalentsByTitles.slice(0, 10),
+    topTalentsByRunnerUps: sortedTalentsByRunnerUps.slice(0, 10),
+    topTalentsByFinalsConversion: sortedTalentsByFinalsConversion.slice(0, 10),
+    topTalentsByDeepRuns: sortedTalentsByDeepRuns.slice(0, 10),
+    topTalentsByDeepRunRate: sortedTalentsByDeepRunRate.slice(0, 10),
+    topTalentsByEarlyExits: sortedTalentsByEarlyExits.slice(0, 10),
+    topTalentsByEarlyExitRate: sortedTalentsByEarlyExitRate.slice(0, 10),
+    topTalentsByTop4: sortedTalentsByDeepRuns.slice(0, 10),
+    topTalentsByStrengthOfWins: sortedTalentsByStrengthOfWins.slice(0, 10),
+    topTalentsByStrengthOfLosses: sortedTalentsByStrengthOfLosses.slice(0, 10),
+    topTalentsByPunchingAbove: sortedTalentsByPunchingAbove.slice(0, 10),
+    topTalentsByClutchRate: sortedTalentsByClutchRate.slice(0, 10),
+    topTalentsByPressureEdge: sortedTalentsByPressureEdge.slice(0, 10),
+    topTalentsByUpsetResilience: sortedTalentsByUpsetResilience.slice(0, 10),
+    topSongRatings: buildRatingRows(
+      songs,
+      (song) => song.youtubeVideoId,
+      (song) => song.title,
+      (song) => song.idolName ?? null
+    ),
+    topTalentRatings: buildRatingRows(
+      talents,
+      (talent) => talent.idolId,
+      (talent) => talent.idolName,
+      () => null
+    ),
+    topRivalries: sortedRivalries.slice(0, 10),
     championHistory: archives.slice(0, 12)
   };
 }
@@ -1874,6 +2383,52 @@ function resetMockHololiveBracket(bracketId: string): HololiveBracket {
   const updated = updateMockHololiveBracketProgress(bracket);
   mockHololiveBrackets.set(updated.id, updated);
   return updated;
+}
+
+function duplicateMockHololiveBracket(bracketId: string): HololiveBracket {
+  const source = getMockHololiveBracket(bracketId);
+  const id = `mock-bracket-${crypto.randomUUID()}`;
+  const entryIdBySourceId = new Map<string, string>();
+  const entries = source.entries.map((entry) => {
+    const nextId = `${id}:entry:${entry.slotIndex}`;
+    entryIdBySourceId.set(entry.id, nextId);
+    return {
+      ...entry,
+      id: nextId,
+      bracketId: id
+    };
+  });
+  const rounds = source.rounds.map((round) => ({
+    ...round,
+    matches: round.matches.map((match) => ({
+      id: `${id}:r${match.roundIndex}:m${match.matchIndex}`,
+      bracketId: id,
+      roundIndex: match.roundIndex,
+      matchIndex: match.matchIndex,
+      entryA: match.roundIndex === 0 && match.entryA ? entries.find((entry) => entry.id === entryIdBySourceId.get(match.entryA?.id ?? "")) ?? null : null,
+      entryB: match.roundIndex === 0 && match.entryB ? entries.find((entry) => entry.id === entryIdBySourceId.get(match.entryB?.id ?? "")) ?? null : null,
+      winnerEntryId: null,
+      winner: null,
+      completedAt: null,
+      updatedAt: new Date().toISOString()
+    }))
+  }));
+  const duplicate = updateMockHololiveBracketProgress({
+    ...source,
+    id,
+    name: `Copy of ${source.name}`.slice(0, 120),
+    seed: id,
+    status: "active",
+    currentMatchId: `${id}:r0:m0`,
+    currentMatch: null,
+    champion: null,
+    entries,
+    rounds,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+  mockHololiveBrackets.set(id, duplicate);
+  return duplicate;
 }
 
 const mockBridge: HoloshelfBridge = {
@@ -2791,6 +3346,10 @@ const mockBridge: HoloshelfBridge = {
       case "hololive:brackets:reset":
         return resetMockHololiveBracket(
           (_payload as IpcChannelMap["hololive:brackets:reset"]["request"]).bracketId
+        ) as IpcChannelMap[C]["response"];
+      case "hololive:brackets:duplicate":
+        return duplicateMockHololiveBracket(
+          (_payload as IpcChannelMap["hololive:brackets:duplicate"]["request"]).bracketId
         ) as IpcChannelMap[C]["response"];
       case "hololive:brackets:delete":
         {

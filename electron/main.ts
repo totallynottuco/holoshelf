@@ -6,7 +6,7 @@ import { ensureAppPaths, getAppPaths } from "./services/appPaths";
 import { DatabaseService } from "./services/database";
 import { FetchScheduler } from "./services/fetchScheduler";
 import { HolodexMusicService } from "./services/holodexMusicService";
-import { mergeBundledOfficialData } from "./services/officialDataMergeService";
+import { mergeBundledOfficialData, repairBundledOfficialImageCache } from "./services/officialDataMergeService";
 import { UpdateService } from "./services/updateService";
 import { YouTubeVideoStatsService } from "./services/youtubeVideoStatsService";
 import { createSourceAdapters, trackerModules } from "../src/modules/registry";
@@ -47,6 +47,42 @@ function resolveWindowIcon(): string {
 
 function resolveRendererRoot(): string {
   return app.isPackaged ? path.join(__dirname, "../../dist") : path.join(process.cwd(), "dist");
+}
+
+async function readHololiveImageFile(safeFileName: string): Promise<{ filePath: string; contents: Buffer } | null> {
+  const appPaths = getAppPaths(app);
+  const appDataImagePath = path.join(appPaths.hololiveImageDirectory, safeFileName);
+
+  if (appPaths.seedDirectory) {
+    const seedImagePath = path.join(appPaths.seedDirectory, "images", "hololive", safeFileName);
+    try {
+      const seedContents = await fsp.readFile(seedImagePath);
+      try {
+        const appDataContents = await fsp.readFile(appDataImagePath);
+        if (appDataContents.equals(seedContents)) {
+          return { filePath: appDataImagePath, contents: appDataContents };
+        }
+      } catch {
+        // The bundled seed image below is the release source of truth.
+      }
+
+      try {
+        await fsp.mkdir(appPaths.hololiveImageDirectory, { recursive: true });
+        await fsp.copyFile(seedImagePath, appDataImagePath);
+        return { filePath: appDataImagePath, contents: seedContents };
+      } catch {
+        return { filePath: seedImagePath, contents: seedContents };
+      }
+    } catch {
+      // Continue to app-data-only lookup below.
+    }
+  }
+
+  try {
+    return { filePath: appDataImagePath, contents: await fsp.readFile(appDataImagePath) };
+  } catch {
+    return null;
+  }
 }
 
 function getMimeType(filePath: string): string {
@@ -115,18 +151,17 @@ function registerAppProtocol(): void {
         return new Response("Forbidden", { status: 403 });
       }
 
-      const filePath = path.join(getAppPaths(app).hololiveImageDirectory, safeFileName);
-
-      try {
-        const contents = await fsp.readFile(filePath);
-        return new Response(contents, {
-          headers: {
-            "content-type": getMimeType(filePath)
-          }
-        });
-      } catch {
+      const imageFile = await readHololiveImageFile(safeFileName);
+      if (!imageFile) {
         return new Response("Not found", { status: 404 });
       }
+
+      return new Response(new Uint8Array(imageFile.contents), {
+        headers: {
+          "content-type": getMimeType(imageFile.filePath),
+          "cache-control": "no-store, max-age=0"
+        }
+      });
     }
 
     if (url.hostname !== "holoshelf") {
@@ -357,6 +392,14 @@ async function createMainWindow(): Promise<void> {
   });
   updateService.attachWindow(mainWindow);
   updateService.initialize();
+
+  await repairBundledOfficialImageCache({
+    database,
+    paths,
+    log: writeAppLog
+  }).catch((error) => {
+    writeAppLog(`[official-data] image cache repair failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+  });
 
   if (app.isPackaged) {
     await mainWindow.loadURL("app://holoshelf/index.html");

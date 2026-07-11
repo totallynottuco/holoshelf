@@ -1,11 +1,13 @@
 import { app, dialog, ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 import type {
   AppBootstrap,
+  HololiveImageCacheKind,
   HololiveMusicImportResult,
   HololiveMusicVideoStatsRefreshResult,
   HololiveTierListData
@@ -21,17 +23,22 @@ import { trackerModules } from "../src/modules/registry";
 import type { DatabaseService } from "./services/database";
 import type { FetchScheduler } from "./services/fetchScheduler";
 import { applyCsvImport, createCsvPreview } from "./services/imports";
+import { getAppPaths } from "./services/appPaths";
 import { HolodexMusicService } from "./services/holodexMusicService";
 import type { UpdateService } from "./services/updateService";
 import type { YouTubeVideoStatsService } from "./services/youtubeVideoStatsService";
 
 const TRANSPARENT_PIXEL = { r: 0, g: 0, b: 0, alpha: 0 };
 const HOLOLIVE_IMAGE_CACHE_VERSION = 6;
+const HOLOLIVE_CARD_IMAGE_CACHE_VERSION = 2;
 const OPTIMIZED_ICON_SIZE = 128;
 const PROFILE_CANVAS_WIDTH = 260;
 const PROFILE_CANVAS_HEIGHT = 340;
 const PROFILE_SUBJECT_TARGET_HEIGHT = 332;
 const PROFILE_SUBJECT_BOTTOM_PAD = 4;
+const CARD_CANVAS_SIZE = 1024;
+const CARD_SUBJECT_TARGET_SIZE = 992;
+const CARD_SUBJECT_BOTTOM_PAD = 12;
 const PROFILE_ALPHA_THRESHOLD = 12;
 const PROFILE_FOCUS_X_LOW = 0.06;
 const PROFILE_FOCUS_X_HIGH = 0.94;
@@ -395,7 +402,7 @@ const hololiveBracketGenerationFiltersSchema = z.object({
   vocalScopes: z.array(hololiveBracketVocalScopeSchema).optional(),
   talentStatuses: z.array(hololiveBracketTalentStatusFilterSchema).optional(),
   historyParticipation: hololiveBracketHistoryParticipationSchema.optional().nullable(),
-  maxEntriesPerTalent: z.number().int().min(1).max(256).optional().nullable(),
+  maxEntriesPerTalent: z.number().int().min(0).max(256).optional().nullable(),
   preferTopicSplitPerTalent: z.boolean().optional().nullable(),
   excludeTopViewedPerTalent: z.boolean().optional(),
   excludePreviousChampions: z.boolean().optional(),
@@ -431,6 +438,10 @@ const hololiveBracketUndoSchema = z.object({
 });
 
 const hololiveBracketResetSchema = z.object({
+  bracketId: z.string().trim().min(1)
+});
+
+const hololiveBracketDuplicateSchema = z.object({
   bracketId: z.string().trim().min(1)
 });
 
@@ -1160,6 +1171,11 @@ export function installIpcHandlers(context: IpcContext): void {
     return context.database.resetHololiveBracket(input.bracketId);
   });
 
+  handle("hololive:brackets:duplicate", async (_event, payload) => {
+    const input = hololiveBracketDuplicateSchema.parse(payload);
+    return context.database.duplicateHololiveBracket(input.bracketId);
+  });
+
   handle("hololive:brackets:delete", async (_event, payload) => {
     const input = hololiveBracketDeleteSchema.parse(payload);
     return context.database.deleteHololiveBracket(input.bracketId);
@@ -1181,12 +1197,102 @@ export function installIpcHandlers(context: IpcContext): void {
 }
 
 function getHololiveTierData(context: IpcContext, boardId?: string | null): HololiveTierListData {
-  return context.database.getHololiveTierListData(boardId, resolveHololiveCachedImageUrl);
+  ensureCurrentHololiveImageCacheRows(context);
+  return withHololiveSeedImageFallbacks(context.database.getHololiveTierListData(boardId, resolveHololiveCachedImageUrl));
+}
+
+const currentHololiveImageCacheContexts = new WeakSet<IpcContext>();
+
+function ensureCurrentHololiveImageCacheRows(context: IpcContext): void {
+  if (currentHololiveImageCacheContexts.has(context)) {
+    return;
+  }
+  currentHololiveImageCacheContexts.add(context);
+
+  const cacheEntries = context.database.listHololiveIdols().flatMap((idol) => {
+    const targets: Array<{ kind: HololiveImageCacheKind; sourceUrl: string | null | undefined }> = [
+      { kind: "icon", sourceUrl: idol.iconUrl },
+      { kind: "profile", sourceUrl: idol.profileImageUrl },
+      { kind: "card", sourceUrl: idol.cardImageUrl ?? idol.profileImageUrl }
+    ];
+
+    return targets.flatMap((target) => {
+      const sourceUrl = target.sourceUrl?.trim();
+      if (!sourceUrl) {
+        return [];
+      }
+
+      const localFilename = getHololiveImageCacheFileName(idol.slug, target.kind);
+      const stats = getHololiveImageFileStats(localFilename);
+      if (!stats) {
+        return [];
+      }
+
+      return [
+        {
+          idolId: idol.id,
+          kind: target.kind,
+          sourceUrl,
+          localFilename,
+          mimeType: getHololiveImageCacheMimeType(target.kind),
+          sizeBytes: stats.size
+        }
+      ];
+    });
+  });
+
+  if (cacheEntries.length > 0) {
+    context.database.upsertHololiveImageCaches(cacheEntries);
+  }
+}
+
+function withHololiveSeedImageFallbacks(data: HololiveTierListData): HololiveTierListData {
+  return {
+    ...data,
+    idols: data.idols.map((idol) => ({
+      ...idol,
+      cachedIconUrl: idol.cachedIconUrl ?? resolveExistingHololiveCachedImageUrl(idol.slug, "icon"),
+      cachedProfileImageUrl: idol.cachedProfileImageUrl ?? resolveExistingHololiveCachedImageUrl(idol.slug, "profile"),
+      cachedCardImageUrl: resolveExistingHololiveCachedImageUrl(idol.slug, "card") ?? idol.cachedCardImageUrl
+    }))
+  };
+}
+
+function resolveExistingHololiveCachedImageUrl(slug: string, kind: HololiveImageCacheKind): string | null {
+  const fileName = getHololiveImageCacheFileName(slug, kind);
+  return getHololiveImageFileStats(fileName) ? resolveHololiveCachedImageUrl(fileName) : null;
 }
 
 function resolveHololiveCachedImageUrl(fileName: string): string {
   const safeFileName = path.basename(fileName);
-  return `app://holoshelf-data/hololive-images/${encodeURIComponent(safeFileName)}`;
+  const stats = getHololiveImageFileStats(safeFileName);
+  const version = stats ? `${Math.trunc(stats.mtimeMs)}-${stats.size}` : "missing";
+  return `app://holoshelf-data/hololive-images/${encodeURIComponent(safeFileName)}?v=${encodeURIComponent(version)}`;
+}
+
+function getHololiveImageFileStats(fileName: string): nodeFs.Stats | null {
+  const safeFileName = path.basename(fileName);
+  if (safeFileName !== fileName) {
+    return null;
+  }
+
+  const paths = getAppPaths(app);
+  const versionCandidates = [
+    path.join(paths.hololiveImageDirectory, safeFileName),
+    paths.seedDirectory ? path.join(paths.seedDirectory, "images", "hololive", safeFileName) : null
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return (
+    versionCandidates
+    .map((candidate) => {
+      try {
+        return nodeFs.statSync(candidate);
+      } catch {
+        return null;
+      }
+    })
+      .find((candidate): candidate is nodeFs.Stats => candidate !== null && candidate.isFile() && candidate.size > 0) ?? null
+  );
 }
 
 async function openHolodexArtifactDirectory(): Promise<string | null> {
@@ -1215,19 +1321,24 @@ async function refreshHololiveIcons(
   );
   const cacheEntries: Array<{
     idolId: string;
-    kind: "icon" | "profile";
+    kind: HololiveImageCacheKind;
     sourceUrl: string;
     localFilename: string;
     mimeType?: string | null;
     sizeBytes?: number | null;
   }> = [];
   const candidateTargets = idols.flatMap((idol) => {
-    const imageTargets: Array<{ idolId: string; slug: string; kind: "icon" | "profile"; sourceUrl: string }> = [
+    const imageTargets: Array<{ idolId: string; slug: string; kind: HololiveImageCacheKind; sourceUrl: string }> = [
       { idolId: idol.id, slug: idol.slug, kind: "icon", sourceUrl: idol.iconUrl }
     ];
 
     if (idol.profileImageUrl) {
       imageTargets.push({ idolId: idol.id, slug: idol.slug, kind: "profile", sourceUrl: idol.profileImageUrl });
+    }
+
+    const cardImageUrl = idol.cardImageUrl || idol.profileImageUrl || idol.iconUrl;
+    if (cardImageUrl) {
+      imageTargets.push({ idolId: idol.id, slug: idol.slug, kind: "card", sourceUrl: cardImageUrl });
     }
 
     return imageTargets;
@@ -1247,8 +1358,8 @@ async function refreshHololiveIcons(
   async function cacheTarget(target: (typeof targets)[number]): Promise<void> {
     try {
       const sourceUrl = new URL(target.sourceUrl);
-      if (sourceUrl.hostname !== "hololive.hololivepro.com" || !sourceUrl.pathname.startsWith("/wp-content/uploads/")) {
-        throw new Error("Unsupported Hololive image host");
+      if (sourceUrl.protocol !== "https:") {
+        throw new Error("Unsupported image protocol");
       }
 
       const localFilename = getHololiveImageCacheFileName(target.slug, target.kind);
@@ -1307,7 +1418,7 @@ async function refreshHololiveIcons(
 async function hasFreshCachedImage(
   context: IpcContext,
   existingCache: Map<string, { sourceUrl: string; localFilename: string }>,
-  target: { idolId: string; slug: string; kind: "icon" | "profile"; sourceUrl: string }
+  target: { idolId: string; slug: string; kind: HololiveImageCacheKind; sourceUrl: string }
 ): Promise<boolean> {
   const cache = existingCache.get(`${target.idolId}:${target.kind}`);
   if (!cache || cache.sourceUrl !== target.sourceUrl) {
@@ -1327,13 +1438,19 @@ async function hasFreshCachedImage(
   }
 }
 
-function getHololiveImageCacheFileName(slug: string, kind: "icon" | "profile"): string {
-  return `${slug}-${kind}-v${HOLOLIVE_IMAGE_CACHE_VERSION}.webp`;
+function getHololiveImageCacheFileName(slug: string, kind: HololiveImageCacheKind): string {
+  const version = kind === "card" ? HOLOLIVE_CARD_IMAGE_CACHE_VERSION : HOLOLIVE_IMAGE_CACHE_VERSION;
+  const extension = kind === "card" ? "png" : "webp";
+  return `${slug}-${kind}-v${version}.${extension}`;
+}
+
+function getHololiveImageCacheMimeType(kind: HololiveImageCacheKind): string {
+  return kind === "card" ? "image/png" : "image/webp";
 }
 
 async function optimizeHololiveImage(
   bytes: Buffer,
-  kind: "icon" | "profile"
+  kind: HololiveImageCacheKind
 ): Promise<{ bytes: Buffer; mimeType: string }> {
   if (kind === "icon") {
     return {
@@ -1349,6 +1466,64 @@ async function optimizeHololiveImage(
         .toBuffer(),
       mimeType: "image/webp"
     };
+  }
+
+  if (kind === "card") {
+    try {
+      const subject = await sharp(bytes, { animated: false, failOn: "none" })
+        .rotate()
+        .ensureAlpha()
+        .trim({ background: TRANSPARENT_PIXEL, threshold: PROFILE_ALPHA_THRESHOLD })
+        .png()
+        .toBuffer();
+      const scaled = await sharp(subject)
+        .resize({
+          width: CARD_SUBJECT_TARGET_SIZE,
+          height: CARD_SUBJECT_TARGET_SIZE,
+          fit: "inside",
+          withoutEnlargement: false
+        })
+        .png()
+        .toBuffer();
+      const metadata = await sharp(scaled).metadata();
+      const scaledWidth = Math.max(1, metadata.width ?? CARD_SUBJECT_TARGET_SIZE);
+      const scaledHeight = Math.max(1, metadata.height ?? CARD_SUBJECT_TARGET_SIZE);
+
+      return {
+        bytes: await sharp({
+          create: {
+            width: CARD_CANVAS_SIZE,
+            height: CARD_CANVAS_SIZE,
+            channels: 4,
+            background: TRANSPARENT_PIXEL
+          }
+        })
+          .composite([
+            {
+              input: scaled,
+              left: Math.round((CARD_CANVAS_SIZE - scaledWidth) / 2),
+              top: Math.max(0, CARD_CANVAS_SIZE - scaledHeight - CARD_SUBJECT_BOTTOM_PAD)
+            }
+          ])
+          .png()
+          .toBuffer(),
+        mimeType: "image/png"
+      };
+    } catch {
+      return {
+        bytes: await sharp(bytes, { animated: false, failOn: "none" })
+          .rotate()
+          .resize({
+            width: CARD_CANVAS_SIZE,
+            height: CARD_CANVAS_SIZE,
+            fit: "contain",
+            background: TRANSPARENT_PIXEL
+          })
+          .png()
+          .toBuffer(),
+        mimeType: "image/png"
+      };
+    }
   }
 
   try {
@@ -1474,7 +1649,7 @@ function findWeightedIndex(weights: Float64Array, targetWeight: number): number 
 async function deleteSupersededHololiveImageFiles(
   imageDirectory: string,
   slug: string,
-  kind: "icon" | "profile",
+  kind: HololiveImageCacheKind,
   currentFileName: string
 ): Promise<void> {
   const prefix = `${slug}-${kind}`;
@@ -1483,7 +1658,12 @@ async function deleteSupersededHololiveImageFiles(
     const entries = await fs.readdir(imageDirectory);
     await Promise.all(
       entries
-        .filter((entry) => entry !== currentFileName && entry.startsWith(prefix) && entry.endsWith(".webp"))
+        .filter(
+          (entry) =>
+            entry !== currentFileName &&
+            entry.startsWith(prefix) &&
+            (entry.endsWith(".webp") || entry.endsWith(".png"))
+        )
         .map((entry) => fs.rm(path.join(imageDirectory, entry), { force: true }))
     );
   } catch {

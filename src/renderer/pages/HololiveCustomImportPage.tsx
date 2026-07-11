@@ -332,41 +332,44 @@ export function HololiveCustomImportPage() {
   }
 
   return (
-    <div className="page hololive-page hololive-custom-import-page">
-      <section className="hololive-custom-import-workspace" aria-label="Hololive custom imports">
-        <HololiveViewSwitch />
+    <section
+      className="hololive-page hololive-custom-import-page hololive-custom-import-layout"
+      aria-label="Hololive custom imports"
+    >
+      <HololiveViewSwitch />
 
-        <div className="hololive-refresh-strip" aria-label="Hololive data refresh actions">
-          <button
-            type="button"
-            onClick={() => void refreshOfficialData()}
-            disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null}
-            title="Refresh official Hololive songs and video stats without replacing the catalog"
-          >
-            {refreshingOfficial ? <Loader2 size={12} className="spin" /> : <RefreshCcw size={12} />}
-            Hololive Songs + Stats
-          </button>
-          <button
-            type="button"
-            onClick={() => void refreshAllCustomTalents()}
-            disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null || customTalents.length === 0}
-            title="Refresh every saved custom talent"
-          >
-            {refreshingCustomAll ? <Loader2 size={12} className="spin" /> : <RefreshCcw size={12} />}
-            All Custom
-          </button>
-          <button
-            type="button"
-            onClick={openImportSongPanel}
-            disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null}
-            title="Import a custom YouTube song"
-          >
-            <Music size={12} />
-            Import Song
-          </button>
-        </div>
+      <div className="hololive-refresh-strip" aria-label="Hololive data refresh actions">
+        <button
+          type="button"
+          onClick={() => void refreshOfficialData()}
+          disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null}
+          title="Refresh official Hololive songs and video stats without replacing the catalog"
+        >
+          {refreshingOfficial ? <Loader2 size={12} className="spin" /> : <RefreshCcw size={12} />}
+          Hololive Songs + Stats
+        </button>
+        <button
+          type="button"
+          onClick={() => void refreshAllCustomTalents()}
+          disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null || customTalents.length === 0}
+          title="Refresh every saved custom talent"
+        >
+          {refreshingCustomAll ? <Loader2 size={12} className="spin" /> : <RefreshCcw size={12} />}
+          All Custom
+        </button>
+        <button
+          type="button"
+          onClick={openImportSongPanel}
+          disabled={refreshingOfficial || refreshingCustomAll || saving || resolving || refreshingId !== null}
+          title="Import a custom YouTube song"
+        >
+          <Music size={12} />
+          Import Song
+        </button>
+      </div>
 
-        <section className="hololive-talents-grid">
+      <section className="hololive-talents-grid">
+        <div className="hololive-custom-import-column">
           <form
             className="hololive-talents-panel hololive-talent-form"
             onSubmit={(event) => {
@@ -451,7 +454,9 @@ export function HololiveCustomImportPage() {
               </div>
             ) : null}
           </form>
+        </div>
 
+        <div className="hololive-custom-management-column">
           <section className="hololive-talents-panel hololive-custom-talent-list" aria-label="Custom talents">
             <div className="hololive-talents-panel-head">
               <div>
@@ -574,7 +579,7 @@ export function HololiveCustomImportPage() {
               ) : null}
             </div>
           </section>
-        </section>
+        </div>
       </section>
       <HololiveCustomSongImportPanel
         open={customSongPanelOpen}
@@ -584,6 +589,6 @@ export function HololiveCustomImportPage() {
         onSaved={handleCustomSongSaved}
         onDeleted={handleCustomSongDeleted}
       />
-    </div>
+    </section>
   );
 }

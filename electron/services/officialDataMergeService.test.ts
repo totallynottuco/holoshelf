@@ -82,6 +82,7 @@ async function createSeedDirectory(version: string): Promise<string> {
     `${JSON.stringify({ schema: 1, version, generatedAt: "2026-06-30T00:00:00.000Z" }, null, 2)}\n`
   );
   fs.writeFileSync(path.join(seedImageDirectory, "tokino-sora-icon-v6.webp"), "seed image");
+  fs.writeFileSync(path.join(seedImageDirectory, "moona-hoshinova-card-v2.png"), "seed card image");
   fs.writeFileSync(path.join(seedArtifactDirectory, "summary.json"), "{}\n");
 
   const seedDatabase = new DatabaseService(seedDatabasePath, path.join(root, "seed-backups"));
@@ -114,6 +115,14 @@ async function createSeedDirectory(version: string): Promise<string> {
     localFilename: "tokino-sora-icon-v6.webp",
     mimeType: "image/webp",
     sizeBytes: 10
+  });
+  seedDatabase.upsertHololiveImageCache({
+    idolId: "moona-hoshinova",
+    kind: "card",
+    sourceUrl: "https://example.com/moona.png",
+    localFilename: "moona-hoshinova-card-v2.png",
+    mimeType: "image/png",
+    sizeBytes: 20
   });
 
   return seedDirectory;
@@ -240,6 +249,69 @@ describe("mergeBundledOfficialData", () => {
     expect(fs.existsSync(path.join(user.dataDirectory, "holodex-refresh", "latest", "summary.json"))).toBe(true);
   });
 
+  it("repairs missing bundled image files even when official data is already current", async () => {
+    const user = await createTempDatabase("holoshelf-official-current-images-");
+    const seedDirectory = await createSeedDirectory("2026-06-30");
+    user.database.setSetting("hololive.officialDataVersion", "2026-06-30");
+    user.database.upsertHololiveImageCache({
+      idolId: "tokino-sora",
+      kind: "icon",
+      sourceUrl: "https://example.com/old-sora.png",
+      localFilename: "tokino-sora-icon-v5.webp",
+      mimeType: "image/webp",
+      sizeBytes: 5
+    });
+    user.database.upsertHololiveImageCache({
+      idolId: "moona-hoshinova",
+      kind: "card",
+      sourceUrl: "https://example.com/old-moona.webp",
+      localFilename: "moona-hoshinova-card-v1.webp",
+      mimeType: "image/webp",
+      sizeBytes: 6
+    });
+
+    const imagePath = path.join(user.hololiveImageDirectory, "tokino-sora-icon-v6.webp");
+    const cardImagePath = path.join(user.hololiveImageDirectory, "moona-hoshinova-card-v2.png");
+    expect(fs.existsSync(imagePath)).toBe(false);
+    expect(fs.existsSync(cardImagePath)).toBe(false);
+
+    const result = await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-06-30T12:00:00.000Z"
+    });
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "current-version",
+      copiedImageFiles: 2,
+      imageCacheRows: 2
+    });
+    expect(fs.existsSync(imagePath)).toBe(true);
+    expect(fs.existsSync(cardImagePath)).toBe(true);
+    expect(
+      user.database.select<{ local_filename: string; source_url: string }>(
+        "SELECT local_filename, source_url FROM hololive_image_cache WHERE idol_id = 'tokino-sora' AND kind = 'icon'"
+      )[0]
+    ).toEqual({
+      local_filename: "tokino-sora-icon-v6.webp",
+      source_url: "https://example.com/sora.png"
+    });
+    expect(
+      user.database.select<{ local_filename: string; source_url: string }>(
+        "SELECT local_filename, source_url FROM hololive_image_cache WHERE idol_id = 'moona-hoshinova' AND kind = 'card'"
+      )[0]
+    ).toEqual({
+      local_filename: "moona-hoshinova-card-v2.png",
+      source_url: "https://example.com/moona.png"
+    });
+  });
+
   it("keeps custom talents and their imported songs during official data merges", async () => {
     const user = await createTempDatabase("holoshelf-official-custom-");
     const seedDirectory = await createSeedDirectory("2026-06-30");
@@ -353,6 +425,100 @@ describe("mergeBundledOfficialData", () => {
       youtubeVideoId: "official-added",
       sourceKind: "official"
     });
+  });
+
+  it("applies bundled duplicate removals after official data rows are merged", async () => {
+    const user = await createTempDatabase("holoshelf-official-duplicates-");
+    const seedDirectory = await createSeedDirectory("2026-07-01");
+    const moriChannelId = "UCL_qhgtOy0dy1Agp8vkySQg";
+    const staleRows = createBundle([
+      {
+        youtubeVideoId: "kamouflage-official",
+        title: "Kamouflage",
+        songName: "Kamouflage",
+        channelId: moriChannelId,
+        channelName: "Mori Calliope Ch. hololive-EN",
+        publishedAt: "2022-07-27T09:00:13.000Z"
+      },
+      {
+        youtubeVideoId: "kamouflage-3d-live",
+        title: "Kamouflage [3D Live]",
+        songName: "Kamouflage [3D Live]",
+        channelId: moriChannelId,
+        channelName: "Mori Calliope Ch. hololive-EN",
+        publishedAt: "2023-04-12T08:00:10.000Z"
+      }
+    ]);
+
+    const seedDatabase = new DatabaseService(
+      path.join(seedDirectory, "holoshelf-template.sqlite"),
+      path.join(path.dirname(seedDirectory), "seed-duplicate-backups")
+    );
+    await seedDatabase.init();
+    seedDatabase.importHolodexMusicArtifacts(staleRows);
+    seedDatabase.run(
+      `INSERT INTO hololive_music_duplicate_removals
+         (removed_youtube_video_id, removed_title, kept_youtube_video_id, kept_title, reason, song_name,
+          removed_published_at, kept_published_at, source_run_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      [
+        "kamouflage-3d-live",
+        "Kamouflage [3D Live]",
+        "kamouflage-official",
+        "Kamouflage",
+        "canonical_variant_duplicate_of_full",
+        "Kamouflage",
+        "2023-04-12T08:00:10.000Z",
+        "2022-07-27T09:00:13.000Z",
+        "2026-07-01T00:00:00.000Z"
+      ]
+    );
+    seedDatabase.flush();
+
+    user.database.importHolodexMusicArtifacts(staleRows);
+    user.database.setHololiveMusicMarker({ youtubeVideoId: "kamouflage-3d-live", marker: "favorite" });
+    const playlistId = user.database.createHololiveMusicPlaylist("Duplicate Repair").playlists.find(
+      (playlist) => playlist.name === "Duplicate Repair"
+    )?.id;
+    expect(playlistId).toBeTruthy();
+    user.database.addHololiveMusicPlaylistItem({ playlistId: playlistId ?? "", youtubeVideoId: "kamouflage-3d-live" });
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-07-01T12:00:00.000Z"
+    });
+
+    const rows = user.database.listHololiveMusicRows({ query: "Kamouflage", limit: 10 });
+    expect(rows.map((row) => row.youtubeVideoId)).toEqual(["kamouflage-official"]);
+    expect(rows[0]).toMatchObject({
+      marker: "favorite",
+      canonicalSongKey: "kamouflage"
+    });
+    expect(
+      user.database
+        .getHololiveMusicPlayerData()
+        .playlists.find((playlist) => playlist.id === playlistId)
+        ?.items?.map((item) => item.youtubeVideoId)
+    ).toEqual(["kamouflage-official"]);
+    expect(
+      user.database.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string; source_run_id: string }>(
+        `SELECT removed_youtube_video_id, kept_youtube_video_id, source_run_id
+         FROM hololive_music_duplicate_removals
+         WHERE removed_youtube_video_id = 'kamouflage-3d-live'`
+      )
+    ).toEqual([
+      {
+        removed_youtube_video_id: "kamouflage-3d-live",
+        kept_youtube_video_id: "kamouflage-official",
+        source_run_id: "official-data-merge"
+      }
+    ]);
   });
 
   it("skips packaged merge when the user database already has the bundled official data version", async () => {

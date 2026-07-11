@@ -8,6 +8,14 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+const sharp = require("sharp");
+
+const TRANSPARENT_PIXEL = { r: 0, g: 0, b: 0, alpha: 0 };
+const CARD_IMAGE_CACHE_VERSION = 2;
+const CARD_CANVAS_SIZE = 1024;
+const CARD_SUBJECT_TARGET_SIZE = 992;
+const CARD_SUBJECT_BOTTOM_PAD = 12;
+const CARD_ALPHA_THRESHOLD = 12;
 
 function readArg(name, fallback = "") {
   const prefix = `--${name}=`;
@@ -43,6 +51,7 @@ Common options:
   --version=2026-06-29T120000Z            Official data version to stamp.
   --skip-stats                            Refresh Holodex song data but skip YouTube stats.
   --skip-holodex                          Skip Holodex refresh and only stamp/seed current DB data.
+  --skip-images                           Skip high-resolution talent card image refresh.
   --keep-existing                         Keep existing Holodex rows instead of replacing official rows.
   --keep-source-api-keys                  Do not remove API key settings from the source DB after refresh.
   --no-seed                               Do not regenerate resources/seed after refresh.
@@ -91,6 +100,10 @@ function defaultBackupDirectory() {
   }
 
   return path.join(process.env.APPDATA || os.tmpdir(), "Holoshelf", "release-data-backups");
+}
+
+function defaultImagesDirectory() {
+  return process.env.HOLOSHELF_RELEASE_IMAGES_DIR || "data/images/hololive";
 }
 
 function makeOfficialDataVersion(date = new Date()) {
@@ -211,6 +224,150 @@ function exportArtifacts(database, artifactDirectory, summary) {
   );
 }
 
+function cardCacheFileName(slug) {
+  return `${slug}-card-v${CARD_IMAGE_CACHE_VERSION}.png`;
+}
+
+async function optimizeTalentCardImage(bytes) {
+  try {
+    const subject = await sharp(bytes, { animated: false, failOn: "none" })
+      .rotate()
+      .ensureAlpha()
+      .trim({ background: TRANSPARENT_PIXEL, threshold: CARD_ALPHA_THRESHOLD })
+      .png()
+      .toBuffer();
+    const scaled = await sharp(subject)
+      .resize({
+        width: CARD_SUBJECT_TARGET_SIZE,
+        height: CARD_SUBJECT_TARGET_SIZE,
+        fit: "inside",
+        withoutEnlargement: false
+      })
+      .png()
+      .toBuffer();
+    const metadata = await sharp(scaled).metadata();
+    const scaledWidth = Math.max(1, metadata.width ?? CARD_SUBJECT_TARGET_SIZE);
+    const scaledHeight = Math.max(1, metadata.height ?? CARD_SUBJECT_TARGET_SIZE);
+
+    return await sharp({
+      create: {
+        width: CARD_CANVAS_SIZE,
+        height: CARD_CANVAS_SIZE,
+        channels: 4,
+        background: TRANSPARENT_PIXEL
+      }
+    })
+      .composite([
+        {
+          input: scaled,
+          left: Math.round((CARD_CANVAS_SIZE - scaledWidth) / 2),
+          top: Math.max(0, CARD_CANVAS_SIZE - scaledHeight - CARD_SUBJECT_BOTTOM_PAD)
+        }
+      ])
+      .png()
+      .toBuffer();
+  } catch {
+    return await sharp(bytes, { animated: false, failOn: "none" })
+      .rotate()
+      .resize({
+        width: CARD_CANVAS_SIZE,
+        height: CARD_CANVAS_SIZE,
+        fit: "contain",
+        background: TRANSPARENT_PIXEL
+      })
+      .png()
+      .toBuffer();
+  }
+}
+
+async function refreshTalentCardImages(database, imagesDirectory, log) {
+  fs.mkdirSync(imagesDirectory, { recursive: true });
+  const existingCache = new Map(database.listHololiveImageCaches().map((entry) => [`${entry.idolId}:${entry.kind}`, entry]));
+  const idols = database.listHololiveIdols().filter((idol) => idol.source !== "custom");
+  const cacheEntries = [];
+  let cached = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  async function refreshOne(idol) {
+    const sourceUrl = idol.cardImageUrl || idol.profileImageUrl || idol.iconUrl;
+    if (!sourceUrl) {
+      failed += 1;
+      return;
+    }
+
+    const localFilename = cardCacheFileName(idol.slug);
+    const localPath = path.join(imagesDirectory, localFilename);
+    const existing = existingCache.get(`${idol.id}:card`);
+    if (existing?.sourceUrl === sourceUrl && existing.localFilename === localFilename && fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+      skipped += 1;
+      return;
+    }
+
+    try {
+      const parsedUrl = new URL(sourceUrl);
+      if (parsedUrl.protocol !== "https:") {
+        throw new Error("unsupported image protocol");
+      }
+      const response = await fetch(parsedUrl, {
+        redirect: "follow",
+        headers: {
+          "User-Agent": "Holoshelf release card image cache"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type")?.split(";")[0] ?? null;
+      if (contentType && !contentType.startsWith("image/")) {
+        throw new Error(`Unexpected content type ${contentType}`);
+      }
+      const optimized = await optimizeTalentCardImage(Buffer.from(await response.arrayBuffer()));
+      fs.writeFileSync(localPath, optimized);
+      for (const entry of fs.readdirSync(imagesDirectory)) {
+        if (
+          entry !== localFilename &&
+          entry.startsWith(`${idol.slug}-card`) &&
+          (entry.endsWith(".webp") || entry.endsWith(".png"))
+        ) {
+          try {
+            fs.rmSync(path.join(imagesDirectory, entry), { force: true });
+          } catch {
+            // Stale card cleanup is best-effort; a locked old file should not fail a refreshed card.
+          }
+        }
+      }
+      cacheEntries.push({
+        idolId: idol.id,
+        kind: "card",
+        sourceUrl,
+        localFilename,
+        mimeType: "image/png",
+        sizeBytes: optimized.length
+      });
+      cached += 1;
+    } catch (error) {
+      failed += 1;
+      log(`Card image failed for ${idol.displayName}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const workerCount = Math.min(6, idols.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < idols.length) {
+        const idol = idols[nextIndex];
+        nextIndex += 1;
+        await refreshOne(idol);
+      }
+    })
+  );
+
+  database.upsertHololiveImageCaches(cacheEntries);
+  return { cached, skipped, failed, total: idols.length };
+}
+
 function regenerateSeed(officialDataVersion, generatedAt) {
   const result = spawnSync(process.execPath, [path.join(root, "scripts", "create-release-seed.mjs")], {
     cwd: root,
@@ -233,6 +390,7 @@ async function main() {
   const dbPath = resolveFromRoot(readArg("db", defaultDatabasePath()));
   const backupDirectory = readArg("backups", defaultBackupDirectory());
   const artifactDirectory = resolveFromRoot(readArg("artifacts", "data/holodex-refresh/latest"));
+  const imagesDirectory = resolveFromRoot(readArg("images", defaultImagesDirectory()));
   const officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
   const holodexApiKey = readArg("holodex-key", process.env.HOLODEX_API_KEY || "");
   const youtubeApiKey = readArg("youtube-key", process.env.YOUTUBE_API_KEY || "");
@@ -245,6 +403,7 @@ async function main() {
   const replaceExisting = !hasFlag("keep-existing");
   const refreshHolodex = !hasFlag("skip-holodex");
   const refreshStats = !hasFlag("skip-stats");
+  const refreshImages = !hasFlag("skip-images");
   const refreshChannels = !hasFlag("skip-channels");
   const includeCollabs = !hasFlag("skip-collabs");
   const writeSeed = !hasFlag("no-seed");
@@ -261,12 +420,14 @@ async function main() {
   log(`Database: ${dbPath}`);
   log(`Backups: ${backupDirectory}`);
   log(`Artifacts: ${artifactDirectory}`);
+  log(`Images: ${imagesDirectory}`);
   log(`Official data version: ${officialDataVersion}`);
   log(`Replace existing official Holodex rows: ${replaceExisting ? "yes" : "no"}`);
 
   let channelRefresh = null;
   let musicRefresh = null;
   let videoStatsRefresh = null;
+  let imageRefresh = null;
 
   if (refreshHolodex) {
       const service = new HolodexMusicService(
@@ -326,6 +487,18 @@ async function main() {
       log("Skipping YouTube stats refresh");
     }
 
+    const repairedDuplicateRows = database.repairHololiveMusicDuplicateRows("release-data-refresh");
+    if (repairedDuplicateRows > 0) {
+      log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
+    }
+
+    if (refreshImages) {
+      log("Refreshing high-resolution talent card images");
+      imageRefresh = await refreshTalentCardImages(database, imagesDirectory, log);
+    } else {
+      log("Skipping talent card image refresh");
+    }
+
     const completedAt = new Date().toISOString();
     const counts = artifactSummary(database);
     const summary = {
@@ -339,6 +512,7 @@ async function main() {
       refreshChannels,
       includeCollabs,
       refreshStats,
+      refreshImages,
       channelRefresh,
       musicRefresh: musicRefresh
         ? {
@@ -350,6 +524,7 @@ async function main() {
           }
         : null,
       videoStatsRefresh,
+      imageRefresh,
       counts
     };
 

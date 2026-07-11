@@ -144,8 +144,10 @@ test("renders the Hololive tier list route", async ({ page }) => {
   await expect(page.locator(".path-chip")).toHaveCount(0);
   await expect(page.locator(".hololive-heading")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Hololive" })).toHaveCount(0);
-  await expect(page.locator(".hololive-page > *").first()).toHaveClass(/hololive-tier-workspace/);
-  await expect(page.locator(".hololive-tier-workspace .hololive-board-tabs")).toHaveCount(1);
+  await expect(page.locator(".page")).toHaveCount(0);
+  await expect(page.locator(".hololive-page.hololive-tier-layout")).toHaveCount(1);
+  await expect(page.locator(".hololive-page > .hololive-tier-layout")).toHaveCount(0);
+  await expect(page.locator(".hololive-tier-layout .hololive-board-tabs")).toHaveCount(1);
   await expect(page.locator(".hololive-toolbar")).toHaveCount(0);
   await expect(page.locator(".hololive-board-tab.active")).toContainText("tier list 1");
   await expect(page.locator(".hololive-tier-row")).toHaveCount(6);
@@ -176,7 +178,8 @@ test("renders the Hololive tier list route", async ({ page }) => {
 
   expect(boardBox?.width).toBeGreaterThan(800);
   expect(Math.abs((rowBox?.height ?? 0) - 76)).toBeLessThanOrEqual(1);
-  expect(Math.abs((firstTabBox?.x ?? 0) - ((firstResizerBox?.x ?? 0) + (firstResizerBox?.width ?? 0)))).toBeLessThanOrEqual(2);
+  expect(firstTabBox?.x ?? 999).toBeLessThan(32);
+  expect((firstResizerBox?.x ?? 0) - (firstTabBox?.x ?? 0)).toBeGreaterThan(40);
   expect(poolBox?.height).toBeGreaterThan(100);
 });
 
@@ -330,7 +333,9 @@ test("renders bracket result exports with bounded layouts for every bracket size
 test("adds a custom talent from a channel handle", async ({ page }) => {
   await page.getByRole("link", { name: "Custom Import" }).click();
   await expect(page).toHaveURL(/\/module\/hololive\/custom-import/);
-  await expect(page.locator(".hololive-custom-import-workspace")).toBeVisible();
+  await expect(page.locator(".hololive-custom-import-layout")).toBeVisible();
+  await expect(page.locator(".hololive-custom-import-page.hololive-custom-import-layout")).toHaveCount(1);
+  await expect(page.locator(".hololive-custom-import-page > .hololive-custom-import-layout")).toHaveCount(0);
   await expect(page.locator(".hololive-custom-talent-row")).toHaveCount(0);
 
   await page.getByLabel("Channel").fill("@SoradukiTyra");
@@ -414,7 +419,9 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
 
   await page.getByRole("link", { name: "Bracket" }).click();
   await expect(page).toHaveURL(/\/module\/hololive\/bracket/);
-  await expect(page.locator(".hololive-bracket-workspace")).toBeVisible();
+  await expect(page.locator(".hololive-bracket-layout")).toBeVisible();
+  await expect(page.locator(".hololive-bracket-page.hololive-bracket-layout")).toHaveCount(1);
+  await expect(page.locator(".hololive-bracket-page > .hololive-bracket-layout")).toHaveCount(0);
   await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
   await expect(page.locator(".hololive-bracket-toolbar .compact-select")).toHaveCount(1);
   await expect(page.locator(".hololive-bracket-create-popover")).toHaveCount(0);
@@ -440,8 +447,9 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await createPopover.getByLabel("Group Songs").uncheck();
   await expect(createPopover.getByLabel("Solo songs")).toBeDisabled();
   await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Solo only");
-  await expect(createPopover.getByLabel("Max songs per talent")).toBeDisabled();
-  await createPopover.getByRole("checkbox", { name: "Max per talent", exact: true }).check();
+  await expect(createPopover.getByRole("checkbox", { name: "Max per talent", exact: true })).toBeChecked();
+  await expect(createPopover.getByLabel("Max songs per talent")).toBeEnabled();
+  await expect(createPopover.getByLabel("Max songs per talent")).toHaveValue("2");
   await createPopover.getByLabel("Max songs per talent").fill("1");
   await createPopover.getByRole("checkbox", { name: "Prefer original/cover split", exact: true }).uncheck();
   await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Max 1 per talent");
@@ -495,7 +503,8 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await page.locator(".hololive-bracket-pick-button").first().click();
   await page.getByRole("button", { name: "Bracket" }).click();
   await expect(page.locator(".hololive-bracket-match.current .hololive-bracket-match-label")).toContainText("R1-2");
-  await page.getByRole("button", { name: "Undo" }).click();
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await page.getByRole("menuitem", { name: "Undo pick" }).click();
   await expect(page.locator(".hololive-bracket-match.current .hololive-bracket-match-label")).toContainText("R1-1");
 
   await page.getByRole("button", { name: "Play" }).click();
@@ -516,40 +525,52 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await page.getByRole("button", { name: "Stats" }).click();
   await expect(page.locator(".hololive-bracket-stats-view")).toBeVisible();
   await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Most Wins" })).toBeVisible();
-  await expect(page.locator(".hololive-bracket-stats-column-head").first()).toContainText("Song");
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Upset Wins" })).toHaveAttribute("title", /Lower-view/);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Punching Up" })).toHaveAttribute("title", /Relative score/);
-  const punchingUpPanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Punching Up" }) });
-  await expect(punchingUpPanel).toContainText(/Score|No relative upset wins yet\./);
-  await expect(punchingUpPanel.getByRole("button")).toHaveCount(0);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Big Game Wins" })).toHaveAttribute("title", /defeated opponent view count/);
-  const bigGamePanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Big Game Wins" }) });
-  const bigGameModeButton = bigGamePanel.getByRole("button", { name: /Big game wins mode/ });
-  await expect(bigGameModeButton).toContainText("Total");
-  await bigGameModeButton.click();
-  await expect(bigGameModeButton).toContainText("Avg");
-  await expect(bigGamePanel.locator("header")).toHaveAttribute("title", /Average defeated opponent view count/);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Giant Killers" })).toHaveAttribute("title", /view-count gap/);
-  const giantKillersPanel = page.locator(".hololive-bracket-stats-panel").filter({ has: page.locator("header").filter({ hasText: "Giant Killers" }) });
-  const giantKillerModeButton = giantKillersPanel.getByRole("button", { name: /Giant killer mode/ });
-  await expect(giantKillerModeButton).toContainText("Total");
-  await expect(giantKillerModeButton).toHaveAttribute("aria-pressed", "false");
-  await giantKillerModeButton.click();
-  await expect(giantKillerModeButton).toContainText("Avg");
-  await expect(giantKillerModeButton).toHaveAttribute("aria-pressed", "true");
-  await expect(giantKillersPanel.locator("header")).toHaveAttribute("title", /Average view-count gap/);
-  await expect(page.locator(".hololive-bracket-stats-panel > header").filter({ hasText: "Rivalries" })).toHaveAttribute("title", /head-to-head/);
-  await expect(page.locator(".hololive-bracket-stats-panel.history")).toContainText("Singer Showdown");
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  const overviewAwards = page.locator(".hololive-bracket-award-grid");
+  await expect(overviewAwards.locator(".hololive-bracket-award-card")).toHaveCount(12);
+  await expect(overviewAwards).toContainText("Top Talent");
+  await expect(overviewAwards).toContainText("Most Titles");
+  await expect(overviewAwards).toContainText("Most Deep Runs");
+  await expect(overviewAwards).toContainText("Strength of Wins");
+  await expect(overviewAwards).toContainText("Most Clutch");
+  await expect(overviewAwards).toContainText("Overperformer");
+  await expect(overviewAwards).toContainText("Most Wins");
+  await expect(overviewAwards).toContainText("Most 2nd Places");
+  await expect(overviewAwards).toContainText("Most Early Exits");
+  await expect(overviewAwards).toContainText("Strength of Losses");
+  await expect(overviewAwards).toContainText("Under Pressure");
+  await expect(overviewAwards).toContainText("Most Reliable");
+  await expect
+    .poll(async () =>
+      overviewAwards.locator("img").evaluateAll(
+        (images) =>
+          images.length > 0 &&
+          images.every(
+            (image) =>
+              image instanceof HTMLImageElement &&
+              image.complete &&
+              image.naturalWidth > 0 &&
+              image.naturalHeight > 0
+          )
+      )
+    )
+    .toBe(true);
 
-  await page.locator(".hololive-bracket-toolbar button.danger").click();
-  await page.locator(".hololive-action-toast").filter({ hasText: "Delete Singer Showdown?" }).getByRole("button", { name: "Delete" }).click();
-  await expect(page.locator(".hololive-bracket-stats-panel.history")).toContainText("Singer Showdown");
-  await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Songs" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Talents" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Records" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Matchups" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Delete archived bracket Singer Showdown/ }).click();
-  await page.locator(".hololive-action-toast").filter({ hasText: /Delete archived run "Singer Showdown"/ }).getByRole("button", { name: "Delete" }).click();
-  await expect(page.locator(".hololive-bracket-stats-panel.history")).toContainText("Completed brackets will appear here");
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await expect(page.getByRole("menuitem", { name: "Duplicate bracket" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Duplicate bracket" }).click();
+  await expect(page.getByText("Bracket duplicated")).toBeVisible();
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await expect(page.getByRole("menuitem", { name: "Reset bracket" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Delete bracket" }).click();
+  await page.locator(".hololive-action-toast").filter({ hasText: "Delete Copy of Singer Showdown?" }).getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Stats" }).click();
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
 });
 
@@ -692,7 +713,9 @@ test("uses the Hololive player route with playlists and queue actions", async ({
   await page.getByRole("link", { name: "Player" }).click();
 
   await expect(page).toHaveURL(/\/module\/hololive\/player/);
-  await expect(page.locator(".hololive-player-workspace")).toBeVisible();
+  await expect(page.locator(".hololive-player-layout")).toBeVisible();
+  await expect(page.locator(".hololive-player-page.hololive-player-layout")).toHaveCount(1);
+  await expect(page.locator(".hololive-player-page > .hololive-player-layout")).toHaveCount(0);
   const switchBoxAfter = await page.locator(".hololive-view-switch").boundingBox();
   expect(switchBoxBefore).not.toBeNull();
   expect(switchBoxAfter).not.toBeNull();
@@ -750,12 +773,14 @@ test("uses the Hololive player route with playlists and queue actions", async ({
   expect(libraryBox!.x).toBeLessThan(queueBox!.x);
   expect(queueBox!.x).toBeLessThan(playerBox!.x);
   expect(Math.abs(playlistsBox!.x - playerBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(queueBox!.y - libraryBox!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(queueBox!.height - libraryBox!.height)).toBeLessThanOrEqual(2);
   expect(playlistsBox!.y).toBeGreaterThan(playerBox!.y);
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const workspace = document.querySelector(".workspace");
-        return workspace ? workspace.scrollHeight - workspace.clientHeight : 0;
+        const playerPage = document.querySelector(".hololive-player-page");
+        return playerPage ? playerPage.scrollHeight - playerPage.clientHeight : 0;
       })
     )
     .toBeLessThanOrEqual(1);
@@ -855,7 +880,7 @@ test("uses the Hololive player route with playlists and queue actions", async ({
     await page.getByRole("link", { name: "Tier List" }).click();
     await expect(page.locator(".hololive-tier-board")).toBeVisible();
     await page.getByRole("link", { name: "Player" }).click();
-    await expect(page.locator(".hololive-player-workspace")).toBeVisible();
+    await expect(page.locator(".hololive-player-layout")).toBeVisible();
     await expect(page.locator(".boot-screen-error")).toHaveCount(0);
   }
 
@@ -1093,6 +1118,8 @@ test("uses Hololive view tabs without a sidebar", async ({ page }) => {
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/module\/hololive\/settings$/);
   await expect(page.getByRole("link", { name: "Settings" })).toHaveClass(/active/);
+  await expect(page.locator(".hololive-settings-page.hololive-settings-layout")).toHaveCount(1);
+  await expect(page.locator(".hololive-settings-page > .hololive-settings-layout")).toHaveCount(0);
   await expect(page.locator(".hololive-settings-panel")).toHaveCount(5);
   await page.getByRole("button", { name: /API Keys/ }).click();
   await expect(page.getByRole("button", { name: /^Save$/ })).toBeVisible();
@@ -1135,35 +1162,41 @@ test("uses Hololive view tabs without a sidebar", async ({ page }) => {
   await expect(resetFinalToast).toHaveCount(0);
 });
 
-test("keeps the Hololive tabs sticky while the workspace scrolls", async ({ page }) => {
+test("keeps the Hololive tabs sticky while the page scrolls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 640 });
   await page.reload();
   await page.locator(".hololive-tier-row").first().waitFor();
 
   const result = await page.evaluate(() => {
-    const workspace = document.querySelector(".workspace") as HTMLElement;
-    const appFrame = document.querySelector(".app-frame") as HTMLElement;
+    const tierPage = document.querySelector(".hololive-tier-layout") as HTMLElement;
+    const root = document.querySelector("#root") as HTMLElement;
     const switcher = document.querySelector(".hololive-view-switch") as HTMLElement;
     const beforeTop = switcher.getBoundingClientRect().top;
-    workspace.scrollTop = 420;
+    tierPage.scrollTop = 420;
     const afterTop = switcher.getBoundingClientRect().top;
 
     return {
-      appFrameWidth: appFrame.getBoundingClientRect().width,
+      rootWidth: root.getBoundingClientRect().width,
       afterTop,
       beforeTop,
-      scrollTop: workspace.scrollTop,
+      scrollTop: tierPage.scrollTop,
       viewportHeight: window.innerHeight,
       viewportWidth: window.innerWidth,
-      workspaceOverflowY: getComputedStyle(workspace).overflowY
+      pageOverflowY: getComputedStyle(tierPage).overflowY,
+      globalWorkspaceCount: document.querySelectorAll(".workspace").length,
+      globalFrameCount: document.querySelectorAll(".app-frame").length,
+      legacyPageCount: document.querySelectorAll(".page").length
     };
   });
 
   expect(result.scrollTop).toBeGreaterThan(0);
   expect(result.afterTop).toBeGreaterThanOrEqual(0);
   expect(result.afterTop).toBeLessThanOrEqual(result.beforeTop);
-  expect(Math.abs(result.appFrameWidth - result.viewportWidth)).toBeLessThan(2);
-  expect(result.workspaceOverflowY).toBe("auto");
+  expect(Math.abs(result.rootWidth - result.viewportWidth)).toBeLessThan(2);
+  expect(result.pageOverflowY).toBe("auto");
+  expect(result.globalWorkspaceCount).toBe(0);
+  expect(result.globalFrameCount).toBe(0);
+  expect(result.legacyPageCount).toBe(0);
 });
 
 test("shows delete row action only from the delete notch", async ({ page }) => {
@@ -1466,7 +1499,8 @@ test("survives repeated icon repositioning without renderer errors or blanking",
 
   await page.mouse.up();
 
-  await expect(page.locator(".hololive-tier-workspace")).toBeVisible();
+  await expect(page.locator(".hololive-page.hololive-tier-layout")).toBeVisible();
+  await expect(page.locator(".hololive-page > .hololive-tier-layout")).toHaveCount(0);
   await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(74);
   expect(pageErrors).toEqual([]);
 });

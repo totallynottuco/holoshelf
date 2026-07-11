@@ -3,6 +3,7 @@ import type { HololiveIdol } from "../../shared/contracts";
 export type HololiveIdolProfileSeed = Pick<
   HololiveIdol,
   | "profileImageUrl"
+  | "cardImageUrl"
   | "profileQuote"
   | "youtubeChannelUrl"
   | "xHandle"
@@ -16,6 +17,7 @@ export type HololiveIdolProfileSeed = Pick<
 export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfileSeed> = {
   "tokino-sora": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tokino-Sora_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tokino-Sora_pr-img_09.webp",
     "profileQuote": "“Hey, Sora-tomo! How are you all doing? It's me, Tokino Sora!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCp6993wxpyDPHUpavwDFqgg",
     "xHandle": "@tokino_sora",
@@ -27,6 +29,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "roboco-san": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Robocosan_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Robocosan_pr-img_10.webp",
     "profileQuote": "“Hellobo! Roboco here!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCDqI2jOz0weumE8s7paEk6g",
     "xHandle": "@robocosan",
@@ -60,6 +63,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "shirakami-fubuki": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirakami-Fubuki_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirakami-Fubuki_pr-img_10.webp",
     "profileQuote": "“Good foxy day! I'm Shirakami Fubuki!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCdn5BQ06XqgXoAxIhbqw5Rg",
     "xHandle": "@shirakamifubuki",
@@ -71,6 +75,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "natsuiro-matsuri": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Natsuiro-Matsuri_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Natsuiro-Matsuri_pr-img_10.png",
     "profileQuote": "“Wasshoi! hololive's symbol of purity and everyone's idol, Natsuiro Matsuri here!”",
     "youtubeChannelUrl": "https://youtube.com/channel/UCQ0UDLQCjY0rmuxCDE38FGg",
     "xHandle": "@natsuiromatsuri",
@@ -82,6 +87,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "nakiri-ayame": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Nakiri-Ayame_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Nakiri-Ayame_pr-img_07.webp",
     "profileQuote": "“Greetings, Humans! Yoohoo!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC7fk0CB07ly8oSl0aqKkqFg",
     "xHandle": "@nakiriayame",
@@ -114,7 +120,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
     "unit": "hololive 2nd Generation"
   },
   "azki": {
-    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/12/AZKi_pr-img_01.png",
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/AZKi_pr-img_01.webp",
     "profileQuote": "“I'm the Virtual Diva AZKi! I love music and singing!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC0TXe_LYZ4scaW2XMyi5_kw",
     "xHandle": "@AZKi_VDiVA",
@@ -125,6 +131,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "ookami-mio": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Ookami-Mio_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Ookami-Mio_pr-img_09.png",
     "profileQuote": "“Hellooowl! It is Ookami Mio!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCp-5t9SrOQwXMU7iIjQfARg",
     "xHandle": "@ookamimio",
@@ -136,6 +143,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "sakuramiko": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Sakura-Miko_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Sakura-Miko_pr-img_09.png",
     "profileQuote": "“Nya-hello~! I'm Sakura Miko, an elite shrine maiden-idol!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC-hM6YJuNYVAmUWxeIr9FeA",
     "xHandle": "@sakuramiko35",
@@ -169,6 +177,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "hoshimachi-suisei": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Hoshimachi-Suisei_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Hoshimachi-Suisei_pr-img_08.png",
     "profileQuote": "“A shooting star that appeared from diamonds in the rough; I'm the virtual idol Hoshimachi Suisei!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC5CwaMl1eIgY8h02uZw7u8A",
     "xHandle": "@suisei_hosimati",
@@ -180,6 +189,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "usada-pekora": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Usada-Pekora_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Usada-Pekora_pr-img_07.webp",
     "profileQuote": "“Hiya-peko! Hiya-peko! Hiya-pekooo! I'm Usada Pekora, peko!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC1DCedRgGHBdm81E1llLhOQ",
     "xHandle": "@usadapekora",
@@ -191,6 +201,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "shiranui-flare": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shiranui-Flare_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shiranui-Flare_pr-img_06.png",
     "profileQuote": "“Noon-nui! This is hololive 3rd Gen's Shiranui Flare!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCvInZx9h3jC2JzsIzoOebWg",
     "xHandle": "@shiranuiflare",
@@ -202,6 +213,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "shirogane-noel": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirogane-Noel_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Shirogane-Noel_pr-img_10.webp",
     "profileQuote": "“All hustle, all muscle! Shirogane Noel's here!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCdyqAaZDKHXg4Ahi7VENThQ",
     "xHandle": "@shiroganenoel",
@@ -213,6 +225,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "houshou-marine": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Houshou-Marine_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Houshou-Marine_pr-img_10.png",
     "profileQuote": "“Ahoy! Captain of the Houshou Pirates, Houshou Marine here!\" \"Keep 'er steady!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCCzUftO8KOVkV4wQG1vkUvg",
     "xHandle": "@houshoumarine",
@@ -224,6 +237,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "tsunomaki-watame": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tsunomaki-Watame_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Tsunomaki-Watame_pr-img_08.webp",
     "profileQuote": "“Hoof, hoof, helloof!” “Watame did nothing wrong!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCqm3BQLlJfvkTsX_hvm0UmA",
     "xHandle": "@tsunomakiwatame",
@@ -268,6 +282,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "momosuzu-nene": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Momosuzu-Nene_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Momosuzu-Nene_pr-img_07.webp",
     "profileQuote": "“Kon-Nene~! hololive 5th Generation, Momosuzu Nene the idol VTuber!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCAWSyEs_Io8MtpY3m-zqILA",
     "xHandle": "@momosuzunene",
@@ -289,7 +304,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
     "unit": "hololive 5th Generation"
   },
   "omaru-polka": {
-    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/12/Omaru-Polka_pr-img_01.png",
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Omaru-Polka_pr-img_01.webp",
     "profileQuote": "“Is Polka on the dot? Yes, she is!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCK9V2B22uJYu3N7eR_BT9QA",
     "xHandle": "@omarupolka",
@@ -367,6 +382,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "moona-hoshinova": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Moona-Hoshinova_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Moona-Hoshinova_pr-img_01.webp",
     "profileQuote": "“Moon Moon~ Moona Dayo!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCP0BspO_AMEe3aQqqpo89Dg",
     "xHandle": "@moonahoshinova",
@@ -455,6 +471,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "mori-calliope": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Mori-Calliope_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Mori-Calliope_pr-img_11.webp",
     "profileQuote": "“Dead Beats, listen up! Your Mori's been working hard for you!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCL_qhgtOy0dy1Agp8vkySQg",
     "xHandle": "@moricalliope",
@@ -466,6 +483,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "takanashi-kiara": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Takanashi-Kiara_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Takanashi-Kiara_pr-img_10.webp",
     "profileQuote": "“Kikkeriki!!! Welcome to KFP, are you here to order or to apply for a job?”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCHsx4Hqa-1ORjQTh9TYDhww",
     "xHandle": "@takanashikiara",
@@ -477,6 +495,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "ninomae-inanis": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Ninomae-Inanis_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/07/Ninomae-Inanis_pr-img_11.webp",
     "profileQuote": "“Good morning, afternoon, evening! Hope you're having a WAHnderful day!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCMwGHR0BTZuLsmjY_NT5Pwg",
     "xHandle": "@ninomaeinanis",
@@ -542,7 +561,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
     "unit": "hololive English -Advent-"
   },
   "koseki-bijou": {
-    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Koseki-Bijou_pr-img_01.png",
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2021/07/Koseki-Bijou_pr-img_01.webp",
     "profileQuote": "“I hope you'll feel my radiance!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC9p_lqQ0FEDz327Vgf5JwqA",
     "xHandle": "@kosekibijou",
@@ -619,7 +638,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
     "unit": "hololive English -Justice-"
   },
   "raora-panthera": {
-    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Raora-Panthera_pr-img_01.png",
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/07/Raora-Panthera_pr-img_01.webp",
     "profileQuote": "“Woah, this place looks delicious! Let's go check it out!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCl69AEx4MdqMZH7Jtsm7Tig",
     "xHandle": "@raorapanthera",
@@ -631,6 +650,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "otonose-kanade": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Otonose-Kanade_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Otonose-Kanade_pr-img_03.png",
     "profileQuote": "“Do-Re-Mi-Fa-So-La-Si-Do! From hololive DEV_IS, I am ReGLOSS's aspiring musician, Otonose Kanade!”",
     "youtubeChannelUrl": "https://youtube.com/@OtonoseKanade",
     "xHandle": "@otonosekanade",
@@ -642,6 +662,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "ichijou-ririka": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Ichijou-Ririka_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Ichijou-Ririka_pr-img_03.png",
     "profileQuote": "“Cute! Positive! Genius! From hololive DEV_IS, I am ReGLOSS's Ichijou Ririka!”",
     "youtubeChannelUrl": "https://www.youtube.com/@IchijouRirika",
     "xHandle": "@ichijouririka",
@@ -653,6 +674,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "juufuutei-raden": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Juufuutei-Raden_pr-img_01_a.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Juufuutei-Raden_pr-img_03.webp",
     "profileQuote": "“Come one, come all! From hololive DEV_IS, I am ReGLOSS's hype squad and jokester, and the Juufuutei Group's curtain raiser and apprentice, Juufuutei Raden!”",
     "youtubeChannelUrl": "https://youtube.com/@JuufuuteiRaden",
     "xHandle": "@juufuuteiraden",
@@ -664,6 +686,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "todoroki-hajime": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Todoroki-Hajime_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Todoroki-Hajime_pr-img_03.png",
     "profileQuote": "“Vroom, vroom, vroom! From hololive DEV_IS, I am ReGLOSS's Nresident badass, Todoroki Hajime!”",
     "youtubeChannelUrl": "https://www.youtube.com/@TodorokiHajime",
     "xHandle": "@todoroki_hajime",
@@ -675,6 +698,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "isaki-riona": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Isaki-Riona_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Isaki-Riona_pr-img_01_b.png",
     "profileQuote": "“I'll do what I like and live how I want to!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UC9LSiN9hXI55svYEBrrK-tw",
     "xHandle": "@isakiriona",
@@ -686,6 +710,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "koganei-niko": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Koganei-Niko_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Koganei-Niko_pr-img_01_b.png",
     "profileQuote": "“If you can't bring yourself to a smile, just say my name!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCuI_opAVX6qbxZY-a-AxFuQ",
     "xHandle": "@koganeiniko",
@@ -697,6 +722,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "mizumiya-su": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Mizumiya-Su_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Mizumiya-Su_pr-img_01_b.png",
     "profileQuote": "“Is your Su-charge at 100%?”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCjk2nKmHzgH5Xy-C5qYRd5A",
     "xHandle": "@mizumiya_su",
@@ -708,6 +734,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "rindo-chihaya": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Rindo-Chihaya_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Rindo-Chihaya_pr-img_01_b.png",
     "profileQuote": "“Won't you come with me to chase greater heights and see the scenery from high above?”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCKMWFR6lAstLa7Vbf5dH7ig",
     "xHandle": "@rindochihaya",
@@ -719,6 +746,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "kikirara-vivi": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Kikirara-Vivi_pr-img_01_a.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Kikirara-Vivi_pr-img_01_b.png",
     "profileQuote": "“Hol'up, 'cus you're in for a transformation!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCGzTVXqMQHa4AgJVJIVvtDQ",
     "xHandle": "@kikiraravivi",
@@ -752,6 +780,7 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
   },
   "amane-kanata": {
     "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2024/07/Amane-Kanata_pr-img_01.png",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2020/06/Amane-Kanata_pr-img_06.png",
     "profileQuote": "“Hey, you all came, ta!”",
     "youtubeChannelUrl": "https://www.youtube.com/channel/UCZlDXzGoo7d44bwdNObFacg",
     "xHandle": "@amanekanatach",

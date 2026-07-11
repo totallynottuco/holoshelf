@@ -461,6 +461,10 @@ export interface HololiveBracketResetRequest {
   bracketId: string;
 }
 
+export interface HololiveBracketDuplicateRequest {
+  bracketId: string;
+}
+
 export interface HololiveBracketDeleteRequest {
   bracketId: string;
 }
@@ -806,6 +810,10 @@ export interface IpcChannelMap {
   };
   "hololive:brackets:reset": {
     request: HololiveBracketResetRequest;
+    response: HololiveBracket;
+  };
+  "hololive:brackets:duplicate": {
+    request: HololiveBracketDuplicateRequest;
     response: HololiveBracket;
   };
   "hololive:brackets:delete": {

@@ -74,6 +74,7 @@ export interface CatalogItem {
 
 export type HololiveIdolStatus = "active" | "affiliate" | "alum" | "retired";
 export type HololiveTalentSource = "official" | "custom";
+export type HololiveImageCacheKind = "icon" | "profile" | "card";
 
 export interface HololiveIdol {
   id: string;
@@ -88,6 +89,8 @@ export interface HololiveIdol {
   cachedIconUrl?: string | null;
   profileImageUrl?: string | null;
   cachedProfileImageUrl?: string | null;
+  cardImageUrl?: string | null;
+  cachedCardImageUrl?: string | null;
   profileQuote?: string | null;
   youtubeChannelUrl?: string | null;
   youtubeChannelId?: string | null;
@@ -461,8 +464,13 @@ export interface HololiveBracketSongStats {
   giantKillerScore: number;
   bigGameScore: number;
   bigGameWins: number;
+  highStakesPerformanceRate: number;
+  highStakesPerformanceWins: number;
+  highStakesPerformanceLosses: number;
+  highStakesPerformanceMatches: number;
   punchingUpScore: number;
   punchingUpWins: number;
+  punchingUpOpportunities: number;
   lastArchivedAt: string;
 }
 
@@ -475,10 +483,33 @@ export interface HololiveBracketTalentStats {
   winRate: number;
   championCount: number;
   finalistCount: number;
+  finalsConversionRate: number;
+  runnerUpCount: number;
   top4Count: number;
+  deepRunRate: number;
   top8Count: number;
   top16Count: number;
   firstRoundEliminations: number;
+  earlyExitCount: number;
+  earlyExitRate: number;
+  strengthOfWinsScore: number;
+  strengthOfWinsCount: number;
+  strengthOfLossesScore: number;
+  strengthOfLossesCount: number;
+  punchingAboveScore: number;
+  punchingAboveWins: number;
+  punchingAboveOpportunities: number;
+  clutchRate: number;
+  clutchWins: number;
+  clutchLosses: number;
+  clutchMatches: number;
+  pressureEdgeScore: number;
+  pressureEdgeMatches: number;
+  pressureEdgePositiveMatches: number;
+  pressureEdgeNegativeMatches: number;
+  upsetResilienceScore: number;
+  upsetResilienceChecks: number;
+  upsetResilienceUpsetLosses: number;
   lastArchivedAt: string;
 }
 
@@ -494,6 +525,20 @@ export interface HololiveBracketRivalryStats {
   lastArchivedAt: string;
 }
 
+export interface HololiveBracketRatingStatsRow {
+  id: string;
+  label: string;
+  detail?: string | null;
+  rating: number;
+  conservativeRating: number;
+  ratingDeviation: number;
+  volatility: number;
+  wins: number;
+  losses: number;
+  matches: number;
+  lastArchivedAt: string;
+}
+
 export interface HololiveBracketStatsOverview {
   totals: {
     completedBrackets: number;
@@ -501,6 +546,10 @@ export interface HololiveBracketStatsOverview {
     uniqueSongs: number;
     uniqueTalents: number;
   };
+  songStats: HololiveBracketSongStats[];
+  talentStats: HololiveBracketTalentStats[];
+  rivalryStats: HololiveBracketRivalryStats[];
+  finalsRivalryStats: HololiveBracketRivalryStats[];
   topSongsByWins: HololiveBracketSongStats[];
   topSongsByWinRate: HololiveBracketSongStats[];
   topSongsByAppearances: HololiveBracketSongStats[];
@@ -512,9 +561,26 @@ export interface HololiveBracketStatsOverview {
   topSongsByGiantKillerAverage: HololiveBracketSongStats[];
   topSongsByBigGameScore: HololiveBracketSongStats[];
   topSongsByBigGameAverage: HololiveBracketSongStats[];
+  topSongsByHighStakesPerformance: HololiveBracketSongStats[];
   topSongsByPunchingUpScore: HololiveBracketSongStats[];
   topTalents: HololiveBracketTalentStats[];
+  topTalentsByWins: HololiveBracketTalentStats[];
+  topTalentsByTitles: HololiveBracketTalentStats[];
+  topTalentsByRunnerUps: HololiveBracketTalentStats[];
+  topTalentsByFinalsConversion: HololiveBracketTalentStats[];
+  topTalentsByDeepRuns: HololiveBracketTalentStats[];
+  topTalentsByDeepRunRate: HololiveBracketTalentStats[];
+  topTalentsByEarlyExits: HololiveBracketTalentStats[];
+  topTalentsByEarlyExitRate: HololiveBracketTalentStats[];
   topTalentsByTop4: HololiveBracketTalentStats[];
+  topTalentsByStrengthOfWins: HololiveBracketTalentStats[];
+  topTalentsByStrengthOfLosses: HololiveBracketTalentStats[];
+  topTalentsByPunchingAbove: HololiveBracketTalentStats[];
+  topTalentsByClutchRate: HololiveBracketTalentStats[];
+  topTalentsByPressureEdge: HololiveBracketTalentStats[];
+  topTalentsByUpsetResilience: HololiveBracketTalentStats[];
+  topSongRatings: HololiveBracketRatingStatsRow[];
+  topTalentRatings: HololiveBracketRatingStatsRow[];
   topRivalries: HololiveBracketRivalryStats[];
   championHistory: HololiveBracketArchiveSummary[];
 }

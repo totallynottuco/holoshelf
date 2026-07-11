@@ -10,6 +10,8 @@ const DISTINCT_VERSION_MARKERS: Array<[string, RegExp]> = [
 
 const LOW_PRIORITY_VERSION_PATTERN =
   /\b(?:tv\s*size|remaster(?:ed)?(?:\s+ver(?:sion)?)?|daybreak\s+ver(?:sion)?|solo\s+ver(?:sion)?|japanese\s+ver(?:sion)?|english\s+ver(?:sion)?|jp\s+ver(?:sion)?|en\s+ver(?:sion)?|indonesian\s+ver(?:sion)?|korean\s+ver(?:sion)?|chinese\s+ver(?:sion)?|spanish\s+ver(?:sion)?)\b/iu;
+const LOW_PRIORITY_LIVE_VERSION_PATTERN =
+  /\b(?:3d\s*(?:live|mv)|live\s+ver(?:sion)?|live\s+(?:from|performance)|concert\s+ver(?:sion)?|festival\s+ver(?:sion)?)\b/iu;
 const BRACKETED_CONTEXT_PATTERN = /\s*[\(\[\u3010]([^\)\]\u3011]*)[\)\]\u3011]\s*/gu;
 const TRAILING_VERSION_PATTERN =
   /(?:\s*[-–—:]\s*|\s+)(?:tv\s*size|japanese\s+ver(?:sion)?|english\s+ver(?:sion)?|jp\s+ver(?:sion)?|en\s+ver(?:sion)?|indonesian\s+ver(?:sion)?|korean\s+ver(?:sion)?|chinese\s+ver(?:sion)?|spanish\s+ver(?:sion)?)\.?\s*$/iu;
@@ -26,17 +28,22 @@ export function buildNormalizedHololiveMusicKey(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-function hasDistinctVersionMarker(value: string): boolean {
-  return DISTINCT_VERSION_MARKERS.some(([, pattern]) => pattern.test(value));
-}
-
 export function hasHololiveLowPriorityVersionMarker(value: string | null | undefined): boolean {
   const normalized = normalizeHololiveMusicText(value ?? "");
   if (!normalized.trim()) {
     return false;
   }
 
-  return LOW_PRIORITY_VERSION_PATTERN.test(normalized);
+  return LOW_PRIORITY_VERSION_PATTERN.test(normalized) || hasHololiveLowPriorityLiveVersionMarker(normalized);
+}
+
+export function hasHololiveLowPriorityLiveVersionMarker(value: string | null | undefined): boolean {
+  const normalized = normalizeHololiveMusicText(value ?? "");
+  if (!normalized.trim()) {
+    return false;
+  }
+
+  return LOW_PRIORITY_LIVE_VERSION_PATTERN.test(normalized);
 }
 
 export function stripHololiveLowPriorityVersionMarkers(value: string): string {
@@ -46,14 +53,15 @@ export function stripHololiveLowPriorityVersionMarkers(value: string): string {
   }
 
   let cleaned = original.replace(BRACKETED_CONTEXT_PATTERN, (match, context: string) => {
-    if (hasDistinctVersionMarker(context)) {
-      return match;
-    }
     return hasHololiveLowPriorityVersionMarker(context) ? " " : match;
   });
 
   for (;;) {
-    const withoutDaybreakVersion = cleaned.replace(
+    const withoutLiveVersion = cleaned.replace(
+      /(?:\s*[-\u2013\u2014:]\s*|\s+)(?:3d\s*(?:live|mv)|live\s+ver(?:sion)?|live\s+(?:from|performance)|concert\s+ver(?:sion)?|festival\s+ver(?:sion)?)\.?\s*$/iu,
+      " "
+    );
+    const withoutDaybreakVersion = withoutLiveVersion.replace(
       /(?:\s*[-\u2013\u2014:]\s*|\s+)daybreak\s+ver(?:sion)?\.?\s*$/iu,
       " "
     );

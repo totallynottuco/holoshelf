@@ -1521,7 +1521,7 @@ export function HololivePage() {
 
   if (!visibleData) {
     return (
-      <div className="page hololive-page">
+      <div className="hololive-page">
         <div className="boot-screen hololive-loading">Loading Hololive</div>
       </div>
     );
@@ -1531,17 +1531,18 @@ export function HololivePage() {
   const currentIdolDrag = activeIdolDrag ? idolDragRef.current : null;
 
   return (
-    <div
-      className="page hololive-page"
-      style={{ "--hololive-icon-size": `${LOCKED_HOLOLIVE_ICON_SIZE}px` } as CSSProperties}
+    <section
+      className="hololive-page hololive-tier-layout"
+      aria-label="Hololive tier list"
+      style={
+        {
+          "--hololive-icon-size": `${LOCKED_HOLOLIVE_ICON_SIZE}px`,
+          "--hololive-tier-label-width": `${tierLabelWidth}px`
+        } as CSSProperties
+      }
     >
-      <section
-        className="hololive-tier-workspace"
-        aria-label="Hololive tier list workspace"
-        style={{ "--hololive-tier-label-width": `${tierLabelWidth}px` } as CSSProperties}
-      >
-        <HololiveViewSwitch />
-        <section className="hololive-board-tabs" aria-label="Tier list boards">
+      <HololiveViewSwitch />
+      <section className="hololive-board-tabs" aria-label="Tier list boards">
           <DndContext
             sensors={boardSensors}
             collisionDetection={closestCenter}
@@ -1583,47 +1584,46 @@ export function HololivePage() {
               </div>
             </SortableContext>
           </DndContext>
-        </section>
-
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={(event) => void handleDragEnd(event)}
-          onDragCancel={handleDragCancel}
-        >
-          <SortableContext
-            items={sortedTiers.map((tier) => tierRowDragId(tier.id))}
-            strategy={verticalListSortingStrategy}
-          >
-            <section
-              className="hololive-tier-board"
-              aria-label="Hololive idol tier list"
-            >
-              {sortedTiers.map((tier) => (
-                <TierRow
-                  key={tier.id}
-                  tier={tier}
-                  idols={idolsByTier.get(tier.id) ?? EMPTY_IDOLS}
-                  tileSize={LOCKED_HOLOLIVE_ICON_SIZE}
-                  disabled={busy}
-                  activeIdolId={activeIdolId}
-                  onIdolPointerDown={beginIdolPointerInteraction}
-                  onOpenProfile={openIdolProfile}
-                  onUpdate={updateTier}
-                  onDelete={deleteTier}
-                  onCreateAdjacent={createTierAdjacent}
-                  onResizeStart={beginTierLabelResize}
-                />
-              ))}
-            </section>
-          </SortableContext>
-
-          <DragOverlay>
-            {activeTier ? <TierDragPreview tier={activeTier} idolCount={activeTierIdolCount} /> : null}
-          </DragOverlay>
-        </DndContext>
       </section>
+
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={(event) => void handleDragEnd(event)}
+        onDragCancel={handleDragCancel}
+      >
+        <SortableContext
+          items={sortedTiers.map((tier) => tierRowDragId(tier.id))}
+          strategy={verticalListSortingStrategy}
+        >
+          <section
+            className="hololive-tier-board"
+            aria-label="Hololive idol tier list"
+          >
+            {sortedTiers.map((tier) => (
+              <TierRow
+                key={tier.id}
+                tier={tier}
+                idols={idolsByTier.get(tier.id) ?? EMPTY_IDOLS}
+                tileSize={LOCKED_HOLOLIVE_ICON_SIZE}
+                disabled={busy}
+                activeIdolId={activeIdolId}
+                onIdolPointerDown={beginIdolPointerInteraction}
+                onOpenProfile={openIdolProfile}
+                onUpdate={updateTier}
+                onDelete={deleteTier}
+                onCreateAdjacent={createTierAdjacent}
+                onResizeStart={beginTierLabelResize}
+              />
+            ))}
+          </section>
+        </SortableContext>
+
+        <DragOverlay>
+          {activeTier ? <TierDragPreview tier={activeTier} idolCount={activeTierIdolCount} /> : null}
+        </DragOverlay>
+      </DndContext>
 
       <IdolPool
         idols={unrankedIdols}
@@ -1674,7 +1674,7 @@ export function HololivePage() {
           onMusicPlaylistAdd={addProfileSongToPlaylist}
         />
       ) : null}
-    </div>
+    </section>
   );
 }
 

@@ -45,6 +45,12 @@ export interface OfficialDataMergeResult {
   preservedMissingRows: number;
 }
 
+export interface OfficialImageCacheRepairResult {
+  copiedImageFiles: number;
+  imageCacheRows: number;
+  reason?: "missing-seed";
+}
+
 interface MergeOptions {
   database: DatabaseService;
   paths: Pick<AppPathSet, "dataDirectory" | "hololiveImageDirectory" | "seedDirectory">;
@@ -52,6 +58,8 @@ interface MergeOptions {
   now?: () => string;
   log?: (message: string) => void;
 }
+
+type ImageCacheRepairOptions = Pick<MergeOptions, "database" | "paths" | "log">;
 
 function resolveSqlWasmPath(): string {
   const packagedPath = path.join(process.resourcesPath ?? "", "sql-wasm.wasm");
@@ -144,6 +152,49 @@ function userOwnedMusicVideoIds(database: DatabaseService): Set<string> {
       .map((row) => row.youtube_video_id)
       .filter(Boolean)
   );
+}
+
+function selectOfficialImageCacheRows(seedDatabase: Database): SeedRow[] {
+  return seedTableExists(seedDatabase, "hololive_image_cache")
+    ? selectSeedRows(seedDatabase, `SELECT c.*
+         FROM hololive_image_cache c
+         INNER JOIN hololive_idols i ON i.id = c.idol_id
+         WHERE i.source = 'official'
+         ORDER BY c.idol_id, c.kind`)
+    : [];
+}
+
+export async function repairBundledOfficialImageCache(
+  options: ImageCacheRepairOptions
+): Promise<OfficialImageCacheRepairResult> {
+  const seedDirectory = options.paths.seedDirectory;
+  const seedDatabasePath = seedDirectory ? path.join(seedDirectory, "holoshelf-template.sqlite") : "";
+  if (!seedDirectory || !fs.existsSync(seedDatabasePath)) {
+    options.log?.("[official-data] image cache repair skipped: bundled seed template database is missing");
+    return { copiedImageFiles: 0, imageCacheRows: 0, reason: "missing-seed" };
+  }
+
+  const copiedImageFiles = copyMissingDirectoryEntries(
+    path.join(seedDirectory, "images", "hololive"),
+    options.paths.hololiveImageDirectory
+  );
+  const SQL = await initSqlJs({
+    locateFile: () => resolveSqlWasmPath()
+  });
+  const seedDatabase = new SQL.Database(fs.readFileSync(seedDatabasePath));
+  let imageCacheRows = 0;
+
+  try {
+    imageCacheRows = upsertRows(options.database, "hololive_image_cache", selectOfficialImageCacheRows(seedDatabase), [
+      "idol_id",
+      "kind"
+    ]);
+  } finally {
+    seedDatabase.close();
+  }
+
+  options.log?.(`[official-data] image cache repaired images=${copiedImageFiles} imageCacheRows=${imageCacheRows}`);
+  return { copiedImageFiles, imageCacheRows };
 }
 
 function upsertRows(
@@ -388,8 +439,22 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
   }
 
   if (compareOfficialDataVersions(previousVersion, manifest.version) >= 0) {
-    options.log?.(`[official-data] skipped: user database already has version ${previousVersion}`);
-    return { ...emptyResult, reason: "current-version" };
+    const imageRepair = await repairBundledOfficialImageCache(options);
+    const copiedArtifactFiles = copyMissingDirectoryEntries(
+      path.join(seedDirectory, "holodex-refresh"),
+      path.join(options.paths.dataDirectory, "holodex-refresh")
+    );
+
+    options.log?.(
+      `[official-data] skipped: user database already has version ${previousVersion}; repaired seed files images=${imageRepair.copiedImageFiles} artifacts=${copiedArtifactFiles} imageCacheRows=${imageRepair.imageCacheRows}`
+    );
+    return {
+      ...emptyResult,
+      copiedImageFiles: imageRepair.copiedImageFiles,
+      copiedArtifactFiles,
+      imageCacheRows: imageRepair.imageCacheRows,
+      reason: "current-version"
+    };
   }
 
   const SQL = await initSqlJs({
@@ -482,13 +547,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
           officialMusicVideoIds.has(String(row.youtube_video_id ?? ""))
         )
       : [];
-    const imageCacheRows = seedTableExists(seedDatabase, "hololive_image_cache")
-      ? selectSeedRows(seedDatabase, `SELECT c.*
-           FROM hololive_image_cache c
-           INNER JOIN hololive_idols i ON i.id = c.idol_id
-           WHERE i.source = 'official'
-           ORDER BY c.idol_id, c.kind`)
-      : [];
+    const imageCacheRows = selectOfficialImageCacheRows(seedDatabase);
     const officialVideoIds = new Set(musicRows.map((row) => String(row.youtube_video_id ?? "")).filter(Boolean));
     const copiedImageFiles = copyMissingDirectoryEntries(
       path.join(seedDirectory, "images", "hololive"),
@@ -536,6 +595,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         imageCacheRows: upsertRows(options.database, "hololive_image_cache", imageCacheRows, ["idol_id", "kind"])
       };
       options.database.repairHololiveMusicClassifications();
+      options.database.repairHololiveMusicDuplicateRows("official-data-merge");
 
       const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);
       prunedMissingRows = pruneResult.prunedMissingRows;

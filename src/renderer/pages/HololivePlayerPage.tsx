@@ -45,6 +45,7 @@ import type {
   HololiveMusicTopic
 } from "../../shared/contracts";
 import type { HololiveMusicLibraryCollabScope, HololiveMusicLibrarySort } from "../../shared/ipc";
+import { getHololiveCanonicalTalentIdentity, getHololiveCanonicalTalentId } from "../../shared/hololiveTalentIdentity";
 import { api } from "../api";
 import { CompactSelect } from "../components/CompactSelect";
 import { useHololiveActionToast } from "../components/HololiveActionToast";
@@ -208,7 +209,7 @@ export function HololivePlayerPage() {
         if (LIBRARY_PAGE_SIZE_OPTIONS.includes(pageSize as (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number])) {
           setLibraryPageSize(pageSize);
         }
-        setLibraryTalentId(settings[PLAYER_LIBRARY_TALENT_SETTING_KEY] || "all");
+        setLibraryTalentId(settings[PLAYER_LIBRARY_TALENT_SETTING_KEY] ? getHololiveCanonicalTalentId(settings[PLAYER_LIBRARY_TALENT_SETTING_KEY]) : "all");
         const scope = settings[PLAYER_LIBRARY_SCOPE_SETTING_KEY];
         if (scope === "all" || scope === "solo") {
           setLibraryCollabScope(scope);
@@ -365,13 +366,20 @@ export function HololivePlayerPage() {
   const selectedPlaylist = data?.playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? data?.playlists[0] ?? null;
   const userPlaylists = useMemo(() => (data?.playlists ?? []).filter((playlist) => !playlist.systemId), [data?.playlists]);
   const talentOptions = useMemo(
-    () => [
-      { value: "all", label: "All talents" },
-      ...talents
+    () => {
+      const options = [{ value: "all", label: "All talents" }];
+      const seen = new Set(options.map((option) => option.value));
+      for (const talent of talents
         .slice()
-        .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName))
-        .map((talent) => ({ value: talent.id, label: talent.displayName }))
-    ],
+        .sort((left, right) => left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName))) {
+        const identity = getHololiveCanonicalTalentIdentity(talent.id, talent.displayName);
+        if (!seen.has(identity.id)) {
+          seen.add(identity.id);
+          options.push({ value: identity.id, label: identity.name });
+        }
+      }
+      return options;
+    },
     [talents]
   );
   const selectedTalentLabel = talentOptions.find((option) => option.value === libraryTalentId)?.label ?? "All talents";
@@ -408,11 +416,11 @@ export function HololivePlayerPage() {
     if (libraryTalentId === "all" || talents.length === 0) {
       return;
     }
-    if (!talents.some((talent) => talent.id === libraryTalentId)) {
+    if (!talentOptions.some((talent) => talent.value === libraryTalentId)) {
       setLibraryTalentId("all");
       setLibraryPage(0);
     }
-  }, [libraryTalentId, talents]);
+  }, [libraryTalentId, talentOptions]);
 
   function togglePlaylist(playlistId: string) {
     setSelectedPlaylistId(playlistId);
@@ -879,13 +887,12 @@ export function HololivePlayerPage() {
   const currentTitle = currentItem ? itemTitle(currentItem) : "current song";
 
   return (
-    <div className="page hololive-page hololive-player-page">
-      <section className="hololive-player-workspace" aria-label="Hololive YouTube playlist player">
+    <section className="hololive-page hololive-player-page hololive-player-layout" aria-label="Hololive YouTube playlist player">
         <HololiveViewSwitch />
 
         <section className="hololive-player-grid">
           <section className="hololive-player-main" aria-label="YouTube player">
-            <div className="hololive-youtube-frame hololive-youtube-frame-anchor" />
+            <div className={`hololive-youtube-frame hololive-youtube-frame-anchor${currentVideoId ? "" : " empty"}`} />
 
             <div className="hololive-now-playing">
               <span>Now Playing</span>
@@ -1513,8 +1520,7 @@ export function HololivePlayerPage() {
             </div>
           </section>
         </section>
-      </section>
-    </div>
+    </section>
   );
 }
 

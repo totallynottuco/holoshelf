@@ -347,44 +347,44 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
   const dataLocationLabel = formatDataLocationKind(bootstrap.dataLocationKind);
 
   return (
-    <div className="page hololive-page hololive-settings-page">
-      <section className="hololive-settings-workspace" aria-label="Holoshelf settings">
-        <HololiveViewSwitch />
+    <section className="hololive-page hololive-settings-page hololive-settings-layout" aria-label="Holoshelf settings">
+      <HololiveViewSwitch />
 
-        <div className="hololive-settings-header">
-          <div>
-            <h1>Settings</h1>
-          </div>
-          <div className="hololive-settings-header-pills" aria-label="Settings status">
-            <span>
-              <ShieldCheck size={14} />
-              Official data: {officialDataLabel}
-            </span>
-            <span>
-              <Database size={14} />
-              {dataLocationLabel}
-            </span>
-          </div>
+      <div className="hololive-settings-header">
+        <div>
+          <h1>Settings</h1>
         </div>
+        <div className="hololive-settings-header-pills" aria-label="Settings status">
+          <span>
+            <ShieldCheck size={14} />
+            Official data: {officialDataLabel}
+          </span>
+          <span>
+            <Database size={14} />
+            {dataLocationLabel}
+          </span>
+        </div>
+      </div>
 
-        <div className="hololive-settings-grid">
-          <section className={sectionClassName("updates", "updates")}>
-            <button
-              type="button"
-              className="hololive-settings-panel-header"
-              aria-expanded={openSettingsSections.updates}
-              aria-controls={sectionBodyId("updates")}
-              onClick={() => toggleSettingsSection("updates")}
-            >
-              <RefreshCw size={16} />
-              <div>
-                <strong>App Updates</strong>
-              </div>
-              <ChevronDown className="settings-accordion-chevron" size={15} aria-hidden="true" />
-            </button>
-            {openSettingsSections.updates ? (
-              <div id={sectionBodyId("updates")} className="settings-panel-body">
-                <div className={`settings-status-card ${updateStatus?.state ?? "idle"}`}>
+      <div className="hololive-settings-grid">
+        <section className={sectionClassName("updates", "updates")}>
+          <button
+            type="button"
+            className="hololive-settings-panel-header"
+            aria-expanded={openSettingsSections.updates}
+            aria-controls={sectionBodyId("updates")}
+            onClick={() => toggleSettingsSection("updates")}
+          >
+            <RefreshCw size={16} />
+            <div>
+              <strong>App Updates</strong>
+            </div>
+            <ChevronDown className="settings-accordion-chevron" size={15} aria-hidden="true" />
+          </button>
+          {openSettingsSections.updates ? (
+            <div id={sectionBodyId("updates")} className="settings-panel-body">
+              <div className="settings-update-row">
+                <div className={`settings-status-line ${updateStatus?.state ?? "idle"}`}>
                   <span>{updateStateLabel(updateStatus)}</span>
                   <strong>{updateDetail}</strong>
                 </div>
@@ -405,10 +405,11 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                   ) : null}
                 </div>
               </div>
-            ) : null}
-          </section>
+            </div>
+          ) : null}
+        </section>
 
-          <section className={sectionClassName("dataSafety", "data-safety")}>
+        <section className={sectionClassName("dataSafety", "data-safety")}>
             <button
               type="button"
               className="hololive-settings-panel-header"
@@ -425,25 +426,25 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
             {openSettingsSections.dataSafety ? (
               <div id={sectionBodyId("dataSafety")} className="settings-panel-body">
                 <div className="settings-action-grid">
-                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void openDataFolder()}>
+                  <button className="settings-action-link" disabled={dataSafetyBusy} onClick={() => void openDataFolder()}>
                     <FolderOpen size={16} />
                     <span>
                       <strong>Open data folder</strong>
                     </span>
                   </button>
-                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void exportBackup()}>
+                  <button className="settings-action-link" disabled={dataSafetyBusy} onClick={() => void exportBackup()}>
                     <Archive size={16} />
                     <span>
                       <strong>Export backup</strong>
                     </span>
                   </button>
-                  <button className="settings-action-tile" disabled={dataSafetyBusy} onClick={() => void importBackup()}>
+                  <button className="settings-action-link" disabled={dataSafetyBusy} onClick={() => void importBackup()}>
                     <Upload size={16} />
                     <span>
                       <strong>Import backup</strong>
                     </span>
                   </button>
-                  <button className="settings-action-tile danger" disabled={dataSafetyBusy} onClick={() => void resetLocalData()}>
+                  <button className="settings-action-link danger" disabled={dataSafetyBusy} onClick={() => void resetLocalData()}>
                     <Trash2 size={16} />
                     <span>
                       <strong>Reset local data</strong>
@@ -452,9 +453,9 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                 </div>
               </div>
             ) : null}
-          </section>
+        </section>
 
-          <section className={sectionClassName("apiKeys", "api-keys")}>
+        <section className={sectionClassName("apiKeys", "api-keys")}>
             <button
               type="button"
               className="hololive-settings-panel-header"
@@ -500,9 +501,9 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                 </div>
               </div>
             ) : null}
-          </section>
+        </section>
 
-          <section className={sectionClassName("officialData", "official-data")}>
+        <section className={sectionClassName("officialData", "official-data")}>
             <button
               type="button"
               className="hololive-settings-panel-header"
@@ -530,9 +531,9 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                 </div>
               </div>
             ) : null}
-          </section>
+        </section>
 
-          <section className={sectionClassName("storage", "storage")}>
+        <section className={sectionClassName("storage", "storage")}>
             <button
               type="button"
               className="hololive-settings-panel-header"
@@ -568,9 +569,8 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                 </div>
               </div>
             ) : null}
-          </section>
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </section>
   );
 }

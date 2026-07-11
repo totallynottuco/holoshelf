@@ -1016,7 +1016,7 @@ function HololivePersistentPlayerSurface({
   return (
     <section
       ref={miniPlayerRef}
-      className={`hololive-persistent-player ${anchored ? "anchored" : "mini"}`}
+      className={`hololive-persistent-player ${anchored ? "anchored" : "mini"}${currentVideoId ? "" : " empty"}`}
       data-dragging={miniInteractionType ? "true" : "false"}
       data-interaction={miniInteractionType ?? undefined}
       style={style}

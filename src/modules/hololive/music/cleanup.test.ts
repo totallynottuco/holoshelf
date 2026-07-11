@@ -123,6 +123,9 @@ describe("Holodex cleanup rules", () => {
     expect(buildHololiveMusicSongKey({ songName: "High Tide (Remastered ver.)" })).toBe(
       buildHololiveMusicSongKey({ songName: "High Tide" })
     );
+    expect(buildHololiveMusicSongKey({ songName: "Kamouflage [3D Live]" })).toBe(
+      buildHololiveMusicSongKey({ songName: "Kamouflage" })
+    );
     expect(buildHololiveMusicSongKey({ songName: "\u30bb\u30ab\u30a4\u306e\u8272\u5f69 (AZKi solo ver.)" })).toBe(
       buildHololiveMusicSongKey({ songName: "\u30bb\u30ab\u30a4\u306e\u8272\u5f69" })
     );

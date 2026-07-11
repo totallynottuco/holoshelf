@@ -62,6 +62,7 @@ export function App() {
             <Route path="/module/hololive/player" element={<HololivePlayerPage />} />
             <Route path="/module/hololive/bracket" element={<HololiveBracketPage />} />
             <Route path="/module/hololive/brackets" element={<Navigate to="/module/hololive/bracket" replace />} />
+            <Route path="/module/hololive/stats" element={<Navigate to="/module/hololive/bracket" replace />} />
             <Route path="/module/hololive/custom-import" element={<HololiveCustomImportPage />} />
             <Route path="/module/hololive/talents" element={<Navigate to="/module/hololive/custom-import" replace />} />
             <Route path="/module/hololive/settings" element={<SettingsPage bootstrap={bootstrap} />} />

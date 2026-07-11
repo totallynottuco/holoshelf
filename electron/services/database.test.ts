@@ -529,7 +529,21 @@ describe("DatabaseService", () => {
       true
     );
 
-    expect(database.deleteHololiveBracket(bracket.id)).toEqual([]);
+    const duplicate = database.duplicateHololiveBracket(bracket.id);
+    expect(duplicate.id).not.toBe(bracket.id);
+    expect(duplicate.name).toBe("Copy of Test Bracket");
+    expect(duplicate.status).toBe("active");
+    expect(duplicate.currentMatchId).toBe(`${duplicate.id}:r0:m0`);
+    expect(duplicate.entries.map((entry) => entry.youtubeVideoId)).toEqual(bracket.entries.map((entry) => entry.youtubeVideoId));
+    expect(duplicate.entries.every((entry) => entry.bracketId === duplicate.id)).toBe(true);
+    expect(duplicate.rounds[0]?.matches[0]?.entryA?.id).toBe(`${duplicate.id}:entry:0`);
+    expect(duplicate.rounds.flatMap((round) => round.matches).every((match) => match.winnerEntryId === null)).toBe(true);
+    expect(duplicate.rounds.slice(1).flatMap((round) => round.matches).every((match) => !match.entryA && !match.entryB)).toBe(
+      true
+    );
+
+    expect(database.deleteHololiveBracket(bracket.id)).toHaveLength(1);
+    expect(database.deleteHololiveBracket(duplicate.id)).toEqual([]);
   });
 
   it("archives completed brackets for durable stats and preserves archives after saved bracket deletion", async () => {
@@ -593,6 +607,10 @@ describe("DatabaseService", () => {
       uniqueSongs: 16,
       uniqueTalents: 8
     });
+    expect(stats.songStats).toHaveLength(16);
+    expect(stats.talentStats).toHaveLength(8);
+    expect(stats.rivalryStats.length).toBeGreaterThan(0);
+    expect(Array.isArray(stats.finalsRivalryStats)).toBe(true);
     expect(stats.topSongsByWins[0]).toMatchObject({
       youtubeVideoId: completed.champion?.youtubeVideoId,
       wins: 4,
@@ -610,6 +628,18 @@ describe("DatabaseService", () => {
     expect(stats.topSongsByFirstRoundEliminations[0]?.firstRoundEliminations).toBe(1);
     expect(stats.topTalents[0]?.wins).toBeGreaterThan(0);
     expect(stats.topTalentsByTop4[0]?.top4Count).toBeGreaterThan(0);
+    const championRating = stats.topSongRatings.find((row) => row.id === completed.champion?.youtubeVideoId);
+    expect(championRating).toMatchObject({
+      wins: 4,
+      losses: 0,
+      matches: 4
+    });
+    expect(championRating?.rating).toBeGreaterThan(1500);
+    expect(championRating?.conservativeRating).toBeCloseTo((championRating?.rating ?? 0) - (championRating?.ratingDeviation ?? 0) * 2);
+    expect(championRating?.conservativeRating).toBeLessThan(championRating?.rating ?? Number.POSITIVE_INFINITY);
+    expect(championRating?.ratingDeviation).toBeLessThan(350);
+    expect(stats.topTalentRatings.length).toBeGreaterThan(0);
+    expect(stats.topTalentRatings[0]?.matches).toBeGreaterThan(0);
 
     const reset = database.resetHololiveBracket(bracket.id);
     const recompleted = completeBracket(database, reset);
@@ -642,10 +672,12 @@ describe("DatabaseService", () => {
       uniqueSongs: 0,
       uniqueTalents: 0
     });
+    expect(database.getHololiveBracketStatsOverview().topSongRatings).toEqual([]);
 
     database.applyHololiveUndo(archiveUndo?.undoToken ?? "");
     expect(database.listHololiveBracketArchives()).toHaveLength(1);
     expect(database.getHololiveBracketStatsOverview().totals.completedBrackets).toBe(1);
+    expect(database.getHololiveBracketStatsOverview().topSongRatings.length).toBeGreaterThan(0);
   });
 
   it("tracks bracket upset, big game, punching up, giant killer, and rivalry stats", async () => {
@@ -664,6 +696,9 @@ describe("DatabaseService", () => {
       loserIdolName: string;
       winnerViews: number;
       loserViews: number;
+      loserEliminatedRoundIndex?: number;
+      roundIndex?: number;
+      matchIndex?: number;
     }) => {
       database.run(
         `INSERT INTO hololive_bracket_archives
@@ -718,7 +753,7 @@ describe("DatabaseService", () => {
               canonical_performance_key, view_count_snapshot, published_at_snapshot, duration_seconds_snapshot,
               wins, losses, final_rank, eliminated_round_index, eliminated_by_youtube_video_id,
               first_round_eliminated, is_champion, is_finalist, is_top4, is_top8, is_top16)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'Original_Song', ?, ?, ?, ?, ?, ?, ?, 210, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'Original_Song', ?, ?, ?, ?, ?, ?, ?, 210, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)`,
           [
             `${input.id}:entry:${entry.slotIndex}`,
             input.id,
@@ -737,7 +772,7 @@ describe("DatabaseService", () => {
             entry.wins,
             entry.losses,
             entry.isChampion ? 1 : 2,
-            entry.isChampion ? null : 0,
+            entry.isChampion ? null : (input.loserEliminatedRoundIndex ?? 0),
             entry.isChampion ? null : input.winnerVideoId,
             entry.isChampion ? 0 : 1,
             entry.isChampion
@@ -749,11 +784,13 @@ describe("DatabaseService", () => {
            (id, archive_id, source_match_id, round_index, match_index,
             entry_a_youtube_video_id, entry_b_youtube_video_id, winner_youtube_video_id, loser_youtube_video_id,
             completed_at, updated_at)
-         VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           `${input.id}:match:0`,
           input.id,
           `${input.id}:source-match:0`,
+          input.roundIndex ?? 0,
+          input.matchIndex ?? 0,
           input.winnerVideoId,
           input.loserVideoId,
           input.winnerVideoId,
@@ -824,8 +861,291 @@ describe("DatabaseService", () => {
       winnerViews: 500_000,
       loserViews: 1_100_000
     });
+    insertArchive({
+      id: "stats-archive-5",
+      sourceBracketId: "stats-bracket-5",
+      archivedAt: "2025-01-05T00:00:00.000Z",
+      winnerVideoId: "same-talent-winner",
+      loserVideoId: "same-talent-loser",
+      winnerTitle: "Same Talent Winner",
+      loserTitle: "Same Talent Loser",
+      winnerIdolId: "idol-shared",
+      winnerIdolName: "Shared Talent",
+      loserIdolId: "idol-shared",
+      loserIdolName: "Shared Talent",
+      winnerViews: 800_000,
+      loserViews: 900_000
+    });
+    insertArchive({
+      id: "stats-archive-6",
+      sourceBracketId: "stats-bracket-6",
+      archivedAt: "2025-01-06T00:00:00.000Z",
+      winnerVideoId: "fuwawa-win-song",
+      loserVideoId: "fuwamoco-target-a",
+      winnerTitle: "Fuwawa Win Song",
+      loserTitle: "Fuwamoco Target A",
+      winnerIdolId: "fuwawa-abyssgard",
+      winnerIdolName: "Fuwawa Abyssgard",
+      loserIdolId: "idol-high",
+      loserIdolName: "High Talent",
+      winnerViews: 700_000,
+      loserViews: 750_000
+    });
+    insertArchive({
+      id: "stats-archive-7",
+      sourceBracketId: "stats-bracket-7",
+      archivedAt: "2025-01-07T00:00:00.000Z",
+      winnerVideoId: "fuwamoco-target-b",
+      loserVideoId: "mococo-loss-song",
+      winnerTitle: "Fuwamoco Target B",
+      loserTitle: "Mococo Loss Song",
+      winnerIdolId: "idol-low",
+      winnerIdolName: "Low Talent",
+      loserIdolId: "mococo-abyssgard",
+      loserIdolName: "Mococo Abyssgard",
+      winnerViews: 720_000,
+      loserViews: 710_000
+    });
+    insertArchive({
+      id: "stats-archive-8",
+      sourceBracketId: "stats-bracket-8",
+      archivedAt: "2025-01-08T00:00:00.000Z",
+      winnerVideoId: "one-outlier-win-song",
+      loserVideoId: "extreme-target-song",
+      winnerTitle: "One Outlier Win Song",
+      loserTitle: "Extreme Target Song",
+      winnerIdolId: "idol-outlier",
+      winnerIdolName: "Outlier Talent",
+      loserIdolId: "idol-extreme",
+      loserIdolName: "Extreme Talent",
+      winnerViews: 250_000_000,
+      loserViews: 200_000_000
+    });
+    for (let index = 0; index < 3; index += 1) {
+      insertArchive({
+        id: `stats-archive-consistent-${index}`,
+        sourceBracketId: `stats-bracket-consistent-${index}`,
+        archivedAt: `2025-01-${String(9 + index).padStart(2, "0")}T00:00:00.000Z`,
+        winnerVideoId: `consistent-win-song-${index}`,
+        loserVideoId: `strong-target-song-${index}`,
+        winnerTitle: `Consistent Win Song ${index}`,
+        loserTitle: `Strong Target Song ${index}`,
+        winnerIdolId: "idol-consistent",
+        winnerIdolName: "Consistent Talent",
+        loserIdolId: `idol-strong-${index}`,
+        loserIdolName: `Strong Talent ${index}`,
+        winnerViews: 9_000_000,
+        loserViews: 8_000_000
+      });
+    }
+    insertArchive({
+      id: "stats-archive-zero-views",
+      sourceBracketId: "stats-bracket-zero-views",
+      archivedAt: "2025-01-12T00:00:00.000Z",
+      winnerVideoId: "zero-view-winner",
+      loserVideoId: "zero-view-target",
+      winnerTitle: "Zero View Winner",
+      loserTitle: "Zero View Target",
+      winnerIdolId: "idol-zero",
+      winnerIdolName: "Zero Talent",
+      loserIdolId: "idol-zero-target",
+      loserIdolName: "Zero Target Talent",
+      winnerViews: 1_000_000,
+      loserViews: 0,
+      loserEliminatedRoundIndex: 1
+    });
+    insertArchive({
+      id: "stats-archive-late-exit",
+      sourceBracketId: "stats-bracket-late-exit",
+      archivedAt: "2025-01-13T00:00:00.000Z",
+      winnerVideoId: "late-exit-winner",
+      loserVideoId: "late-exit-loser",
+      winnerTitle: "Late Exit Winner",
+      loserTitle: "Late Exit Loser",
+      winnerIdolId: "idol-late-winner",
+      winnerIdolName: "Late Winner Talent",
+      loserIdolId: "idol-late-exit",
+      loserIdolName: "Late Exit Talent",
+      winnerViews: 2_000_000,
+      loserViews: 1_000_000,
+      loserEliminatedRoundIndex: 2
+    });
+    for (let index = 0; index < 4; index += 1) {
+      insertArchive({
+        id: `stats-archive-clutch-win-${index}`,
+        sourceBracketId: `stats-bracket-clutch-win-${index}`,
+        archivedAt: `2025-01-${String(14 + index).padStart(2, "0")}T00:00:00.000Z`,
+        winnerVideoId: `clutch-win-song-${index}`,
+        loserVideoId: `clutch-target-song-${index}`,
+        winnerTitle: `Clutch Win Song ${index}`,
+        loserTitle: `Clutch Target Song ${index}`,
+        winnerIdolId: "idol-clutch",
+        winnerIdolName: "Clutch Talent",
+        loserIdolId: `idol-clutch-target-${index}`,
+        loserIdolName: `Clutch Target Talent ${index}`,
+        winnerViews: 2_000_000,
+        loserViews: 1_000_000,
+        roundIndex: index % 2 === 0 ? 1 : 2,
+        loserEliminatedRoundIndex: index % 2 === 0 ? 1 : 2
+      });
+    }
+    insertArchive({
+      id: "stats-archive-clutch-loss",
+      sourceBracketId: "stats-bracket-clutch-loss",
+      archivedAt: "2025-01-18T00:00:00.000Z",
+      winnerVideoId: "clutch-loss-winner",
+      loserVideoId: "clutch-loss-song",
+      winnerTitle: "Clutch Loss Winner",
+      loserTitle: "Clutch Loss Song",
+      winnerIdolId: "idol-clutch-final-opponent",
+      winnerIdolName: "Clutch Final Opponent",
+      loserIdolId: "idol-clutch",
+      loserIdolName: "Clutch Talent",
+      winnerViews: 3_000_000,
+      loserViews: 2_000_000,
+      roundIndex: 3,
+      loserEliminatedRoundIndex: 3
+    });
+    for (let index = 0; index < 3; index += 1) {
+      insertArchive({
+        id: `stats-archive-resilient-${index}`,
+        sourceBracketId: `stats-bracket-resilient-${index}`,
+        archivedAt: `2025-01-${String(19 + index).padStart(2, "0")}T00:00:00.000Z`,
+        winnerVideoId: `resilient-win-song-${index}`,
+        loserVideoId: `resilient-underdog-song-${index}`,
+        winnerTitle: `Resilient Win Song ${index}`,
+        loserTitle: `Resilient Underdog Song ${index}`,
+        winnerIdolId: "idol-resilient",
+        winnerIdolName: "Resilient Talent",
+        loserIdolId: `idol-resilient-underdog-${index}`,
+        loserIdolName: `Resilient Underdog Talent ${index}`,
+        winnerViews: 4_000_000,
+        loserViews: 1_000_000
+      });
+    }
+    insertArchive({
+      id: "stats-archive-fragile",
+      sourceBracketId: "stats-bracket-fragile",
+      archivedAt: "2025-01-22T00:00:00.000Z",
+      winnerVideoId: "fragile-upsetter",
+      loserVideoId: "fragile-favorite",
+      winnerTitle: "Fragile Upsetter",
+      loserTitle: "Fragile Favorite",
+      winnerIdolId: "idol-fragile-upsetter",
+      winnerIdolName: "Fragile Upsetter Talent",
+      loserIdolId: "idol-fragile",
+      loserIdolName: "Fragile Talent",
+      winnerViews: 900_000,
+      loserViews: 1_000_000
+    });
 
     const stats = database.getHololiveBracketStatsOverview();
+    expect(stats.songStats.length).toBeGreaterThanOrEqual(stats.topSongsByWins.length);
+    expect(stats.talentStats.length).toBeGreaterThanOrEqual(stats.topTalents.length);
+    expect(stats.rivalryStats.length).toBeGreaterThanOrEqual(stats.topRivalries.length);
+    for (let index = 1; index < stats.topSongRatings.length; index += 1) {
+      expect(stats.topSongRatings[index - 1].conservativeRating).toBeGreaterThanOrEqual(stats.topSongRatings[index].conservativeRating);
+    }
+    expect(stats.topSongRatings.find((row) => row.id === "same-talent-winner")).toMatchObject({
+      wins: 1,
+      matches: 1
+    });
+    expect(stats.topSongRatings.find((row) => row.id === "fuwawa-win-song")).toMatchObject({
+      detail: "FUWAMOCO"
+    });
+    expect(stats.topTalents.find((row) => row.idolId === "fuwamoco")).toMatchObject({
+      idolName: "FUWAMOCO",
+      wins: 1,
+      losses: 1
+    });
+    expect(stats.topTalents.some((row) => row.idolId === "fuwawa-abyssgard" || row.idolId === "mococo-abyssgard")).toBe(false);
+    expect(stats.topTalentRatings.find((row) => row.id === "fuwamoco")).toMatchObject({
+      label: "FUWAMOCO",
+      wins: 1,
+      losses: 1
+    });
+    expect(stats.topTalentRatings.some((row) => row.id === "fuwawa-abyssgard" || row.id === "mococo-abyssgard")).toBe(false);
+    expect(stats.topTalentRatings.some((row) => row.id === "idol-shared")).toBe(false);
+    const sharedTalent = stats.talentStats.find((row) => row.idolId === "idol-shared");
+    expect(sharedTalent).toMatchObject({
+      strengthOfWinsCount: 1,
+      strengthOfLossesCount: 1,
+      punchingAboveWins: 1,
+      punchingAboveOpportunities: 1
+    });
+    expect(sharedTalent?.strengthOfLossesScore ?? 0).toBeGreaterThan(0);
+    expect(sharedTalent?.punchingAboveScore ?? 0).toBeGreaterThan(0);
+    expect(sharedTalent?.punchingAboveScore ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(1);
+    expect(stats.talentStats.find((row) => row.idolId === "idol-zero")).toMatchObject({
+      strengthOfWinsCount: 0,
+      strengthOfWinsScore: 0
+    });
+    const highTalent = stats.talentStats.find((row) => row.idolId === "idol-high");
+    expect(highTalent?.runnerUpCount).toBe((highTalent?.finalistCount ?? 0) - (highTalent?.championCount ?? 0));
+    expect(stats.talentStats.find((row) => row.idolId === "idol-low")).toMatchObject({
+      earlyExitCount: 1
+    });
+    expect(stats.talentStats.find((row) => row.idolId === "idol-zero-target")).toMatchObject({
+      earlyExitCount: 0
+    });
+    expect(stats.talentStats.find((row) => row.idolId === "idol-late-exit")).toMatchObject({
+      earlyExitCount: 0
+    });
+    const consistentStrength = stats.topTalentsByStrengthOfWins.find((row) => row.idolId === "idol-consistent");
+    const outlierStrength = stats.topTalentsByStrengthOfWins.find((row) => row.idolId === "idol-outlier");
+    expect(consistentStrength).toMatchObject({
+      strengthOfWinsCount: 3
+    });
+    expect(outlierStrength).toMatchObject({
+      strengthOfWinsCount: 1
+    });
+    expect(stats.topTalentsByStrengthOfWins.findIndex((row) => row.idolId === "idol-consistent")).toBeLessThan(
+      stats.topTalentsByStrengthOfWins.findIndex((row) => row.idolId === "idol-outlier")
+    );
+    expect(consistentStrength?.strengthOfWinsScore ?? 0).toBeGreaterThanOrEqual(outlierStrength?.strengthOfWinsScore ?? 0);
+    expect(outlierStrength?.strengthOfWinsScore ?? Number.POSITIVE_INFINITY).toBeLessThan(200_000_000);
+    expect(stats.topTalentsByStrengthOfLosses[0]?.strengthOfLossesScore ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByStrengthOfLosses[0]?.strengthOfLossesCount ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByWins[0]?.wins ?? 0).toBeGreaterThanOrEqual(stats.topTalentsByWins[1]?.wins ?? 0);
+    expect(stats.topTalentsByTitles[0]?.championCount ?? 0).toBeGreaterThanOrEqual(stats.topTalentsByTitles[1]?.championCount ?? 0);
+    expect(stats.topTalentsByRunnerUps.find((row) => row.idolId === "idol-high")).toMatchObject({
+      runnerUpCount: highTalent?.runnerUpCount
+    });
+    expect(stats.topTalentsByFinalsConversion[0]?.finalsConversionRate ?? 0).toBeGreaterThanOrEqual(
+      stats.topTalentsByFinalsConversion[1]?.finalsConversionRate ?? 0
+    );
+    expect(stats.topTalentsByDeepRuns[0]?.top4Count ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByDeepRunRate[0]?.deepRunRate ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByEarlyExits[0]?.earlyExitCount ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByEarlyExitRate[0]?.earlyExitRate ?? 1).toBeLessThanOrEqual(
+      stats.topTalentsByEarlyExitRate[1]?.earlyExitRate ?? 1
+    );
+    expect(stats.topTalentsByPunchingAbove[0]).toMatchObject({
+      idolId: "idol-steady",
+      punchingAboveWins: 2,
+      punchingAboveOpportunities: 2
+    });
+    expect(stats.topTalentsByPunchingAbove[0]?.punchingAboveScore ?? 0).toBeGreaterThan(0);
+    expect(stats.topTalentsByPunchingAbove[0]?.punchingAboveScore ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(1);
+    expect(stats.talentStats.find((row) => row.idolId === "idol-clutch")).toMatchObject({
+      clutchWins: 4,
+      clutchLosses: 1,
+      clutchMatches: 5,
+      pressureEdgeMatches: 5
+    });
+    expect(stats.topTalentsByClutchRate.find((row) => row.idolId === "idol-clutch")?.clutchRate ?? 0).toBeGreaterThan(0.5);
+    expect(stats.topTalentsByPressureEdge.find((row) => row.idolId === "idol-clutch")?.pressureEdgeScore ?? 0).toBeGreaterThan(0);
+    const resilientTalent = stats.topTalentsByUpsetResilience.find((row) => row.idolId === "idol-resilient");
+    const fragileTalent = stats.talentStats.find((row) => row.idolId === "idol-fragile");
+    expect(resilientTalent).toMatchObject({
+      upsetResilienceChecks: 3,
+      upsetResilienceUpsetLosses: 0
+    });
+    expect(fragileTalent).toMatchObject({
+      upsetResilienceChecks: 1,
+      upsetResilienceUpsetLosses: 1
+    });
+    expect(resilientTalent?.upsetResilienceScore ?? 0).toBeGreaterThan(fragileTalent?.upsetResilienceScore ?? 0);
     expect(stats.topSongsByUpsetWins[0]).toMatchObject({
       youtubeVideoId: "steady-upset-song",
       upsetWins: 2,
@@ -835,21 +1155,37 @@ describe("DatabaseService", () => {
       youtubeVideoId: "low-view-song",
       revengeWins: 1
     });
-    expect(stats.topSongsByBigGameScore[0]).toMatchObject({
+    expect(stats.topSongsByBigGameScore.find((row) => row.youtubeVideoId === "steady-upset-song")).toMatchObject({
       youtubeVideoId: "steady-upset-song",
       bigGameScore: 2_200_000,
       bigGameWins: 2
     });
-    expect(stats.topSongsByBigGameAverage[0]).toMatchObject({
+    expect(stats.topSongsByBigGameAverage.find((row) => row.youtubeVideoId === "steady-upset-song")).toMatchObject({
       youtubeVideoId: "steady-upset-song",
       bigGameScore: 2_200_000,
       bigGameWins: 2
     });
-    expect(stats.topSongsByPunchingUpScore[0]).toMatchObject({
+    expect(stats.topSongsByHighStakesPerformance.find((row) => row.youtubeVideoId === "steady-upset-song")).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      highStakesPerformanceWins: 2,
+      highStakesPerformanceMatches: 2
+    });
+    expect(stats.topSongsByHighStakesPerformance[0]?.highStakesPerformanceRate ?? 0).toBeGreaterThan(0);
+    const lowViewSong = stats.songStats.find((row) => row.youtubeVideoId === "low-view-song");
+    const steadyUpsetSong = stats.topSongsByPunchingUpScore.find((row) => row.youtubeVideoId === "steady-upset-song");
+    expect(lowViewSong).toMatchObject({
       youtubeVideoId: "low-view-song",
-      punchingUpWins: 1
+      punchingUpWins: 1,
+      punchingUpOpportunities: 2
     });
-    expect(stats.topSongsByPunchingUpScore[0]?.punchingUpScore).toBeCloseTo(Math.log2(10));
+    expect(steadyUpsetSong).toMatchObject({
+      youtubeVideoId: "steady-upset-song",
+      punchingUpWins: 2,
+      punchingUpOpportunities: 2
+    });
+    expect(lowViewSong?.punchingUpScore ?? 0).toBeGreaterThan(0);
+    expect(lowViewSong?.punchingUpScore ?? Number.POSITIVE_INFINITY).toBeLessThan(Math.log2(10) / 4);
+    expect(steadyUpsetSong?.punchingUpScore ?? 0).toBeGreaterThan(0);
     expect(stats.topSongsByGiantKillerScore[0]).toMatchObject({
       youtubeVideoId: "steady-upset-song",
       giantKillerScore: 1_200_000
@@ -867,7 +1203,168 @@ describe("DatabaseService", () => {
     });
   });
 
-  it("creates deterministic random Hololive song brackets with one song per talent on the first pass", async () => {
+  it("uses current video stats for retroactive view-count bracket stats", async () => {
+    const database = await createTempDatabase();
+    const archivedAt = "2025-02-01T00:00:00.000Z";
+    database.run(
+      `INSERT INTO hololive_bracket_archives
+         (id, source_bracket_id, name, size, generation_style, generation_filters_json, seed,
+          total_entries, total_matches, completed_matches,
+          champion_youtube_video_id, champion_title, champion_idol_id, champion_idol_name,
+          created_at, completed_at, archived_at, updated_at)
+       VALUES ('retro-archive', 'retro-bracket', 'Retro Stats', 'RO16', 'top_songs', '{}', 'retro-seed',
+               2, 1, 1, 'new-song', 'New Song', 'idol-new', 'New Talent',
+               ?, ?, ?, ?)`,
+      [archivedAt, archivedAt, archivedAt, archivedAt]
+    );
+
+    for (const entry of [
+      {
+        slotIndex: 0,
+        videoId: "new-song",
+        title: "New Song",
+        idolId: "idol-new",
+        idolName: "New Talent",
+        snapshotViews: 50_000,
+        wins: 1,
+        losses: 0,
+        isChampion: 1
+      },
+      {
+        slotIndex: 1,
+        videoId: "older-hit",
+        title: "Older Hit",
+        idolId: "idol-old",
+        idolName: "Old Talent",
+        snapshotViews: 10_000_000,
+        wins: 0,
+        losses: 1,
+        isChampion: 0
+      }
+    ]) {
+      database.run(
+        `INSERT INTO hololive_bracket_archive_entries
+           (id, archive_id, source_entry_id, slot_index, youtube_video_id, title_snapshot, song_name_snapshot,
+            topic_id, youtube_url_snapshot, channel_name_snapshot, idol_id_snapshot, idol_name_snapshot,
+            canonical_performance_key, view_count_snapshot, published_at_snapshot, duration_seconds_snapshot,
+            wins, losses, final_rank, eliminated_round_index, eliminated_by_youtube_video_id,
+            first_round_eliminated, is_champion, is_finalist, is_top4, is_top8, is_top16)
+         VALUES (?, 'retro-archive', ?, ?, ?, ?, ?, 'Original_Song', ?, ?, ?, ?, ?, ?, ?, 210,
+                 ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)`,
+        [
+          `retro-archive:entry:${entry.slotIndex}`,
+          `retro-entry-${entry.slotIndex}`,
+          entry.slotIndex,
+          entry.videoId,
+          entry.title,
+          entry.title,
+          `https://www.youtube.com/watch?v=${entry.videoId}`,
+          `${entry.idolName} Channel`,
+          entry.idolId,
+          entry.idolName,
+          `${entry.idolId}:${entry.videoId}`,
+          entry.snapshotViews,
+          archivedAt,
+          entry.wins,
+          entry.losses,
+          entry.isChampion ? 1 : 2,
+          entry.isChampion ? null : 0,
+          entry.isChampion ? null : "new-song",
+          entry.isChampion ? 0 : 1,
+          entry.isChampion
+        ]
+      );
+    }
+
+    database.run(
+      `INSERT INTO hololive_bracket_archive_matches
+         (id, archive_id, source_match_id, round_index, match_index,
+          entry_a_youtube_video_id, entry_b_youtube_video_id, winner_youtube_video_id, loser_youtube_video_id,
+          completed_at, updated_at)
+       VALUES ('retro-archive:match:0', 'retro-archive', 'retro-match-0', 0, 0,
+               'new-song', 'older-hit', 'new-song', 'older-hit', ?, ?)`,
+      [archivedAt, archivedAt]
+    );
+
+    const snapshotStats = database.getHololiveBracketStatsOverview();
+    const snapshotNewTalent = snapshotStats.talentStats.find((row) => row.idolId === "idol-new");
+    const snapshotOldTalent = snapshotStats.talentStats.find((row) => row.idolId === "idol-old");
+    expect(snapshotStats.songStats.find((row) => row.youtubeVideoId === "new-song")).toMatchObject({
+      upsetWins: 1,
+      giantKillerScore: 9_950_000,
+      bigGameScore: 10_000_000
+    });
+    expect(snapshotNewTalent).toMatchObject({
+      strengthOfWinsCount: 1,
+      punchingAboveWins: 1,
+      punchingAboveOpportunities: 1
+    });
+    expect(snapshotNewTalent?.strengthOfWinsScore ?? 0).toBeCloseTo(10_000_000, 0);
+    expect(snapshotNewTalent?.punchingAboveScore ?? 0).toBeGreaterThan(0);
+    expect(snapshotOldTalent).toMatchObject({
+      strengthOfLossesCount: 1,
+      upsetResilienceChecks: 1,
+      upsetResilienceUpsetLosses: 1
+    });
+    expect(snapshotOldTalent?.strengthOfLossesScore ?? 0).toBeCloseTo(50_000, 0);
+
+    database.upsertHololiveMusicVideoStats([
+      {
+        youtubeVideoId: "new-song",
+        viewCount: 20_000_000,
+        fetchedAt: "2025-03-01T00:00:00.000Z"
+      },
+      {
+        youtubeVideoId: "older-hit",
+        viewCount: 11_000_000,
+        fetchedAt: "2025-03-01T00:00:00.000Z"
+      }
+    ]);
+
+    const currentStats = database.getHololiveBracketStatsOverview();
+    const currentNewTalent = currentStats.talentStats.find((row) => row.idolId === "idol-new");
+    const currentOldTalent = currentStats.talentStats.find((row) => row.idolId === "idol-old");
+    expect(currentStats.songStats.find((row) => row.youtubeVideoId === "new-song")).toMatchObject({
+      upsetWins: 0,
+      giantKillerScore: 0,
+      bigGameScore: 11_000_000
+    });
+    expect(currentNewTalent).toMatchObject({
+      strengthOfWinsCount: 1,
+      punchingAboveWins: 0,
+      punchingAboveOpportunities: 0,
+      upsetResilienceChecks: 1,
+      upsetResilienceUpsetLosses: 0
+    });
+    expect(currentNewTalent?.strengthOfWinsScore ?? 0).toBeCloseTo(11_000_000, 0);
+    expect(currentNewTalent?.punchingAboveScore ?? Number.POSITIVE_INFINITY).toBe(0);
+    expect(currentNewTalent?.upsetResilienceScore ?? 0).toBeGreaterThan(0);
+    expect(currentOldTalent).toMatchObject({
+      strengthOfLossesCount: 1,
+      punchingAboveWins: 0,
+      punchingAboveOpportunities: 1,
+      upsetResilienceChecks: 0,
+      upsetResilienceUpsetLosses: 0
+    });
+    expect(currentOldTalent?.strengthOfLossesScore ?? 0).toBeCloseTo(20_000_000, 0);
+    expect(currentStats.topSongsByGiantKillerScore.some((row) => row.youtubeVideoId === "new-song")).toBe(false);
+    expect(currentStats.topTalentsByPunchingAbove.some((row) => row.idolId === "idol-new")).toBe(false);
+    expect(currentStats.topTalentsByStrengthOfWins[0]).toMatchObject({
+      idolId: "idol-new",
+      strengthOfWinsCount: 1
+    });
+    expect(currentStats.topTalentsByStrengthOfLosses[0]).toMatchObject({
+      idolId: "idol-old",
+      strengthOfLossesCount: 1
+    });
+    expect(currentStats.topTalentsByUpsetResilience[0]).toMatchObject({
+      idolId: "idol-new",
+      upsetResilienceChecks: 1,
+      upsetResilienceUpsetLosses: 0
+    });
+  });
+
+  it("creates deterministic random Hololive song brackets with the default per-talent cap", async () => {
     const database = await createTempDatabase();
     const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 20);
 
@@ -901,7 +1398,12 @@ describe("DatabaseService", () => {
 
     expect(bracket.generationStyle).toBe("random_songs");
     expect(bracket.entries).toHaveLength(16);
-    expect(new Set(bracket.entries.map((entry) => entry.idolId)).size).toBe(16);
+    const entriesByIdol = new Map<string, typeof bracket.entries>();
+    for (const entry of bracket.entries) {
+      entriesByIdol.set(entry.idolId, [...(entriesByIdol.get(entry.idolId) ?? []), entry]);
+    }
+    expect([...entriesByIdol.values()].every((entries) => entries.length <= 2)).toBe(true);
+    expect(entriesByIdol.size).toBeGreaterThanOrEqual(8);
     expectNoFirstRoundSameTalent(bracket);
     expect(reloaded.entries.map((entry) => entry.youtubeVideoId)).toEqual(
       bracket.entries.map((entry) => entry.youtubeVideoId)
@@ -948,7 +1450,7 @@ describe("DatabaseService", () => {
     ).toBe(true);
   });
 
-  it("does not give random bracket extra songs to a talent before all eligible talents are represented", async () => {
+  it("respects the default per-talent cap on wide random brackets", async () => {
     const database = await createTempDatabase();
     const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 28);
 
@@ -978,10 +1480,8 @@ describe("DatabaseService", () => {
     }
 
     expect(bracket.entries).toHaveLength(32);
-    expect(entriesByIdol.size).toBe(28);
-    expect([...entriesByIdol.values()].filter((entries) => entries.length === 1)).toHaveLength(24);
-    expect([...entriesByIdol.values()].filter((entries) => entries.length === 2)).toHaveLength(4);
     expect([...entriesByIdol.values()].every((entries) => entries.length <= 2)).toBe(true);
+    expect(entriesByIdol.size).toBeGreaterThanOrEqual(16);
     expectNoFirstRoundSameTalent(bracket);
   });
 
@@ -1136,6 +1636,86 @@ describe("DatabaseService", () => {
     expect(splitDisabled.generationFilters.preferTopicSplitPerTalent).toBe(false);
     expect(splitDisabled.entries.every((entry) => entry.topicId === "Original_Song")).toBe(true);
     expectNoFirstRoundSameTalent(splitDisabled);
+  });
+
+  it("honors higher, zero, and null max-per-talent settings during top-song selection", async () => {
+    const database = await createTempDatabase();
+    const capIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 8);
+    const dominant = capIdols[0];
+    if (!dominant) {
+      throw new Error("Expected at least one test idol");
+    }
+
+    for (let index = 0; index < 8; index += 1) {
+      seedHololiveBracketSong(database, {
+        idolId: dominant.id,
+        idolName: dominant.displayName,
+        channelId: dominant.youtubeChannelId ?? `cap-channel-${dominant.id}`,
+        topicId: "Original_Song",
+        suffix: `dominant-${index}`,
+        viewCount: 10_000_000 - index
+      });
+    }
+
+    capIdols.slice(1).forEach((idol, idolIndex) => {
+      for (let songIndex = 0; songIndex < 2; songIndex += 1) {
+        seedHololiveBracketSong(database, {
+          idolId: idol.id,
+          idolName: idol.displayName,
+          channelId: idol.youtubeChannelId ?? `cap-channel-${idol.id}`,
+          topicId: "Original_Song",
+          suffix: `support-${songIndex}`,
+          viewCount: 1_000_000 - idolIndex * 10 - songIndex
+        });
+      }
+    });
+
+    const countDominantSongs = (bracket: HololiveBracket) =>
+      bracket.entries.filter((entry) => entry.idolId === dominant.id).length;
+    const baseFilters = {
+      includedTalentIds: capIdols.map((idol) => idol.id),
+      preferTopicSplitPerTalent: false
+    };
+
+    const cappedAtTwo = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        ...baseFilters,
+        maxEntriesPerTalent: 2
+      }
+    });
+    expect(countDominantSongs(cappedAtTwo)).toBe(2);
+    expectNoFirstRoundSameTalent(cappedAtTwo);
+
+    const cappedAtFour = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        ...baseFilters,
+        maxEntriesPerTalent: 4
+      }
+    });
+    expect(countDominantSongs(cappedAtFour)).toBe(4);
+    expectNoFirstRoundSameTalent(cappedAtFour);
+
+    const zeroMeansNoCap = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        ...baseFilters,
+        maxEntriesPerTalent: 0
+      }
+    });
+    expect(countDominantSongs(zeroMeansNoCap)).toBeGreaterThan(4);
+    expectNoFirstRoundSameTalent(zeroMeansNoCap);
+
+    const nullMeansNoCap = database.createHololiveBracket({
+      size: "RO16",
+      filters: {
+        ...baseFilters,
+        maxEntriesPerTalent: null
+      }
+    });
+    expect(countDominantSongs(nullMeansNoCap)).toBe(countDominantSongs(zeroMeansNoCap));
+    expectNoFirstRoundSameTalent(nullMeansNoCap);
   });
 
   it("applies bracket creation filters before selecting entries", async () => {
@@ -2027,6 +2607,7 @@ describe("DatabaseService", () => {
     expect(reine?.debutDate).toBe("December 6, 2020");
     expect(reine?.height).toBe("172 cm");
     expect(kronii?.profileImageUrl).toContain("Ouro-Kronii_pr-img_05.webp");
+    expect(kronii?.cardImageUrl).toBe(kronii?.profileImageUrl);
     expect(data.idols.find((idol) => idol.id === "elizabeth-rose-bloodflame")?.profileQuote).toBe(
       "“Let my voice be your strength.”"
     );
@@ -2066,6 +2647,36 @@ describe("DatabaseService", () => {
         .getHololiveTierListData()
         .idols.find((idol) => idol.id === "mori-calliope")?.cachedProfileImageUrl
     ).toBe("mori-calliope-profile-v6.webp");
+
+    database.upsertHololiveImageCache({
+      idolId: "mori-calliope",
+      kind: "card",
+      sourceUrl,
+      localFilename: "mori-calliope-card.webp",
+      mimeType: "image/webp",
+      sizeBytes: 789
+    });
+
+    expect(
+      database
+        .getHololiveTierListData()
+        .idols.find((idol) => idol.id === "mori-calliope")?.cachedCardImageUrl
+    ).toBeNull();
+
+    database.upsertHololiveImageCache({
+      idolId: "mori-calliope",
+      kind: "card",
+      sourceUrl,
+      localFilename: "mori-calliope-card-v2.png",
+      mimeType: "image/png",
+      sizeBytes: 1024
+    });
+
+    expect(
+      database
+        .getHololiveTierListData()
+        .idols.find((idol) => idol.id === "mori-calliope")?.cachedCardImageUrl
+    ).toBe("mori-calliope-card-v2.png");
   });
 
   it("creates separate Hololive boards with independent placements", async () => {
@@ -4860,6 +5471,100 @@ describe("DatabaseService", () => {
     ]);
   });
 
+  it("removes 3D live variants when a full official upload exists for the same song", async () => {
+    const database = await createTempDatabase();
+    const moriChannelId = "UCL_qhgtOy0dy1Agp8vkySQg";
+    const bundle: HolodexArtifactBundle = {
+      rows: [
+        {
+          youtubeVideoId: "kamouflage-official",
+          youtubeUrl: "https://www.youtube.com/watch?v=kamouflage-official",
+          title: "Kamouflage",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: moriChannelId,
+          channelName: "Mori Calliope Ch. hololive-EN",
+          publishedAt: "2026-01-01T00:00:00.000Z"
+        },
+        {
+          youtubeVideoId: "kamouflage-3d-live",
+          youtubeUrl: "https://www.youtube.com/watch?v=kamouflage-3d-live",
+          title: "Kamouflage [3D Live]",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: moriChannelId,
+          channelName: "Mori Calliope Ch. hololive-EN",
+          publishedAt: "2026-01-02T00:00:00.000Z"
+        },
+        {
+          youtubeVideoId: "live-only-song",
+          youtubeUrl: "https://www.youtube.com/watch?v=live-only-song",
+          title: "Only On Stage [3D Live]",
+          status: "past",
+          topicId: "Original_Song",
+          channelId: moriChannelId,
+          channelName: "Mori Calliope Ch. hololive-EN",
+          publishedAt: "2026-01-03T00:00:00.000Z"
+        }
+      ],
+      detailCache: {
+        "kamouflage-official": normalizeVideoDetail("kamouflage-official", {
+          youtubeVideoId: "kamouflage-official",
+          channelId: moriChannelId,
+          duration: 214,
+          songNames: ["Kamouflage"],
+          relationshipsLoaded: true
+        }),
+        "kamouflage-3d-live": normalizeVideoDetail("kamouflage-3d-live", {
+          youtubeVideoId: "kamouflage-3d-live",
+          channelId: moriChannelId,
+          duration: 245,
+          songNames: ["Kamouflage [3D Live]"],
+          relationshipsLoaded: true
+        }),
+        "live-only-song": normalizeVideoDetail("live-only-song", {
+          youtubeVideoId: "live-only-song",
+          channelId: moriChannelId,
+          duration: 238,
+          songNames: ["Only On Stage [3D Live]"],
+          relationshipsLoaded: true
+        })
+      },
+      duplicateRemovals: []
+    };
+
+    database.setHololiveMusicMarker({ youtubeVideoId: "kamouflage-3d-live", marker: "favorite" });
+    database.upsertHololiveMusicVideoStats([
+      { youtubeVideoId: "kamouflage-official", viewCount: 2_000_000, fetchedAt: "2026-01-04T00:00:00.000Z" },
+      { youtubeVideoId: "kamouflage-3d-live", viewCount: 500_000, fetchedAt: "2026-01-04T00:00:00.000Z" }
+    ]);
+
+    const result = database.importHolodexMusicArtifacts(bundle, "live");
+    const kamouflageRows = database.listHololiveMusicRows({ query: "Kamouflage", limit: 10 });
+    const liveOnlyRows = database.listHololiveMusicRows({ query: "Only On Stage", limit: 10 });
+    const removals = database.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string; reason: string }>(
+      `SELECT removed_youtube_video_id, kept_youtube_video_id, reason
+       FROM hololive_music_duplicate_removals
+       WHERE removed_youtube_video_id = 'kamouflage-3d-live'`
+    );
+
+    expect(result.importedRows).toBe(2);
+    expect(kamouflageRows.map((row) => row.youtubeVideoId)).toEqual(["kamouflage-official"]);
+    expect(kamouflageRows[0]).toMatchObject({
+      canonicalSongKey: "kamouflage",
+      marker: "favorite"
+    });
+    expect(liveOnlyRows.map((row) => row.youtubeVideoId)).toEqual(["live-only-song"]);
+    expect(liveOnlyRows[0]?.canonicalSongKey).toBe("only on stage");
+    expect(removals).toEqual([
+      {
+        removed_youtube_video_id: "kamouflage-3d-live",
+        kept_youtube_video_id: "kamouflage-official",
+        reason: "canonical_variant_duplicate_of_full"
+      }
+    ]);
+  });
+
   it("keeps explicit external collab canonical performances video-specific when Holodex song names are too broad", async () => {
     const database = await createTempDatabase();
     const externalChannelId = "external-channel";
@@ -5315,6 +6020,8 @@ describe("DatabaseService", () => {
     ]);
     expect(database.listHololiveMusicRows({ idolId: "fuwawa-abyssgard" })).toHaveLength(1);
     expect(database.listHololiveMusicRows({ idolId: "mococo-abyssgard" })).toHaveLength(1);
+    expect(database.listHololiveMusicRows({ idolId: "fuwamoco" })).toHaveLength(1);
+    expect(database.listHololiveMusicLibrary({ talentId: "fuwamoco" }).rows.map((row) => row.youtubeVideoId)).toContain("shared-channel-song");
   });
 
   it("parses YouTube links and supports no-key custom song preview", async () => {
