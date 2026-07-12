@@ -183,6 +183,18 @@ test("renders the Hololive tier list route", async ({ page }) => {
   expect(poolBox?.height).toBeGreaterThan(100);
 });
 
+test("shows installed update notes and acknowledges them", async ({ page }) => {
+  await page.goto("/?updatePreview=1#/module/hololive");
+
+  const dialog = page.getByRole("dialog", { name: "What's new in Holoshelf 1.1.7" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Official song removals now carry into installed libraries");
+  await expect(dialog).toContainText("Playlists, ratings, brackets, and custom imports remain protected");
+
+  await dialog.getByRole("button", { name: "Got it" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
 test("renders bracket result exports with bounded layouts for every bracket size", async ({ page }) => {
   const thumbnailPng = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -409,6 +421,18 @@ test("requires complete custom song metadata before import save", async ({ page 
 });
 
 test("creates and plays through a Hololive bracket matchup", async ({ page }) => {
+  await page.route("https://i.ytimg.com/vi/**/maxresdefault.jpg", async (route) => {
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"><rect width="120" height="90" fill="#777"/></svg>'
+    });
+  });
+  await page.route("https://i.ytimg.com/vi/**/maxres1.jpg", async (route) => {
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="#7b62c6"/></svg>'
+    });
+  });
   await page.getByRole("link", { name: "Player" }).click();
   await page.getByTitle("Create playlist").click();
   await page.getByLabel("New playlist name").fill("Arena Picks");
@@ -526,6 +550,8 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await expect(page.locator(".hololive-bracket-stats-view")).toBeVisible();
   await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Talent View" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Song View" })).toBeEnabled();
   const overviewAwards = page.locator(".hololive-bracket-award-grid");
   await expect(overviewAwards.locator(".hololive-bracket-award-card")).toHaveCount(12);
   await expect(overviewAwards).toContainText("Top Talent");
@@ -555,6 +581,120 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
       )
     )
     .toBe(true);
+  await expect
+    .poll(() => overviewAwards.evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length))
+    .toBe(6);
+
+  await page.getByRole("button", { name: "Song View" }).click();
+  await expect(page.getByRole("button", { name: "Song View" })).toHaveAttribute("aria-pressed", "true");
+  await expect(overviewAwards.locator(".hololive-bracket-award-card.song")).toHaveCount(12);
+  await expect(overviewAwards).toContainText("Top Song");
+  await expect(overviewAwards).not.toContainText("Top Talent");
+  await expect(overviewAwards.locator("img").first()).toHaveAttribute("src", /i\.ytimg\.com\/vi\/.*\/maxres1\.jpg/);
+  await overviewAwards.locator(".hololive-bracket-award-card.song .hololive-bracket-award-body").first().hover();
+  await expect(overviewAwards.locator(".hololive-bracket-award-reveal").first()).toBeVisible();
+  await expect
+    .poll(() => overviewAwards.evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length))
+    .toBe(4);
+  await page.setViewportSize({ width: 1100, height: 860 });
+  await expect
+    .poll(() => overviewAwards.evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length))
+    .toBe(4);
+  const compactSongCardRatio = await overviewAwards
+    .locator(".hololive-bracket-award-card.song .hololive-bracket-award-body")
+    .first()
+    .evaluate((card) => card.getBoundingClientRect().width / card.getBoundingClientRect().height);
+  expect(compactSongCardRatio).toBeGreaterThan(1.7);
+  expect(compactSongCardRatio).toBeLessThan(1.85);
+  expect(
+    await page.locator(".hololive-bracket-stats-overview.song").evaluate((overview) => overview.scrollHeight <= overview.clientHeight + 1)
+  ).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.getByRole("button", { name: "Talent View" }).click();
+  await expect(page.getByRole("button", { name: "Talent View" })).toHaveAttribute("aria-pressed", "true");
+  await expect(overviewAwards).toContainText("Top Talent");
+
+  await page.getByRole("tab", { name: "Detailed Stats" }).click();
+  await expect(page.getByRole("tab", { name: "Detailed Stats" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("group", { name: "Stats subject" })).toHaveCount(0);
+  const detailedTable = page.locator(".hololive-bracket-detailed-table");
+  await expect(detailedTable).toBeVisible();
+  await expect(detailedTable.locator("tbody tr")).not.toHaveCount(0);
+  for (const heading of [
+    "Talent",
+    "Elo Rating",
+    "Wins",
+    "Titles",
+    "2nd Places",
+    "Deep Runs",
+    "Early Exits",
+    "Strength of Wins",
+    "Strength of Losses",
+    "Most Clutch",
+    "Under Pressure",
+    "Overperformer",
+    "Most Reliable"
+  ]) {
+    await expect(page.getByRole("columnheader", { name: heading, exact: true })).toBeVisible();
+  }
+  const detailedScroll = page.locator(".hololive-bracket-detailed-table-scroll");
+  const detailedSizing = await detailedScroll.evaluate((scroll) => {
+    const table = scroll.querySelector<HTMLElement>(".hololive-bracket-detailed-table");
+    const row = table?.querySelector<HTMLTableRowElement>("tbody tr");
+    const cell = row?.querySelector<HTMLTableCellElement>("td");
+    return {
+      fontSize: table ? getComputedStyle(table).fontSize : "",
+      rowHeight: row?.getBoundingClientRect().height ?? 0,
+      cellPaddingLeft: cell ? getComputedStyle(cell).paddingLeft : "",
+      hasHorizontalOverflow: scroll.scrollWidth > scroll.clientWidth + 1
+    };
+  });
+  expect(detailedSizing.fontSize).toBe("12.5px");
+  expect(detailedSizing.rowHeight).toBeGreaterThanOrEqual(39);
+  expect(detailedSizing.cellPaddingLeft).toBe("10px");
+  expect(detailedSizing.hasHorizontalOverflow).toBe(true);
+
+  const stickyPositions = await detailedScroll.evaluate((scroll) => {
+    scroll.scrollLeft = 360;
+    const row = scroll.querySelector<HTMLTableRowElement>("tbody tr");
+    const rank = row?.querySelector<HTMLTableCellElement>("td.rank");
+    const talent = row?.querySelector<HTMLTableCellElement>("td.talent");
+    const scrollRect = scroll.getBoundingClientRect();
+    return {
+      rankOffset: (rank?.getBoundingClientRect().left ?? 0) - scrollRect.left,
+      talentOffset: (talent?.getBoundingClientRect().left ?? 0) - scrollRect.left
+    };
+  });
+  expect(Math.abs(stickyPositions.rankOffset)).toBeLessThanOrEqual(2);
+  expect(Math.abs(stickyPositions.talentOffset - 46)).toBeLessThanOrEqual(2);
+  await detailedScroll.evaluate((scroll) => {
+    scroll.scrollLeft = 0;
+  });
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await expect
+    .poll(() => detailedScroll.evaluate((scroll) => scroll.scrollWidth <= scroll.clientWidth + 1))
+    .toBe(true);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const ratingHeader = page.getByRole("columnheader", { name: "Elo Rating", exact: true });
+  await expect(ratingHeader).toHaveAttribute("aria-sort", "descending");
+  const readFirstTwoSortValues = async (cellIndex: number) =>
+    detailedTable.locator("tbody tr").evaluateAll((rows, index) =>
+      rows.slice(0, 2).map((row) => Number(row.querySelectorAll("td")[index]?.getAttribute("data-sort-value"))), cellIndex
+    );
+  const initialRatings = await readFirstTwoSortValues(2);
+  expect(initialRatings[0]).toBeGreaterThanOrEqual(initialRatings[1]);
+  const winsHeader = page.getByRole("columnheader", { name: "Wins", exact: true });
+  await winsHeader.getByRole("button").click();
+  await expect(winsHeader).toHaveAttribute("aria-sort", "descending");
+  const descendingWins = await readFirstTwoSortValues(3);
+  expect(descendingWins[0]).toBeGreaterThanOrEqual(descendingWins[1]);
+  await winsHeader.getByRole("button").click();
+  await expect(winsHeader).toHaveAttribute("aria-sort", "ascending");
+  const ascendingWins = await readFirstTwoSortValues(3);
+  expect(ascendingWins[0]).toBeLessThanOrEqual(ascendingWins[1]);
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
 
   await expect(page.getByRole("tab", { name: "Songs" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Talents" })).toHaveCount(0);

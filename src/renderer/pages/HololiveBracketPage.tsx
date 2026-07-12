@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
+  ArrowUpDown,
   BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ChevronUp,
   Download,
   GitBranch,
   ListMusic,
@@ -727,7 +729,7 @@ const SONG_BIG_GAME_AVERAGE_METRICS: Array<BracketStatsMetric<HololiveBracketSon
 ];
 
 const SONG_PUNCHING_UP_METRICS: Array<BracketStatsMetric<HololiveBracketSongStats>> = [
-  { label: "Opportunity-adjusted upset ratio", header: "Score", value: (row) => formatBracketRelativeRatioScore(row.punchingUpScore) }
+  { label: "Opportunity-adjusted upset ratio", header: "Score", value: (row) => formatBracketRelativeRatioScore(row.punchingAboveScore) }
 ];
 
 const RATING_METRICS: Array<BracketStatsMetric<HololiveBracketRatingStatsRow>> = [
@@ -992,7 +994,7 @@ function BracketStatsModeToggle({
   );
 }
 
-type BracketStatsSection = "overview";
+type BracketStatsSection = "overview" | "detailed";
 type BracketSongSort = "rating" | "wins" | "winRate" | "titles" | "apps" | "upsets" | "highStakes";
 type BracketTalentSort = "rating" | "wins" | "winRate" | "strength" | "top4" | "titles";
 type BracketStatsDetail =
@@ -1000,7 +1002,8 @@ type BracketStatsDetail =
   | { kind: "talent"; row: HololiveBracketTalentStats };
 
 const BRACKET_STATS_SECTIONS: Array<{ value: BracketStatsSection; label: string }> = [
-  { value: "overview", label: "Overview" }
+  { value: "overview", label: "Overview" },
+  { value: "detailed", label: "Detailed Stats" }
 ];
 
 const BRACKET_SONG_SORTS: Array<{ value: BracketSongSort; label: string }> = [
@@ -1075,7 +1078,7 @@ function sortBracketSongs(
       case "apps":
         return right.appearances - left.appearances || songStatsFallback(left, right);
       case "upsets":
-        return right.upsetWins - left.upsetWins || right.punchingUpScore - left.punchingUpScore || right.giantKillerScore - left.giantKillerScore || songStatsFallback(left, right);
+        return right.upsetWins - left.upsetWins || right.punchingAboveScore - left.punchingAboveScore || right.giantKillerScore - left.giantKillerScore || songStatsFallback(left, right);
       case "highStakes":
         return right.bigGameScore - left.bigGameScore || right.bigGameWins - left.bigGameWins || songStatsFallback(left, right);
       case "wins":
@@ -1398,6 +1401,7 @@ type BracketOverviewAward = {
   imageUrls: string[];
   tooltip: string;
   theme: HololiveTalentTheme;
+  visualKind: "talent" | "song";
   leaderboard: BracketOverviewAwardLeaderboardItem[];
 };
 
@@ -1410,6 +1414,8 @@ type BracketOverviewAwardLeaderboardItem = {
 
 const HOLOLIVE_AWARD_CARD_IMAGE_VERSION = 2;
 const BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT = 10;
+const MINIMUM_USABLE_YOUTUBE_THUMBNAIL_WIDTH = 320;
+const MINIMUM_USABLE_YOUTUBE_THUMBNAIL_HEIGHT = 180;
 
 function resolveHololiveAwardCardImageUrl(slug: string | null | undefined): string | null {
   const safeSlug = slug?.trim();
@@ -1537,6 +1543,7 @@ function createTalentAward(
     ...talentImageUrls(talent),
     tooltip,
     theme: talentAwardTheme(talent, row?.idolId ?? null, row?.idolName ?? null),
+    visualKind: "talent",
     leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => ({
       id: leader.idolId,
       name: leader.idolName,
@@ -1567,12 +1574,92 @@ function createRatingAward(
     ...talentImageUrls(talent),
     tooltip,
     theme: talentAwardTheme(talent, row?.id ?? null, row?.label ?? null),
+    visualKind: "talent",
     leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => ({
       id: leader.id,
       name: leader.label,
       value: getValue(leader),
       detail: getDetail(leader)
     }))
+  };
+}
+
+function songAwardImageUrls(youtubeVideoId: string | null | undefined): string[] {
+  const videoId = youtubeVideoId?.trim();
+  if (!videoId) {
+    return [];
+  }
+  return [
+    `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxres1.jpg`,
+    `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/sddefault.jpg`,
+    youtubeThumbnailUrl(videoId),
+    `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`
+  ];
+}
+
+function createSongAward(
+  key: string,
+  title: string,
+  tooltip: string,
+  rows: HololiveBracketSongStats[],
+  talentsById: Map<string, HololiveIdol>,
+  getValue: (row: HololiveBracketSongStats) => string,
+  getDetail: (row: HololiveBracketSongStats) => string
+): BracketOverviewAward {
+  const row = rows[0];
+  const winnerName = row ? displaySongTitle(row.title) : "No winner yet";
+  const talent = row ? resolveTalentImage(talentsById, row.idolId ?? null, row.idolName ?? "") : null;
+  return {
+    key,
+    title,
+    winnerId: row?.canonicalPerformanceKey ?? null,
+    winnerName,
+    value: row ? getValue(row) : "-",
+    imageUrls: songAwardImageUrls(row?.youtubeVideoId),
+    tooltip,
+    theme: talentAwardTheme(talent, row?.idolId ?? null, row?.idolName ?? null),
+    visualKind: "song",
+    leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => ({
+      id: leader.canonicalPerformanceKey,
+      name: displaySongTitle(leader.title),
+      value: getValue(leader),
+      detail: getDetail(leader)
+    }))
+  };
+}
+
+function createSongRatingAward(
+  rows: HololiveBracketRatingStatsRow[],
+  songStats: HololiveBracketSongStats[],
+  talentsById: Map<string, HololiveIdol>
+): BracketOverviewAward {
+  const songByKey = new Map(songStats.map((song) => [song.canonicalPerformanceKey, song]));
+  const row = rows[0];
+  const winnerSong = row ? songByKey.get(row.id) ?? null : null;
+  const winnerName = winnerSong ? displaySongTitle(winnerSong.title) : row?.label ?? "No winner yet";
+  const talent = winnerSong
+    ? resolveTalentImage(talentsById, winnerSong.idolId ?? null, winnerSong.idolName ?? "")
+    : null;
+  return {
+    key: "top-song",
+    title: "Top Song",
+    winnerId: row?.id ?? null,
+    winnerName,
+    value: row ? formatBracketRating(row.conservativeRating) : "-",
+    imageUrls: songAwardImageUrls(winnerSong?.youtubeVideoId),
+    tooltip: "Highest conservative Glicko-2 rating.",
+    theme: talentAwardTheme(talent, winnerSong?.idolId ?? null, winnerSong?.idolName ?? null),
+    visualKind: "song",
+    leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => {
+      const song = songByKey.get(leader.id);
+      return {
+        id: leader.id,
+        name: song ? displaySongTitle(song.title) : leader.label,
+        value: formatBracketRating(leader.conservativeRating),
+        detail: `${song?.idolName ?? leader.detail ?? "Unknown"} / ${formatBracketRecord(leader)} / ${formatBracketNumber(leader.matches)} matches`
+      };
+    })
   };
 }
 
@@ -1621,7 +1708,7 @@ function BracketOverviewAwardCard({ award }: { award: BracketOverviewAward }) {
 
   return (
     <article
-      className={`hololive-bracket-award-card${award.winnerId ? "" : " empty"}`}
+      className={`hololive-bracket-award-card ${award.visualKind}${award.winnerId ? "" : " empty"}`}
       style={awardStyle}
     >
       <h3 title={award.tooltip}>
@@ -1663,6 +1750,15 @@ function BracketOverviewAwardCard({ award }: { award: BracketOverviewAward }) {
               decoding="sync"
               draggable={false}
               onError={() => setImageIndex((current) => current + 1)}
+              onLoad={(event) => {
+                if (
+                  award.visualKind === "song" &&
+                  (event.currentTarget.naturalWidth < MINIMUM_USABLE_YOUTUBE_THUMBNAIL_WIDTH ||
+                    event.currentTarget.naturalHeight < MINIMUM_USABLE_YOUTUBE_THUMBNAIL_HEIGHT)
+                ) {
+                  setImageIndex((current) => current + 1);
+                }
+              }}
             />
           ) : (
             <span>{bracketOverviewInitials(award.winnerName)}</span>
@@ -1724,7 +1820,40 @@ function talentRecordDetail(row: HololiveBracketTalentStats): string {
 }
 
 function songUnderdogDetail(row: HololiveBracketSongStats): string {
-  return `${formatBracketNumber(row.punchingUpWins)} upset wins / ${formatBracketNumber(row.punchingUpOpportunities)} underdog matches`;
+  return `${formatBracketNumber(row.punchingAboveWins)} upset wins / ${formatBracketNumber(row.punchingAboveOpportunities)} underdog matches`;
+}
+
+function songRecordDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketRecord(row)} / ${formatBracketNumber(row.appearances)} brackets`;
+}
+
+function songFinalsDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(row.finalistCount)} finals / ${formatBracketNumber(row.championCount)} titles`;
+}
+
+function songStrengthOfWinsDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(row.strengthOfWinsCount)} qualifying wins`;
+}
+
+function songStrengthOfLossesDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(row.strengthOfLossesCount)} qualifying losses`;
+}
+
+function songClutchDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketRecord({ wins: row.clutchWins, losses: row.clutchLosses })} / ${formatBracketNumber(row.clutchMatches)} late-round matches`;
+}
+
+function songPressureDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(row.pressureEdgePositiveMatches)} over / ${formatBracketNumber(row.pressureEdgeNegativeMatches)} under / ${formatBracketNumber(row.pressureEdgeMatches)} late-round matches`;
+}
+
+function songOverperformerDetail(row: HololiveBracketSongStats): string {
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(row.punchingAboveWins)} upset wins / ${formatBracketNumber(row.punchingAboveOpportunities)} underdog matches`;
+}
+
+function songReliabilityDetail(row: HololiveBracketSongStats): string {
+  const favoriteWins = Math.max(0, row.upsetResilienceChecks - row.upsetResilienceUpsetLosses);
+  return `${row.idolName ?? "Unknown"} / ${formatBracketNumber(favoriteWins)} wins / ${formatBracketNumber(row.upsetResilienceChecks)} favored matches`;
 }
 
 function songHighStakesPerformanceDetail(row: HololiveBracketSongStats): string {
@@ -1791,13 +1920,15 @@ function formatUpsetResilienceRecord(row: HololiveBracketTalentStats): string {
 
 function BracketStatsOverviewView({
   stats,
-  talents
+  talents,
+  subject
 }: {
   stats: HololiveBracketStatsOverview;
   talents: HololiveIdol[];
+  subject: "talent" | "song";
 }) {
   const talentsById = useMemo(() => buildTalentImageLookup(talents), [talents]);
-  const awards = useMemo(
+  const talentAwards = useMemo(
     () => [
       createRatingAward(
         "top-talent",
@@ -1856,7 +1987,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "strength-of-wins",
         "Strength of Wins",
-        "Typical level of songs in wins.",
+        "Typical view level of defeated songs, dynamically compressed and confidence-adjusted for sample size.",
         stats.topTalentsByStrengthOfWins,
         talentsById,
         (row) => formatBracketViewScore(row.strengthOfWinsScore),
@@ -1865,7 +1996,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "strength-of-losses",
         "Strength of Losses",
-        "Typical level of songs in losses.",
+        "Typical view level of victorious opponents, dynamically compressed and confidence-adjusted for sample size.",
         stats.topTalentsByStrengthOfLosses,
         talentsById,
         (row) => formatBracketViewScore(row.strengthOfLossesScore),
@@ -1874,7 +2005,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "most-clutch",
         "Most Clutch",
-        "Best performance once reaching at least Quarter Finals.",
+        "Win-loss performance from Quarter Finals onward, with deeper rounds carrying more magnitude and match count controlling confidence.",
         stats.topTalentsByClutchRate,
         talentsById,
         (row) => formatBracketRawScore(row.clutchRate),
@@ -1883,7 +2014,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "under-pressure",
         "Under Pressure",
-        "Meets or exceeds expectations in late round matchups.",
+        "Results above or below Glicko expectations from Quarter Finals onward, with deeper rounds carrying more magnitude and match count controlling confidence.",
         stats.topTalentsByPressureEdge,
         talentsById,
         (row) => formatBracketSignedRawScore(row.pressureEdgeScore),
@@ -1892,7 +2023,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "overperformer",
         "Overperformer",
-        "Best performance as the underdog.",
+        "Performance above view-based expectations in underdog matches, confidence-adjusted for sample size.",
         stats.topTalentsByPunchingAbove,
         talentsById,
         (row) => formatBracketRawScore(row.punchingAboveScore),
@@ -1901,7 +2032,7 @@ function BracketStatsOverviewView({
       createTalentAward(
         "most-reliable",
         "Most Reliable",
-        "Best at avoiding upset losses.",
+        "Performance above view-based expectations as the favorite, confidence-adjusted for sample size.",
         stats.topTalentsByUpsetResilience,
         talentsById,
         (row) => formatBracketRawScore(row.upsetResilienceScore),
@@ -1910,10 +2041,116 @@ function BracketStatsOverviewView({
     ],
     [stats, talentsById]
   );
+  const songAwards = useMemo(
+    () => [
+      createSongRatingAward(stats.topSongRatings, stats.songStats, talentsById),
+      createSongAward(
+        "song-most-wins",
+        "Most Wins",
+        "Most matchup wins.",
+        stats.topSongsByWins,
+        talentsById,
+        (row) => formatBracketNumber(row.wins),
+        songRecordDetail
+      ),
+      createSongAward(
+        "song-most-titles",
+        "Most Titles",
+        "Most bracket wins.",
+        stats.topSongsByTitles,
+        talentsById,
+        (row) => formatBracketNumber(row.championCount),
+        songFinalsDetail
+      ),
+      createSongAward(
+        "song-most-second-places",
+        "Most 2nd Places",
+        "Most runner-up finishes.",
+        stats.topSongsByRunnerUps,
+        talentsById,
+        (row) => formatBracketNumber(row.runnerUpCount),
+        songFinalsDetail
+      ),
+      createSongAward(
+        "song-most-deep-runs",
+        "Most Deep Runs",
+        "Most bracket runs reaching at least the top 4.",
+        stats.topSongsByDeepRuns,
+        talentsById,
+        (row) => formatBracketNumber(row.top4Count),
+        songRecordDetail
+      ),
+      createSongAward(
+        "song-most-early-exits",
+        "Most Early Exits",
+        "Most exits in the first round.",
+        stats.topSongsByEarlyExits,
+        talentsById,
+        (row) => formatBracketNumber(row.firstRoundEliminations),
+        songRecordDetail
+      ),
+      createSongAward(
+        "song-strength-of-wins",
+        "Strength of Wins",
+        "Typical current view level of defeated songs, dynamically compressed and confidence-adjusted for sample size.",
+        stats.topSongsByStrengthOfWins,
+        talentsById,
+        (row) => formatBracketViewScore(row.strengthOfWinsScore),
+        songStrengthOfWinsDetail
+      ),
+      createSongAward(
+        "song-strength-of-losses",
+        "Strength of Losses",
+        "Typical current view level of victorious opponents, dynamically compressed and confidence-adjusted for sample size.",
+        stats.topSongsByStrengthOfLosses,
+        talentsById,
+        (row) => formatBracketViewScore(row.strengthOfLossesScore),
+        songStrengthOfLossesDetail
+      ),
+      createSongAward(
+        "song-most-clutch",
+        "Most Clutch",
+        "Win-loss performance from Quarter Finals onward, with deeper rounds carrying more magnitude and match count controlling confidence.",
+        stats.topSongsByClutchRate,
+        talentsById,
+        (row) => formatBracketRawScore(row.clutchRate),
+        songClutchDetail
+      ),
+      createSongAward(
+        "song-under-pressure",
+        "Under Pressure",
+        "Results above or below pre-period Glicko expectations from Quarter Finals onward.",
+        stats.topSongsByPressureEdge,
+        talentsById,
+        (row) => formatBracketSignedRawScore(row.pressureEdgeScore),
+        songPressureDetail
+      ),
+      createSongAward(
+        "song-overperformer",
+        "Overperformer",
+        "Performance above current view-based expectations across every underdog opportunity.",
+        stats.topSongsByPunchingAbove,
+        talentsById,
+        (row) => formatBracketRawScore(row.punchingAboveScore),
+        songOverperformerDetail
+      ),
+      createSongAward(
+        "song-most-reliable",
+        "Most Reliable",
+        "Performance above current view-based expectations across every favored opportunity.",
+        stats.topSongsByUpsetResilience,
+        talentsById,
+        (row) => formatBracketRawScore(row.upsetResilienceScore),
+        songReliabilityDetail
+      )
+    ],
+    [stats, talentsById]
+  );
+  const awards = subject === "song" ? songAwards : talentAwards;
 
   return (
-    <div className="hololive-bracket-stats-overview">
-      <div className="hololive-bracket-award-grid" aria-label="Bracket stats overview winners">
+    <div className={`hololive-bracket-stats-overview ${subject}`}>
+      <div className={`hololive-bracket-award-grid ${subject}`} aria-label={`${subject === "song" ? "Song" : "Talent"} stats overview winners`}>
         {awards.map((award) => (
           <BracketOverviewAwardCard award={award} key={award.key} />
         ))}
@@ -2012,8 +2249,8 @@ function BracketStatsDetailPanel({
       {
         label: "Underdog",
         value:
-          row.punchingUpOpportunities > 0
-            ? `${formatBracketNumber(row.punchingUpWins)} of ${formatBracketNumber(row.punchingUpOpportunities)}`
+          row.punchingAboveOpportunities > 0
+            ? `${formatBracketNumber(row.punchingAboveWins)} of ${formatBracketNumber(row.punchingAboveOpportunities)}`
             : "-"
       },
       {
@@ -2206,6 +2443,224 @@ function BracketStatsDetailPanel({
   );
 }
 
+type DetailedTalentSortKey =
+  | "talent"
+  | "rating"
+  | "wins"
+  | "titles"
+  | "runnerUps"
+  | "deepRuns"
+  | "earlyExits"
+  | "strengthWins"
+  | "strengthLosses"
+  | "clutch"
+  | "pressure"
+  | "overperformer"
+  | "reliable";
+type DetailedTalentSortDirection = "asc" | "desc";
+type DetailedTalentRow = { stats: HololiveBracketTalentStats; rating: HololiveBracketRatingStatsRow };
+type DetailedTalentColumn = {
+  key: DetailedTalentSortKey;
+  label: string;
+  tooltip: string;
+  value: (row: DetailedTalentRow) => string;
+  sortValue: (row: DetailedTalentRow) => number | string;
+  detail: (row: DetailedTalentRow) => string;
+};
+
+const DETAILED_TALENT_COLUMNS: DetailedTalentColumn[] = [
+  {
+    key: "talent",
+    label: "Talent",
+    tooltip: "Talent name.",
+    value: (row) => row.stats.idolName,
+    sortValue: (row) => row.stats.idolName,
+    detail: (row) => `${formatBracketRecord(row.stats)} across ${formatBracketNumber(row.stats.appearances)} brackets`
+  },
+  {
+    key: "rating",
+    label: "Elo Rating",
+    tooltip: "Conservative Glicko-2 rating: rating minus twice the uncertainty.",
+    value: (row) => formatBracketRating(row.rating.conservativeRating),
+    sortValue: (row) => row.rating.conservativeRating,
+    detail: (row) => `Raw ${formatBracketRating(row.rating.rating)} / uncertainty +/-${formatBracketRating(row.rating.ratingDeviation)}`
+  },
+  {
+    key: "wins",
+    label: "Wins",
+    tooltip: "Total matchup wins.",
+    value: (row) => formatBracketNumber(row.stats.wins),
+    sortValue: (row) => row.stats.wins,
+    detail: (row) => formatBracketRecord(row.stats)
+  },
+  {
+    key: "titles",
+    label: "Titles",
+    tooltip: "Total bracket championships.",
+    value: (row) => formatBracketNumber(row.stats.championCount),
+    sortValue: (row) => row.stats.championCount,
+    detail: (row) => talentFinalsDetail(row.stats)
+  },
+  {
+    key: "runnerUps",
+    label: "2nd Places",
+    tooltip: "Total runner-up finishes.",
+    value: (row) => formatBracketNumber(row.stats.runnerUpCount),
+    sortValue: (row) => row.stats.runnerUpCount,
+    detail: (row) => talentFinalsDetail(row.stats)
+  },
+  {
+    key: "deepRuns",
+    label: "Deep Runs",
+    tooltip: "Total bracket appearances reaching the Top 4.",
+    value: (row) => formatBracketNumber(row.stats.top4Count),
+    sortValue: (row) => row.stats.top4Count,
+    detail: (row) => talentDeepRunRateDetail(row.stats)
+  },
+  {
+    key: "earlyExits",
+    label: "Early Exits",
+    tooltip: "Total first-round eliminations.",
+    value: (row) => formatBracketNumber(row.stats.earlyExitCount),
+    sortValue: (row) => row.stats.earlyExitCount,
+    detail: (row) => talentEarlyExitDetail(row.stats)
+  },
+  {
+    key: "strengthWins",
+    label: "Strength of Wins",
+    tooltip: "Confidence-adjusted typical current view level of defeated songs.",
+    value: (row) => formatBracketViewScore(row.stats.strengthOfWinsScore),
+    sortValue: (row) => row.stats.strengthOfWinsScore,
+    detail: (row) => talentStrengthOfWinsDetail(row.stats)
+  },
+  {
+    key: "strengthLosses",
+    label: "Strength of Losses",
+    tooltip: "Confidence-adjusted typical current view level of songs lost to.",
+    value: (row) => formatBracketViewScore(row.stats.strengthOfLossesScore),
+    sortValue: (row) => row.stats.strengthOfLossesScore,
+    detail: (row) => talentStrengthOfLossesDetail(row.stats)
+  },
+  {
+    key: "clutch",
+    label: "Most Clutch",
+    tooltip: "Confidence-adjusted performance from Quarter Finals onward.",
+    value: (row) => formatBracketRawScore(row.stats.clutchRate),
+    sortValue: (row) => row.stats.clutchRate,
+    detail: (row) => talentClutchRateDetail(row.stats)
+  },
+  {
+    key: "pressure",
+    label: "Under Pressure",
+    tooltip: "Late-round results above or below pre-period Glicko expectations.",
+    value: (row) => formatBracketSignedRawScore(row.stats.pressureEdgeScore),
+    sortValue: (row) => row.stats.pressureEdgeScore,
+    detail: (row) => talentPressureEdgeDetail(row.stats)
+  },
+  {
+    key: "overperformer",
+    label: "Overperformer",
+    tooltip: "Confidence-adjusted performance across lower-view underdog opportunities.",
+    value: (row) => formatBracketRawScore(row.stats.punchingAboveScore),
+    sortValue: (row) => row.stats.punchingAboveScore,
+    detail: (row) => talentPunchingAboveDetail(row.stats)
+  },
+  {
+    key: "reliable",
+    label: "Most Reliable",
+    tooltip: "Confidence-adjusted performance across higher-view favorite opportunities.",
+    value: (row) => formatBracketRawScore(row.stats.upsetResilienceScore),
+    sortValue: (row) => row.stats.upsetResilienceScore,
+    detail: (row) => talentUpsetResilienceDetail(row.stats)
+  }
+];
+
+function BracketDetailedStatsView({ stats }: { stats: HololiveBracketStatsOverview }) {
+  const [sortKey, setSortKey] = useState<DetailedTalentSortKey>("rating");
+  const [sortDirection, setSortDirection] = useState<DetailedTalentSortDirection>("desc");
+  const ratingByTalentId = useMemo(() => new Map(stats.topTalentRatings.map((rating) => [rating.id, rating])), [stats.topTalentRatings]);
+  const rows = useMemo(() => {
+    const column = DETAILED_TALENT_COLUMNS.find((candidate) => candidate.key === sortKey) ?? DETAILED_TALENT_COLUMNS[1];
+    const direction = sortDirection === "desc" ? -1 : 1;
+    return stats.talentStats
+      .flatMap((talent) => {
+        const rating = ratingByTalentId.get(talent.idolId);
+        return rating ? [{ stats: talent, rating } satisfies DetailedTalentRow] : [];
+      })
+      .sort((left, right) => {
+        const leftValue = column.sortValue(left);
+        const rightValue = column.sortValue(right);
+        const comparison =
+          typeof leftValue === "string" && typeof rightValue === "string"
+            ? leftValue.localeCompare(rightValue)
+            : Number(leftValue) - Number(rightValue);
+        return comparison * direction || left.stats.idolName.localeCompare(right.stats.idolName);
+      });
+  }, [ratingByTalentId, sortDirection, sortKey, stats.talentStats]);
+
+  const changeSort = (key: DetailedTalentSortKey) => {
+    if (key === sortKey) {
+      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDirection(key === "talent" ? "asc" : "desc");
+    }
+  };
+
+  return (
+    <section className="hololive-bracket-detailed-stats" aria-label="Detailed talent stats">
+      <div className="hololive-bracket-detailed-table-scroll">
+        <table className="hololive-bracket-detailed-table">
+          <colgroup>
+            <col className="detailed-col-rank" />
+            {DETAILED_TALENT_COLUMNS.map((column) => (
+              <col className={`detailed-col-${column.key}`} key={column.key} />
+            ))}
+          </colgroup>
+          <thead>
+            <tr>
+              <th className="rank" scope="col">#</th>
+              {DETAILED_TALENT_COLUMNS.map((column) => {
+                const active = column.key === sortKey;
+                return (
+                  <th
+                    className={`${column.key === "talent" ? "talent " : ""}column-${column.key}`}
+                    scope="col"
+                    key={column.key}
+                    aria-sort={active ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}
+                  >
+                    <button type="button" title={column.tooltip} onClick={() => changeSort(column.key)}>
+                      <span>{column.label}</span>
+                      {active ? (sortDirection === "desc" ? <ChevronDown size={13} /> : <ChevronUp size={13} />) : <ArrowUpDown size={12} />}
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.stats.idolId}>
+                <td className="rank">{index + 1}</td>
+                {DETAILED_TALENT_COLUMNS.map((column) => (
+                  <td
+                    className={`${column.key === "talent" ? "talent " : ""}column-${column.key}`}
+                    data-sort-value={column.sortValue(row)}
+                    key={column.key}
+                    title={column.detail(row)}
+                  >
+                    {column.value(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function BracketStatsView({
   stats,
   talents,
@@ -2218,12 +2673,13 @@ export function BracketStatsView({
   deletingArchiveId: string | null;
   onDeleteArchive: (archive: HololiveBracketArchiveSummary) => void;
 }) {
-  const section: BracketStatsSection = "overview";
   const statsViewRef = useRef<HTMLDivElement | null>(null);
+  const [section, setSection] = useState<BracketStatsSection>("overview");
+  const [subject, setSubject] = useState<"talent" | "song">("talent");
 
   useEffect(() => {
     statsViewRef.current?.scrollTo({ top: 0, left: 0 });
-  }, []);
+  }, [section]);
 
   if (loading && !stats) {
     return (
@@ -2253,16 +2709,28 @@ export function BracketStatsView({
               role="tab"
               aria-selected={section === item.value}
               key={item.value}
+              onClick={() => setSection(item.value)}
             >
               {item.label}
             </button>
           ))}
         </div>
+        {section === "overview" ? (
+          <div className="hololive-bracket-stats-scope-switcher" role="group" aria-label="Stats subject">
+            <button type="button" aria-pressed={subject === "talent"} onClick={() => setSubject("talent")}>
+              Talent View
+            </button>
+            <button type="button" aria-pressed={subject === "song"} onClick={() => setSubject("song")}>
+              Song View
+            </button>
+          </div>
+        ) : null}
       </div>
-      <BracketStatsOverviewView
-        stats={stats}
-        talents={talents}
-      />
+      {section === "overview" ? (
+        <BracketStatsOverviewView stats={stats} talents={talents} subject={subject} />
+      ) : (
+        <BracketDetailedStatsView stats={stats} />
+      )}
     </div>
   );
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserWindow } from "electron";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ProgressInfo, UpdateCheckResult, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 import type { UpdateStatus } from "../../src/shared/ipc";
 import { UpdateDriver, UpdateService } from "./updateService";
@@ -115,6 +118,72 @@ describe("update service", () => {
     driver.emit("update-downloaded", { ...updateInfo("1.1.0"), downloadedFile: "Holoshelf Setup 1.1.0.exe" });
     expect(service.restartToInstall().state).toBe("downloaded");
     expect(driver.quitAndInstallCalls).toBe(1);
+  });
+
+  it("shows downloaded GitHub release notes once the installed version launches", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-update-notes-"));
+    const releaseStatePath = path.join(directory, "pending-installed-update.json");
+
+    try {
+      const driver = new FakeUpdateDriver();
+      const downloadingService = new UpdateService({
+        isPackaged: true,
+        driver,
+        now,
+        currentVersion: "1.0.0",
+        releaseStatePath
+      });
+      downloadingService.initialize();
+      driver.emit("update-downloaded", {
+        ...updateInfo("1.1.0"),
+        releaseName: "Holoshelf 1.1.0",
+        releaseNotes: "- Song updates\n- Bug fixes",
+        downloadedFile: "Holoshelf Setup 1.1.0.exe"
+      });
+
+      expect(downloadingService.getInstalledRelease()).toBeNull();
+
+      const installedService = new UpdateService({
+        isPackaged: true,
+        driver: new FakeUpdateDriver(),
+        now,
+        currentVersion: "v1.1.0",
+        releaseStatePath
+      });
+      expect(installedService.getInstalledRelease()).toEqual({
+        version: "1.1.0",
+        releaseName: "Holoshelf 1.1.0",
+        releaseDate: "2026-06-29T00:00:00.000Z",
+        releaseNotes: "- Song updates\n- Bug fixes"
+      });
+      expect(installedService.dismissInstalledRelease()).toEqual({ dismissed: true });
+      expect(installedService.getInstalledRelease()).toBeNull();
+      expect(fs.existsSync(releaseStatePath)).toBe(false);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses bundled release notes on the first launch marked by the NSIS updater", () => {
+    const service = new UpdateService({
+      isPackaged: true,
+      driver: new FakeUpdateDriver(),
+      now,
+      currentVersion: "1.1.0",
+      startupInstalledRelease: {
+        version: "1.1.0",
+        releaseName: "Holoshelf 1.1.0",
+        releaseDate: null,
+        releaseNotes: "- First supported update"
+      }
+    });
+
+    expect(service.getInstalledRelease()).toEqual({
+      version: "1.1.0",
+      releaseName: "Holoshelf 1.1.0",
+      releaseDate: null,
+      releaseNotes: "- First supported update"
+    });
   });
 });
 

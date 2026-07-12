@@ -1,7 +1,9 @@
 import type { BrowserWindow, WebContents } from "electron";
+import fs from "node:fs";
+import path from "node:path";
 import { autoUpdater } from "electron-updater";
 import type { ProgressInfo, UpdateCheckResult, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
-import type { UpdateStatus, UpdateStatusState } from "../../src/shared/ipc";
+import type { InstalledUpdateRelease, UpdateStatus, UpdateStatusState } from "../../src/shared/ipc";
 
 interface UpdaterLogger {
   info(message?: unknown): void;
@@ -28,6 +30,9 @@ export interface UpdateServiceOptions {
   isPackaged: boolean;
   driver?: UpdateDriver;
   now?: () => string;
+  currentVersion?: string;
+  releaseStatePath?: string;
+  startupInstalledRelease?: InstalledUpdateRelease | null;
 }
 
 type UpdateStatusSender = Pick<WebContents, "send" | "isDestroyed">;
@@ -35,6 +40,9 @@ type UpdateStatusSender = Pick<WebContents, "send" | "isDestroyed">;
 export class UpdateService {
   private readonly driver: UpdateDriver;
   private readonly now: () => string;
+  private readonly currentVersion: string;
+  private readonly releaseStatePath: string | null;
+  private inMemoryRelease: InstalledUpdateRelease | null = null;
   private status: UpdateStatus = {
     state: "unsupported",
     message: "Updates are not initialized.",
@@ -51,11 +59,16 @@ export class UpdateService {
   constructor(options: UpdateServiceOptions) {
     this.driver = options.driver ?? (autoUpdater as unknown as UpdateDriver);
     this.now = options.now ?? (() => new Date().toISOString());
+    this.currentVersion = options.currentVersion?.trim() ?? "";
+    this.releaseStatePath = options.releaseStatePath?.trim() || null;
     this.status = this.createStatus(
       options.isPackaged ? "idle" : "unsupported",
       options.isPackaged ? "Ready to check for updates." : "Updates are available only in the packaged Windows app.",
       { isUpdateSupported: options.isPackaged }
     );
+    if (options.startupInstalledRelease && !this.getInstalledRelease()) {
+      this.persistInstalledRelease(options.startupInstalledRelease);
+    }
   }
 
   attachWindow(window: BrowserWindow): void {
@@ -97,6 +110,12 @@ export class UpdateService {
     });
     this.driver.on("update-downloaded", (event: UpdateDownloadedEvent) => {
       this.checking = false;
+      this.persistInstalledRelease({
+        version: event.version,
+        releaseName: typeof event.releaseName === "string" ? event.releaseName.trim() || null : null,
+        releaseDate: typeof event.releaseDate === "string" ? event.releaseDate : null,
+        releaseNotes: normalizeReleaseNotes(event.releaseNotes)
+      });
       this.emit("downloaded", `Update ${event.version} is ready to install.`, { version: event.version, percent: 100 });
     });
     this.driver.on("error", (error: Error) => {
@@ -109,6 +128,30 @@ export class UpdateService {
 
   getStatus(): UpdateStatus {
     return this.status;
+  }
+
+  getInstalledRelease(): InstalledUpdateRelease | null {
+    const release = this.readInstalledRelease();
+    if (!release || normalizeVersion(release.version) !== normalizeVersion(this.currentVersion)) {
+      return null;
+    }
+    return release;
+  }
+
+  dismissInstalledRelease(): { dismissed: boolean } {
+    if (!this.getInstalledRelease()) {
+      return { dismissed: false };
+    }
+
+    this.inMemoryRelease = null;
+    if (this.releaseStatePath) {
+      try {
+        fs.rmSync(this.releaseStatePath, { force: true });
+      } catch {
+        return { dismissed: false };
+      }
+    }
+    return { dismissed: true };
   }
 
   async checkForUpdates(): Promise<UpdateStatus> {
@@ -157,6 +200,48 @@ export class UpdateService {
     return this.status;
   }
 
+  private persistInstalledRelease(release: InstalledUpdateRelease): void {
+    this.inMemoryRelease = release;
+    if (!this.releaseStatePath) {
+      return;
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(this.releaseStatePath), { recursive: true });
+      const temporaryPath = `${this.releaseStatePath}.tmp`;
+      fs.writeFileSync(temporaryPath, JSON.stringify(release, null, 2), "utf8");
+      fs.rmSync(this.releaseStatePath, { force: true });
+      fs.renameSync(temporaryPath, this.releaseStatePath);
+    } catch {
+      // Update installation must remain usable even if release notes cannot be persisted.
+    }
+  }
+
+  private readInstalledRelease(): InstalledUpdateRelease | null {
+    if (this.inMemoryRelease) {
+      return this.inMemoryRelease;
+    }
+    if (!this.releaseStatePath || !fs.existsSync(this.releaseStatePath)) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.releaseStatePath, "utf8")) as Partial<InstalledUpdateRelease>;
+      if (typeof parsed.version !== "string" || typeof parsed.releaseNotes !== "string") {
+        return null;
+      }
+      this.inMemoryRelease = {
+        version: parsed.version,
+        releaseName: typeof parsed.releaseName === "string" ? parsed.releaseName : null,
+        releaseDate: typeof parsed.releaseDate === "string" ? parsed.releaseDate : null,
+        releaseNotes: parsed.releaseNotes
+      };
+      return this.inMemoryRelease;
+    } catch {
+      return null;
+    }
+  }
+
   private emit(
     state: UpdateStatusState,
     message: string,
@@ -194,4 +279,29 @@ export class UpdateService {
       updatedAt: this.now()
     };
   }
+}
+
+function normalizeReleaseNotes(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return "";
+      }
+      const note = "note" in item && typeof item.note === "string" ? item.note.trim() : "";
+      const version = "version" in item && typeof item.version === "string" ? item.version.trim() : "";
+      return note && version ? `## ${version}\n\n${note}` : note;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function normalizeVersion(value: string): string {
+  return value.trim().replace(/^v/iu, "");
 }

@@ -73,6 +73,16 @@ export interface RobustWeightedRateResult {
   failureWeight: number;
 }
 
+export type ExpectedPerformancePerspective = "favorite" | "underdog";
+
+export interface ConfidenceAdjustedExpectedPerformanceResult {
+  id: string;
+  score: number;
+  count: number;
+  successCount: number;
+  failureCount: number;
+}
+
 export interface RobustPositiveOpportunityInput {
   id: string;
   samples: RobustWeightedRateSample[];
@@ -383,7 +393,7 @@ export function calculateShrunkWeightedSignedScores(
     const weightedTotal = samples.reduce((sum, sample) => sum + sample.value * sample.weight, 0);
     return {
       id: input.id,
-      score: Math.max(-1, Math.min(1, weightedTotal / (totalWeight + safePriorWeight))),
+      score: Math.max(-1, Math.min(1, weightedTotal / (samples.length + safePriorWeight))),
       count: samples.length,
       positiveCount: samples.filter((sample) => sample.value > 0).length,
       negativeCount: samples.filter((sample) => sample.value < 0).length,
@@ -460,6 +470,65 @@ export function calculateRobustWeightedSuccessRates(
       totalWeight,
       successWeight,
       failureWeight
+    };
+  });
+}
+
+export function calculateConfidenceAdjustedExpectedPerformanceScores(
+  inputs: RobustWeightedRateInput[],
+  perspective: ExpectedPerformancePerspective,
+  priorWeight = 3,
+  domainMax = Number.POSITIVE_INFINITY
+): ConfidenceAdjustedExpectedPerformanceResult[] {
+  const safeDomainMax =
+    domainMax === Number.POSITIVE_INFINITY
+      ? Number.POSITIVE_INFINITY
+      : Number.isFinite(domainMax) && domainMax > 0
+        ? domainMax
+        : Number.POSITIVE_INFINITY;
+  const samplesById = new Map(inputs.map((input) => [input.id, weightedRateSamples(input.samples, safeDomainMax)]));
+  const allWeights = [...samplesById.values()].flat().map((sample) => sample.weight);
+  if (allWeights.length === 0) {
+    return inputs.map((input) => ({
+      id: input.id,
+      score: 0,
+      count: 0,
+      successCount: 0,
+      failureCount: 0
+    }));
+  }
+
+  const capStats = robustUpperStats(allWeights, safeDomainMax);
+  const compressionScale = Math.max(0.75, capStats.scaledMad);
+  const safePriorWeight = Number.isFinite(priorWeight) && priorWeight > 0 ? priorWeight : 0;
+
+  return inputs.map((input) => {
+    const samples = samplesById.get(input.id) ?? [];
+    if (samples.length === 0) {
+      return {
+        id: input.id,
+        score: 0,
+        count: 0,
+        successCount: 0,
+        failureCount: 0
+      };
+    }
+
+    const performanceTotal = samples.reduce((sum, sample) => {
+      const adjustedLogRatio = softCompressAboveCap(sample.weight, capStats.cap, safeDomainMax, compressionScale);
+      const adjustedRatio = 2 ** adjustedLogRatio;
+      const expectedWinProbability =
+        perspective === "favorite" ? adjustedRatio / (1 + adjustedRatio) : 1 / (1 + adjustedRatio);
+      return sum + (sample.success ? 1 : 0) - expectedWinProbability;
+    }, 0);
+    const successCount = samples.filter((sample) => sample.success).length;
+
+    return {
+      id: input.id,
+      score: Math.max(-1, Math.min(1, performanceTotal / (samples.length + safePriorWeight))),
+      count: samples.length,
+      successCount,
+      failureCount: samples.length - successCount
     };
   });
 }

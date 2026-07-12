@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ROBUST_RELATIVE_UPSET_DOMAIN_MAX,
+  calculateConfidenceAdjustedExpectedPerformanceScores,
   calculateRobustPositiveOpportunityScores,
   calculateRobustRelativeUpsetScores,
   calculateRobustViewStrengthScores,
@@ -242,7 +243,7 @@ describe("bracket stats math", () => {
     expect(steadyGood?.score ?? 0).toBeGreaterThan(singlePerfect?.score ?? 0);
   });
 
-  it("shrinks weighted pressure percentage deltas toward neutral while preserving positive and negative evidence", () => {
+  it("shrinks weighted pressure deltas by match count while preserving round magnitude in both directions", () => {
     const results = calculateShrunkWeightedSignedScores([
       { id: "single-positive", samples: [{ value: 1, weight: 1.5 }] },
       {
@@ -286,6 +287,29 @@ describe("bracket stats math", () => {
     expect(Math.abs(negative?.score ?? 0)).toBeLessThan(0.75);
   });
 
+  it("uses repeated pressure evidence as confidence instead of treating one deeper round as extra samples", () => {
+    const results = calculateShrunkWeightedSignedScores([
+      { id: "one-final-win", samples: [{ value: 1, weight: 1.5 }] },
+      {
+        id: "three-quarterfinal-wins",
+        samples: [
+          { value: 1, weight: 1 },
+          { value: 1, weight: 1 },
+          { value: 1, weight: 1 }
+        ]
+      },
+      { id: "one-final-loss", samples: [{ value: -1, weight: 1.5 }] },
+      { id: "one-quarterfinal-loss", samples: [{ value: -1, weight: 1 }] }
+    ]);
+
+    expect(results.find((result) => result.id === "three-quarterfinal-wins")?.score ?? 0).toBeGreaterThan(
+      results.find((result) => result.id === "one-final-win")?.score ?? 0
+    );
+    expect(results.find((result) => result.id === "one-final-loss")?.score ?? 0).toBeLessThan(
+      results.find((result) => result.id === "one-quarterfinal-loss")?.score ?? 0
+    );
+  });
+
   it("soft-compresses weighted resilience risks while preserving larger upset-risk importance", () => {
     const results = calculateRobustWeightedSuccessRates([
       {
@@ -316,5 +340,104 @@ describe("bracket stats math", () => {
     expect(steadyResilient?.score ?? 0).toBeGreaterThan(mixed?.score ?? 0);
     expect(mixed?.score ?? 0).toBeGreaterThan(oneHugeMiss?.score ?? 0);
     expect(oneHugeMiss?.failureWeight ?? Number.POSITIVE_INFINITY).toBeLessThan(Math.log2(1000));
+  });
+
+  it("uses match volume for confidence while rewarding close favorite wins more than easy wins", () => {
+    const results = calculateConfidenceAdjustedExpectedPerformanceScores(
+      [
+        {
+          id: "one-easy-defense",
+          samples: [{ weight: Math.log2(88), success: true }]
+        },
+        {
+          id: "two-mixed-defenses",
+          samples: [
+            { weight: Math.log2(18), success: true },
+            { weight: Math.log2(2.25), success: true }
+          ]
+        },
+        {
+          id: "three-defenses",
+          samples: [
+            { weight: Math.log2(1.4), success: true },
+            { weight: Math.log2(27), success: true },
+            { weight: Math.log2(1.1), success: true }
+          ]
+        }
+      ],
+      "favorite"
+    );
+
+    const oneEasyDefense = results.find((result) => result.id === "one-easy-defense");
+    const twoMixedDefenses = results.find((result) => result.id === "two-mixed-defenses");
+    const threeDefenses = results.find((result) => result.id === "three-defenses");
+
+    expect(threeDefenses?.score ?? 0).toBeGreaterThan(twoMixedDefenses?.score ?? 0);
+    expect(twoMixedDefenses?.score ?? 0).toBeGreaterThan(oneEasyDefense?.score ?? 0);
+  });
+
+  it("makes large favorite losses more damaging than close favorite losses", () => {
+    const results = calculateConfidenceAdjustedExpectedPerformanceScores(
+      [
+        { id: "large-upset-loss", samples: [{ weight: Math.log2(88), success: false }] },
+        { id: "close-loss", samples: [{ weight: Math.log2(1.1), success: false }] }
+      ],
+      "favorite"
+    );
+
+    expect(results.find((result) => result.id === "large-upset-loss")?.score ?? 0).toBeLessThan(
+      results.find((result) => result.id === "close-loss")?.score ?? 0
+    );
+  });
+
+  it("balances underdog upset magnitude with repeated evidence", () => {
+    const results = calculateConfidenceAdjustedExpectedPerformanceScores(
+      [
+        { id: "one-huge-upset", samples: [{ weight: Math.log2(88), success: true }] },
+        {
+          id: "repeated-upsets",
+          samples: [
+            { weight: Math.log2(2), success: true },
+            { weight: Math.log2(2), success: true },
+            { weight: Math.log2(2), success: true }
+          ]
+        },
+        {
+          id: "huge-upset-with-losses",
+          samples: [
+            { weight: Math.log2(88), success: true },
+            { weight: Math.log2(2), success: false },
+            { weight: Math.log2(2), success: false }
+          ]
+        }
+      ],
+      "underdog"
+    );
+
+    const oneHugeUpset = results.find((result) => result.id === "one-huge-upset");
+    const repeatedUpsets = results.find((result) => result.id === "repeated-upsets");
+    const hugeUpsetWithLosses = results.find((result) => result.id === "huge-upset-with-losses");
+
+    expect(repeatedUpsets?.score ?? 0).toBeGreaterThan(oneHugeUpset?.score ?? 0);
+    expect(hugeUpsetWithLosses?.score ?? 0).toBeLessThan(oneHugeUpset?.score ?? 0);
+  });
+
+  it("keeps extreme view ratios distinct instead of flattening them at a fixed multiplier", () => {
+    const anchors = Array.from({ length: 20 }, (_, index) => ({
+      id: `anchor-${index}`,
+      samples: [{ weight: Math.log2(2 + (index % 3)), success: true }]
+    }));
+    const results = calculateConfidenceAdjustedExpectedPerformanceScores(
+      [
+        ...anchors,
+        { id: "hundred-x", samples: [{ weight: Math.log2(100), success: true }] },
+        { id: "thousand-x", samples: [{ weight: Math.log2(1_000), success: true }] }
+      ],
+      "underdog"
+    );
+
+    expect(results.find((result) => result.id === "thousand-x")?.score ?? 0).toBeGreaterThan(
+      results.find((result) => result.id === "hundred-x")?.score ?? 0
+    );
   });
 });

@@ -69,7 +69,10 @@ function createBundle(
   };
 }
 
-async function createSeedDirectory(version: string): Promise<string> {
+async function createSeedDirectory(
+  version: string,
+  options: { includeRejectedStudyCompilation?: boolean } = {}
+): Promise<string> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-seed-"));
   const seedDirectory = path.join(root, "seed");
   const seedDatabasePath = path.join(seedDirectory, "holoshelf-template.sqlite");
@@ -124,6 +127,31 @@ async function createSeedDirectory(version: string): Promise<string> {
     mimeType: "image/png",
     sizeBytes: 20
   });
+  if (options.includeRejectedStudyCompilation) {
+    seedDatabase.importHolodexMusicArtifacts(
+      createBundle([
+        {
+          youtubeVideoId: "stale-study-compilation",
+          title: "Temporary Seed Song",
+          songName: "Temporary Seed Song",
+          topicId: "Music_Cover"
+        }
+      ])
+    );
+    seedDatabase.run(
+      `UPDATE hololive_music_videos
+       SET title = ?, song_name = NULL, duration_seconds = ?
+       WHERE youtube_video_id = ?`,
+      ["Kiara Bangers To Study To", 1035, "stale-study-compilation"]
+    );
+    seedDatabase.run(
+      `UPDATE hololive_music_detail_cache
+       SET duration_seconds = ?, song_names_json = ?
+       WHERE youtube_video_id = ?`,
+      [1035, "[]", "stale-study-compilation"]
+    );
+    seedDatabase.flush();
+  }
 
   return seedDirectory;
 }
@@ -152,6 +180,31 @@ function upsertCustomTalent(database: DatabaseService): string {
 }
 
 describe("mergeBundledOfficialData", () => {
+  it("reapplies current cleanup rules after importing a stale bundled seed", async () => {
+    const user = await createTempDatabase("holoshelf-official-stale-cleanup-");
+    const seedDirectory = await createSeedDirectory("2026-07-12", {
+      includeRejectedStudyCompilation: true
+    });
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-07-12T12:00:00.000Z"
+    });
+
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["stale-study-compilation"] })).toHaveLength(0);
+    expect(
+      user.database.select(
+        "SELECT youtube_video_id FROM hololive_music_videos WHERE youtube_video_id = 'stale-study-compilation'"
+      )
+    ).toHaveLength(0);
+  });
+
   it("merges newer official data while preserving user-owned state", async () => {
     const user = await createTempDatabase("holoshelf-official-user-");
     const seedDirectory = await createSeedDirectory("2026-06-30");
@@ -174,9 +227,15 @@ describe("mergeBundledOfficialData", () => {
           youtubeVideoId: "untouched-missing",
           title: "Untouched Missing Title",
           songName: "Untouched Missing Song"
+        },
+        {
+          youtubeVideoId: "unresolved-missing",
+          title: "Unresolved Missing Title",
+          songName: "Unresolved Missing Song"
         }
       ])
     );
+    user.database.run("UPDATE hololive_music_videos SET idol_id = NULL WHERE youtube_video_id = 'unresolved-missing'");
     user.database.setSetting("sources.holodexApiKey", "secret-holodex-key");
     user.database.setSetting("sources.youtubeApiKey", "secret-youtube-key");
     user.database.moveHololiveIdol({ boardId: defaultBoard.id, idolId: "tokino-sora", tierId: savedTierId, index: 0 });
@@ -188,7 +247,7 @@ describe("mergeBundledOfficialData", () => {
     )?.id;
     expect(playlistId).toBeTruthy();
     user.database.addHololiveMusicPlaylistItem({ playlistId: playlistId ?? "", youtubeVideoId: "referenced-missing" });
-    user.database.addHololiveMusicQueueItem({ youtubeVideoId: "referenced-missing", placement: "end" });
+    user.database.playHololiveMusicVisibleVideos(["referenced-missing"]);
 
     const result = await mergeBundledOfficialData({
       database: user.database,
@@ -206,7 +265,7 @@ describe("mergeBundledOfficialData", () => {
       bundledVersion: "2026-06-30",
       previousVersion: null,
       musicRows: 2,
-      prunedMissingRows: 1,
+      prunedMissingRows: 2,
       preservedMissingRows: 1
     });
     expect(user.database.getSettings()).toMatchObject({
@@ -222,11 +281,20 @@ describe("mergeBundledOfficialData", () => {
       viewCount: 12345
     });
     expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["official-added"] })).toHaveLength(1);
-    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["referenced-missing"] })[0]).toMatchObject({
-      youtubeVideoId: "referenced-missing",
-      marker: "favorite"
-    });
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["referenced-missing"] })).toHaveLength(0);
+    expect(
+      user.database.select<{ official_catalog_active: number }>(
+        "SELECT official_catalog_active FROM hololive_music_videos WHERE youtube_video_id = 'referenced-missing'"
+      )
+    ).toEqual([{ official_catalog_active: 0 }]);
+    expect(
+      user.database.select<{ marker: string }>(
+        "SELECT marker FROM hololive_music_marker_keys WHERE marker_key = 'video:referenced-missing'"
+      )
+    ).toEqual([{ marker: "favorite" }]);
+    expect(user.database.listHololiveMusicLibrary({ query: "Referenced Missing" }).rows).toHaveLength(0);
     expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["untouched-missing"] })).toHaveLength(0);
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["unresolved-missing"] })).toHaveLength(0);
     expect(
       user.database.select<{ rating: number; notes: string }>(
         "SELECT rating, notes FROM tracked_entries WHERE item_id = 'holodex:official-kept'"
@@ -240,13 +308,58 @@ describe("mergeBundledOfficialData", () => {
       user.database
         .getHololiveMusicPlayerData()
         .playlists.find((playlist) => playlist.id === playlistId)
-        ?.items?.map((item) => item.youtubeVideoId)
-    ).toEqual(["referenced-missing"]);
-    expect(user.database.getHololiveMusicPlayerData().queue.map((item) => item.youtubeVideoId)).toEqual([
-      "referenced-missing"
-    ]);
+        ?.items?.map((item) => ({ youtubeVideoId: item.youtubeVideoId, available: item.available, music: item.music }))
+    ).toEqual([{ youtubeVideoId: "referenced-missing", available: false, music: null }]);
+    expect(
+      user.database.getHololiveMusicPlayerData().queue.map((item) => ({ youtubeVideoId: item.youtubeVideoId, available: item.available, music: item.music }))
+    ).toEqual([{ youtubeVideoId: "referenced-missing", available: false, music: null }]);
+    expect(user.database.getHololiveMusicPlayerData().state).toMatchObject({
+      playbackSourceType: "library",
+      currentQueueItemId: null,
+      currentYoutubeVideoId: null
+    });
     expect(fs.existsSync(path.join(user.hololiveImageDirectory, "tokino-sora-icon-v6.webp"))).toBe(true);
     expect(fs.existsSync(path.join(user.dataDirectory, "holodex-refresh", "latest", "summary.json"))).toBe(true);
+
+    const restoredSeedDirectory = await createSeedDirectory("2026-07-01");
+    const restoredSeedDatabase = new DatabaseService(
+      path.join(restoredSeedDirectory, "holoshelf-template.sqlite"),
+      path.join(path.dirname(restoredSeedDirectory), "restored-seed-backups")
+    );
+    await restoredSeedDatabase.init();
+    restoredSeedDatabase.importHolodexMusicArtifacts(
+      createBundle([
+        {
+          youtubeVideoId: "referenced-missing",
+          title: "Restored Official Title",
+          songName: "Restored Official Song"
+        }
+      ])
+    );
+    restoredSeedDatabase.flush();
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: {
+        dataDirectory: user.dataDirectory,
+        hololiveImageDirectory: user.hololiveImageDirectory,
+        seedDirectory: restoredSeedDirectory
+      },
+      isPackaged: true,
+      now: () => "2026-07-01T12:00:00.000Z"
+    });
+
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["referenced-missing"] })[0]).toMatchObject({
+      youtubeVideoId: "referenced-missing",
+      title: "Restored Official Title",
+      marker: "favorite"
+    });
+    expect(
+      user.database
+        .getHololiveMusicPlayerData()
+        .playlists.find((playlist) => playlist.id === playlistId)
+        ?.items?.map((item) => ({ youtubeVideoId: item.youtubeVideoId, available: item.available }))
+    ).toEqual([{ youtubeVideoId: "referenced-missing", available: true }]);
   });
 
   it("repairs missing bundled image files even when official data is already current", async () => {
@@ -473,6 +586,7 @@ describe("mergeBundledOfficialData", () => {
         "2026-07-01T00:00:00.000Z"
       ]
     );
+    seedDatabase.run("DELETE FROM hololive_music_videos WHERE youtube_video_id = 'kamouflage-3d-live'");
     seedDatabase.flush();
 
     user.database.importHolodexMusicArtifacts(staleRows);

@@ -368,6 +368,17 @@ function deleteOfficialMusicRow(database: DatabaseService, row: MissingMusicRow)
   ]);
 }
 
+function deactivateOfficialMusicRow(database: DatabaseService, row: MissingMusicRow): void {
+  database.run(
+    `UPDATE hololive_music_videos
+     SET official_catalog_active = 0,
+         updated_at = ?
+     WHERE youtube_video_id = ?
+       AND COALESCE(source_kind, 'official') = 'official'`,
+    [new Date().toISOString(), row.youtube_video_id]
+  );
+}
+
 function pruneMissingOfficialMusicRows(
   database: DatabaseService,
   officialYoutubeVideoIds: Set<string>
@@ -375,9 +386,7 @@ function pruneMissingOfficialMusicRows(
   const rows = database.select<MissingMusicRow>(
     `SELECT v.youtube_video_id, v.item_id, v.canonical_performance_key
      FROM hololive_music_videos v
-     INNER JOIN hololive_idols i ON i.id = v.idol_id
-     WHERE i.source = 'official'
-       AND COALESCE(v.source_kind, 'official') = 'official'
+     WHERE COALESCE(v.source_kind, 'official') = 'official'
      ORDER BY v.youtube_video_id`
   );
   const missingRows = rows.filter((row) => !officialYoutubeVideoIds.has(row.youtube_video_id));
@@ -391,6 +400,7 @@ function pruneMissingOfficialMusicRows(
 
   for (const row of missingRows) {
     if (hasUserOwnedMusicReferences(database, row)) {
+      deactivateOfficialMusicRow(database, row);
       preservedMissingRows += 1;
       continue;
     }
@@ -520,7 +530,8 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
       ? selectSeedRows(seedDatabase, `SELECT youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id,
                   channel_id, channel_name, published_at, duration_seconds, song_name, original_channel_id,
                   provided_to_youtube, participants_json, participant_idol_ids_json, canonical_song_key,
-                  canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json, ${sourceKindSelect}, NULL AS source_run_id,
+                  canonical_performance_key, owned_idol_ids_json, featured_idol_ids_json, ${sourceKindSelect},
+                  1 AS official_catalog_active, NULL AS source_run_id,
                   updated_at
            FROM hololive_music_videos
            WHERE ${seedMusicColumns.has("source_kind") ? "source_kind = 'official'" : "1 = 1"}
@@ -540,7 +551,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
     duplicateRows = duplicateRows.filter((row) => {
       const removedId = String(row.removed_youtube_video_id ?? "");
       const keptId = String(row.kept_youtube_video_id ?? "");
-      return officialMusicVideoIds.has(removedId) && (!keptId || officialMusicVideoIds.has(keptId));
+      return Boolean(removedId) && (!keptId || officialMusicVideoIds.has(keptId));
     });
     const statsRows = seedTableExists(seedDatabase, "hololive_music_video_stats")
       ? selectSeedRows(seedDatabase, "SELECT * FROM hololive_music_video_stats ORDER BY youtube_video_id").filter((row) =>
@@ -596,6 +607,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
       };
       options.database.repairHololiveMusicClassifications();
       options.database.repairHololiveMusicDuplicateRows("official-data-merge");
+      options.database.repairRejectedHololiveMusicRows();
 
       const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);
       prunedMissingRows = pruneResult.prunedMissingRows;
@@ -609,6 +621,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         musicRows: counts.musicRows,
         prunedMissingRows,
         preservedMissingRows,
+        deactivatedMissingRows: preservedMissingRows,
         copiedImageFiles,
         copiedArtifactFiles
       };
@@ -638,7 +651,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
       preservedMissingRows
     };
     options.log?.(
-      `[official-data] merged version=${manifest.version} previous=${previousVersion ?? "none"} musicRows=${counts.musicRows} prunedMissing=${prunedMissingRows} preservedMissing=${preservedMissingRows}`
+      `[official-data] merged version=${manifest.version} previous=${previousVersion ?? "none"} musicRows=${counts.musicRows} prunedMissing=${prunedMissingRows} deactivatedMissing=${preservedMissingRows}`
     );
     return result;
   } finally {

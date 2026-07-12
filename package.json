@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.0",
+  "version": "1.1.9",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -87,7 +87,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "- App UI overhaul\n- Song and stats updates\n- Bug fixes to bracket creation overall\n- Updated visuals for talents with available 3D model renders in a variety of outfits\n- Bracket stats visual overhaul and addition of new stats\n- Bug fixes\n\nNew stats include:\n- **Top Talent**: Uses a glicko-2 scoring system to give an ELO-like rating for talents based on their song performance throughout bracket history in matchups against other talents.\n- **Most wins**: Talent whose songs have accumulated the most wins in bracket matchups.\n- **Most Titles**: Talent whose songs have accumulated the most 1st place finishes in brackets.\n- **Most 2nd Places**: Talent whose songs have accumulated the most 2nd place finishes in brackets.\n- **Most Deep Runs**: Talent whose songs have accumulated the most Top 4 finishes in brackets.\n- **Most Early Exits**: Talent whose songs have accumulated the most first round exits.\n- **Strength of Wins**: The average level of competition this talent is facing in wins. Taken from the views of the songs that this talent's songs are typically competing with.\n- **Strength of Losses**: Same as Strength of Wins, but for losses.\n- **Most Clutch**: Best performance once the talent's songs reach at least Quarter Finals stage. This measures the talent who performs best once the bracket gets serious.\n- **Under Pressure**: The talent that meets or exceeds expectations in late round matchups. Once reaching the latter stages of a bracket, this tracks the talent's results compared to the expected result of each matchup as calculated based on their glicko/ELO rating matchup, meeting or exceeding expectations.\n- **Overperformer**: Best performance as the underdog in terms of views. This tracks the talents that typically punch above their weight of their song's views, often beating opposition with higher view counts.\n- **Most Reliable**: The talent that holds strong as the favorite and avoids being upset. Tracks matches where a talent's song had more views than the opponent, then counts how well those favorite songs avoid losing."
+      "releaseNotes": "- Added Song View and Detailed Stats to bracket statistics\n- Improved bracket stat calculations and accuracy\n- Improved filtering and removal of duplicate or invalid songs\n- Official song removals now update installed libraries without affecting personal data\n- Added a post-update “What’s New” screen\n- Song data updates\n- Bug fixes"
     },
     "win": {
       "icon": "ico.ico",

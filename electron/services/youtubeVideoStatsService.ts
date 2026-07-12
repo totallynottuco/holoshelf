@@ -37,7 +37,13 @@ interface YouTubeVideosApiResponse {
 }
 
 interface YouTubeVideoStatsBatchResult {
-  stats: Array<{ youtubeVideoId: string; viewCount: number; fetchedAt: string }>;
+  stats: Array<{
+    youtubeVideoId: string;
+    viewCount: number;
+    fetchedAt: string;
+    youtubeChannelId: string | null;
+    youtubeChannelName: string | null;
+  }>;
   unavailableVideos: Array<{ youtubeVideoId: string; reason: string }>;
 }
 
@@ -162,9 +168,19 @@ export class YouTubeVideoStatsService {
     for (const batch of batches) {
       try {
         const batchResult = await this.fetchBatch(batch, apiKey, fetchedAt);
-        this.database.upsertHololiveMusicVideoStats(batchResult.stats);
-        updatedVideos += batchResult.stats.length;
-        for (const unavailable of batchResult.unavailableVideos) {
+        const sourceMismatches = batchResult.stats.flatMap((stat) => {
+          const reason = this.database.getHololiveMusicSourceChannelMismatchReason({
+            youtubeVideoId: stat.youtubeVideoId,
+            youtubeChannelId: stat.youtubeChannelId,
+            youtubeChannelName: stat.youtubeChannelName
+          });
+          return reason ? [{ youtubeVideoId: stat.youtubeVideoId, reason }] : [];
+        });
+        const sourceMismatchIds = new Set(sourceMismatches.map((mismatch) => mismatch.youtubeVideoId));
+        const validStats = batchResult.stats.filter((stat) => !sourceMismatchIds.has(stat.youtubeVideoId));
+        this.database.upsertHololiveMusicVideoStats(validStats);
+        updatedVideos += validStats.length;
+        for (const unavailable of [...batchResult.unavailableVideos, ...sourceMismatches]) {
           this.database.markHololiveMusicVideoUnavailable({
             youtubeVideoId: unavailable.youtubeVideoId,
             reason: unavailable.reason,
@@ -268,8 +284,11 @@ export class YouTubeVideoStatsService {
     fetchedAt: string
   ): Promise<YouTubeVideoStatsBatchResult> {
     const url = new URL(YOUTUBE_VIDEOS_API_URL);
-    url.searchParams.set("part", "statistics,status");
-    url.searchParams.set("fields", "items(id,statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))");
+    url.searchParams.set("part", "snippet,statistics,status");
+    url.searchParams.set(
+      "fields",
+      "items(id,snippet(channelId,channelTitle),statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))"
+    );
     url.searchParams.set("id", youtubeVideoIds.join(","));
     url.searchParams.set("key", apiKey);
 
@@ -302,10 +321,12 @@ export class YouTubeVideoStatsService {
         return {
           youtubeVideoId,
           viewCount,
-          fetchedAt
+          fetchedAt,
+          youtubeChannelId: item.snippet?.channelId?.trim() || null,
+          youtubeChannelName: item.snippet?.channelTitle?.trim() || null
         };
       })
-      .filter((item): item is { youtubeVideoId: string; viewCount: number; fetchedAt: string } => Boolean(item));
+      .filter((item): item is YouTubeVideoStatsBatchResult["stats"][number] => Boolean(item));
 
     for (const videoId of youtubeVideoIds) {
       if (!returnedIds.has(videoId)) {

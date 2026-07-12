@@ -14,6 +14,7 @@ import {
 import { isExcludedHolodexChannelId } from "./types";
 
 const MIN_FULL_DURATION_SECONDS = 90;
+const LONG_FORM_COMPILATION_MIN_SECONDS = 600;
 export const HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS = 20;
 const OFFICIAL_TITLE_MARKERS = ["official", "mv", "original", "\u30aa\u30ea\u30b8\u30ca\u30eb", "\u30aa\u30ea\u30b8\u30ca\u30eb\u30bd\u30f3\u30b0"];
 const VERSION_KEEP_MARKERS = ["acoustic", "piano", "re paint", "repaint", "live", "tour"];
@@ -57,9 +58,22 @@ const FULL_VERSION_DROP_PATTERNS: Array<[string, RegExp]> = [
   ["preview_or_short", /(\u8a66\u8074\u52d5\u753b|\u8a66\u8074|\u30b7\u30e7\u30fc\u30c8)/iu],
   ["preview_or_short", /\bpromo\b|\bpromotional\s+(?:mv|pv)\b|\bpromotion\s+(?:mv|pv)\b|\u5ba3\u4f1d\s*(?:mv|pv)?/iu],
   ["preview_or_short", /cross[-\s]?fade|\bxfd\b|\b(?:album\s+)?digest\b|\u30af\u30ed\u30b9\u30d5\u30a7\u30fc\u30c9/iu],
+  [
+    "compilation_or_mix",
+    /\bfull\s+album\b|\b(?:album|ep)\b.{0,120}\b(?:releas(?:e|ed|ing)|announcement|sampler|track\s*list)\b|\b(?:releas(?:e|ed|ing)|announcement)\b.{0,120}\b(?:album|ep)\b/iu
+  ],
+  ["compilation_or_mix", /\u30c0\u30a4\u30b8\u30a7\u30b9\u30c8|\u5168\u66f2\s*(?:\u8a66\u8074|\u7d39\u4ecb)|\u30a2\u30eb\u30d0\u30e0.{0,80}(?:\u8a66\u8074|\u544a\u77e5|\u767a\u58f2|\u30c8\u30ec\u30fc\u30e9\u30fc|\u30c6\u30a3\u30b6\u30fc)/iu],
   ["compilation_or_mix", /\b(medley|soundtrack|release pv|image soundtrack)\b/iu],
   ["compilation_or_mix", /bgm|\blo[-\s]?fi\b/iu],
   ["compilation_or_mix", /\b(?:bgm|lo[-\s]?fi|chill|ambient|orgel|jazz)\b.*\bmix\b/iu],
+  [
+    "compilation_or_mix",
+    /\b(?:songs?|music|bangers?|beats?|mix|playlist|ost)\s+(?:to|for)\s+(?:study|work|working|focus|relax|relaxing|sleep|chill)(?:\s+to)?\b/iu
+  ],
+  [
+    "compilation_or_mix",
+    /\b(?:study|work|working|focus|relax|relaxing|sleep|chill)\s+(?:music|mix|playlist|beats?|bgm)\b/iu
+  ],
   ["remix", /remix/iu],
   [
     "alternate_version",
@@ -70,6 +84,8 @@ const FULL_VERSION_DROP_PATTERNS: Array<[string, RegExp]> = [
   ["non_song_variant", /\bwithout music version\b|\bbehind the scenes\b|\bmaking of\b/iu],
   ["demo", /(?:^|\s|\(|\[|\u3010)\bdemo\b(?:\s|\)|\]|\u3011|$)/iu]
 ];
+const LONG_FORM_COMPILATION_PATTERN =
+  /\b(?:mash[\s-]?up|mega[\s-]?mix|non[\s-]?stop|continuous\s+mix|song\s+compilation|music\s+compilation)\b/iu;
 
 export function normalizeText(value: string): string {
   return normalizeHololiveMusicText(value);
@@ -339,6 +355,13 @@ export function getRowCleanupReason(
   }
 
   const searchableText = buildSearchableText(row, detail);
+  if (
+    duration !== null &&
+    duration >= LONG_FORM_COMPILATION_MIN_SECONDS &&
+    LONG_FORM_COMPILATION_PATTERN.test(searchableText)
+  ) {
+    return "compilation_or_mix";
+  }
   for (const [reason, pattern] of FULL_VERSION_DROP_PATTERNS) {
     if (pattern.test(searchableText)) {
       return reason;

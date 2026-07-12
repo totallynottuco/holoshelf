@@ -71,7 +71,7 @@ import type {
   TrackerModuleManifest
 } from "../../src/shared/contracts";
 import {
-  calculateRobustPositiveOpportunityScores,
+  calculateConfidenceAdjustedExpectedPerformanceScores,
   calculateRobustViewStrengthScores,
   calculateRobustWeightedSuccessRates,
   calculateShrunkBinaryRates,
@@ -1140,6 +1140,17 @@ const MIGRATIONS = [
       DROP TABLE hololive_image_cache;
       ALTER TABLE hololive_image_cache_v30 RENAME TO hololive_image_cache;
     `
+  },
+  {
+    version: 31,
+    sql: `
+      ALTER TABLE hololive_music_videos
+        ADD COLUMN official_catalog_active INTEGER NOT NULL DEFAULT 1
+          CHECK(official_catalog_active IN (0, 1));
+
+      CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_catalog_active
+        ON hololive_music_videos(official_catalog_active, source_kind);
+    `
   }
 ];
 
@@ -1667,6 +1678,10 @@ export class DatabaseService {
     this.backfillHololiveMusicClassifications();
   }
 
+  repairRejectedHololiveMusicRows(): void {
+    this.purgeRejectedHolodexMusicRows();
+  }
+
   repairHololiveMusicDuplicateRows(runId = "repair"): number {
     let repairedRows = 0;
     const repair = () => {
@@ -1674,6 +1689,7 @@ export class DatabaseService {
       repairedRows += this.purgeCanonicalTopicDuplicateRows(runId);
       repairedRows += this.purgeCrossOwnerTopicDuplicateRows(runId);
       repairedRows += this.purgeCanonicalVariantDuplicateRows(runId);
+      repairedRows += this.purgeSupersededDirectUploadRows(runId);
       if (repairedRows > 0) {
         this.transferHololiveMusicMarkersFromDuplicateRemovals(runId);
       }
@@ -1757,6 +1773,7 @@ export class DatabaseService {
       canonicalDuplicateCount += this.purgeCanonicalTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCrossOwnerTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCanonicalVariantDuplicateRows(runId);
+      canonicalDuplicateCount += this.purgeSupersededDirectUploadRows(runId);
       matchedDuplicateCount += canonicalDuplicateCount;
       matchedDetailCount = Math.max(0, matchedDetailCount - canonicalDuplicateCount);
       this.transferHololiveMusicMarkersFromDuplicateRemovals(runId);
@@ -1888,6 +1905,7 @@ export class DatabaseService {
     where.push(
       "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)"
     );
+    where.push("COALESCE(v.official_catalog_active, 1) = 1");
 
     const filterIdolIds = getHololiveExpandedTalentIds(filters.idolId);
     if (filterIdolIds.length > 0) {
@@ -2531,8 +2549,8 @@ export class DatabaseService {
            (youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id, channel_id, channel_name,
             published_at, duration_seconds, song_name, original_channel_id, provided_to_youtube,
             participants_json, participant_idol_ids_json, canonical_song_key, canonical_performance_key,
-            owned_idol_ids_json, featured_idol_ids_json, source_kind, source_run_id, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'past', ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, 'user', NULL, ?)
+            owned_idol_ids_json, featured_idol_ids_json, source_kind, official_catalog_active, source_run_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'past', ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, 'user', 1, NULL, ?)
          ON CONFLICT(youtube_video_id) DO UPDATE SET
            item_id = excluded.item_id,
            idol_id = excluded.idol_id,
@@ -2554,6 +2572,7 @@ export class DatabaseService {
            owned_idol_ids_json = excluded.owned_idol_ids_json,
            featured_idol_ids_json = excluded.featured_idol_ids_json,
            source_kind = 'user',
+           official_catalog_active = 1,
            updated_at = excluded.updated_at
          WHERE hololive_music_videos.source_kind = 'user'`,
         [
@@ -2947,7 +2966,8 @@ export class DatabaseService {
     limit?: number | null;
   } = {}): string[] {
     const where: string[] = [
-      "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)"
+      "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)",
+      "COALESCE(v.official_catalog_active, 1) = 1"
     ];
     const params: unknown[] = [];
     const requestedIds = [
@@ -2975,6 +2995,43 @@ export class DatabaseService {
        LIMIT ?`,
       params
     ).map((row) => row.youtube_video_id);
+  }
+
+  getHololiveMusicSourceChannelMismatchReason(input: {
+    youtubeVideoId: string;
+    youtubeChannelId?: string | null;
+    youtubeChannelName?: string | null;
+  }): string | null {
+    const youtubeVideoId = input.youtubeVideoId.trim();
+    const youtubeChannelId = input.youtubeChannelId?.trim() ?? "";
+    if (!youtubeVideoId || !youtubeChannelId) {
+      return null;
+    }
+
+    const row = this.select<{
+      channel_id: string | null;
+      original_channel_id: string | null;
+      provided_to_youtube: number;
+      source_kind: HololiveMusicSourceKind | null;
+    }>(
+      `SELECT channel_id, original_channel_id, provided_to_youtube, source_kind
+       FROM hololive_music_videos
+       WHERE youtube_video_id = ?`,
+      [youtubeVideoId]
+    )[0];
+    if (!row || row.source_kind === "user" || !row.provided_to_youtube) {
+      return null;
+    }
+
+    const expectedChannelId = row.original_channel_id?.trim() ?? "";
+    if (!expectedChannelId || expectedChannelId === youtubeChannelId) {
+      return null;
+    }
+
+    const actualLabel = input.youtubeChannelName?.trim()
+      ? `${input.youtubeChannelName.trim()} (${youtubeChannelId})`
+      : youtubeChannelId;
+    return `YouTube reports uploader ${actualLabel}, but the imported source expects channel ${expectedChannelId}.`;
   }
 
   upsertHololiveMusicVideoStats(
@@ -3210,11 +3267,17 @@ export class DatabaseService {
     );
     let state = this.ensureHololiveMusicPlayerState();
 
-    if (state.playbackSourceType === "queue" && state.currentQueueItemId && !queue.some((item) => item.id === state.currentQueueItemId)) {
-      state = this.setHololiveMusicPlayerStateRow({
-        currentQueueItemId: null,
-        currentYoutubeVideoId: null
-      });
+    if (state.playbackSourceType === "queue" && state.currentQueueItemId) {
+      const currentQueueItem = queue.find((item) => item.id === state.currentQueueItemId);
+      if (!currentQueueItem?.available) {
+        state = this.setHololiveMusicPlayerStateRow({
+          playbackSourceType: "library",
+          currentQueueItemId: null,
+          currentPlaylistId: null,
+          currentPlaylistItemId: null,
+          currentYoutubeVideoId: null
+        });
+      }
     }
 
     if (state.playbackSourceType === "playlist") {
@@ -4003,6 +4066,7 @@ export class DatabaseService {
        LEFT JOIN hololive_music_marker_keys cm ON cm.marker_key = NULLIF(v.canonical_performance_key, '')
        LEFT JOIN hololive_music_marker_keys vm ON vm.marker_key = 'video:' || v.youtube_video_id
        WHERE COALESCE(cm.marker, vm.marker) = 'favorite'
+         AND COALESCE(v.official_catalog_active, 1) = 1
          AND NOT EXISTS (
            SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id
          )
@@ -6059,12 +6123,74 @@ export class DatabaseService {
 
   getHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     const archives = this.listHololiveBracketArchives();
+    type CurrentBracketSongRow = {
+      youtube_video_id: string;
+      title: string;
+      song_name: string | null;
+      topic_id: HololiveMusicTopic;
+      idol_id: string | null;
+      canonical_performance_key: string;
+      provided_to_youtube: number | null;
+      duration_seconds: number | null;
+      view_count: number | null;
+      published_at: string | null;
+    };
+    const currentSongRows = this.select<CurrentBracketSongRow>(
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.idol_id,
+              v.canonical_performance_key, v.provided_to_youtube, v.duration_seconds,
+              stats.view_count, v.published_at
+       FROM hololive_music_videos v
+       LEFT JOIN hololive_music_video_stats stats
+         ON stats.youtube_video_id = v.youtube_video_id`
+    );
+    const currentSongsByVideoId = new Map(currentSongRows.map((row) => [row.youtube_video_id, row]));
+    const duplicateTargets = new Map(
+      this.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null }>(
+        `SELECT removed_youtube_video_id, kept_youtube_video_id
+         FROM hololive_music_duplicate_removals
+         WHERE COALESCE(kept_youtube_video_id, '') != ''`
+      ).map((row) => [row.removed_youtube_video_id, row.kept_youtube_video_id ?? ""])
+    );
+    const resolveCurrentVideoId = (youtubeVideoId: string): string => {
+      let current = youtubeVideoId;
+      const visited = new Set<string>();
+      while (duplicateTargets.has(current) && !visited.has(current)) {
+        visited.add(current);
+        current = duplicateTargets.get(current)?.trim() || current;
+      }
+      return current;
+    };
+    const representativeSongsByCanonicalKey = new Map<string, CurrentBracketSongRow>();
+    for (const row of currentSongRows) {
+      const key = row.canonical_performance_key.trim() || `video:${row.youtube_video_id}`;
+      const existing = representativeSongsByCanonicalKey.get(key);
+      if (!existing || this.compareHololiveMusicDisplayRow(row, existing) > 0) {
+        representativeSongsByCanonicalKey.set(key, row);
+      }
+    }
+    const resolveSongIdentity = (
+      youtubeVideoId: string,
+      archivedCanonicalPerformanceKey: string | null | undefined
+    ) => {
+      const resolvedVideoId = resolveCurrentVideoId(youtubeVideoId);
+      const current = currentSongsByVideoId.get(resolvedVideoId);
+      const canonicalPerformanceKey =
+        current?.canonical_performance_key.trim() || archivedCanonicalPerformanceKey?.trim() || `video:${resolvedVideoId}`;
+      const representative = representativeSongsByCanonicalKey.get(canonicalPerformanceKey) ?? current ?? null;
+      return {
+        canonicalPerformanceKey,
+        youtubeVideoId: representative?.youtube_video_id ?? resolvedVideoId,
+        representative
+      };
+    };
     const rows = this.select<{
+      archive_id: string;
       youtube_video_id: string;
       title_snapshot: string;
       topic_id: HololiveMusicTopic;
       idol_id_snapshot: string;
       idol_name_snapshot: string;
+      canonical_performance_key: string;
       wins: number;
       losses: number;
       eliminated_round_index: number | null;
@@ -6076,7 +6202,8 @@ export class DatabaseService {
       is_top16: number;
       archived_at: string;
     }>(
-      `SELECT e.youtube_video_id, e.title_snapshot, e.topic_id, e.idol_id_snapshot, e.idol_name_snapshot,
+      `SELECT e.archive_id, e.youtube_video_id, e.title_snapshot, e.topic_id, e.idol_id_snapshot, e.idol_name_snapshot,
+              e.canonical_performance_key,
               e.wins, e.losses, e.eliminated_round_index, e.first_round_eliminated,
               e.is_champion, e.is_finalist, e.is_top4, e.is_top8, e.is_top16,
               a.archived_at
@@ -6087,6 +6214,14 @@ export class DatabaseService {
 
     const songStats = new Map<string, HololiveBracketSongStats>();
     const talentStats = new Map<string, HololiveBracketTalentStats>();
+    const songArchiveAppearances = new Set<string>();
+    const songArchiveChampions = new Set<string>();
+    const songArchiveFinalists = new Set<string>();
+    const songArchiveRunnerUps = new Set<string>();
+    const songArchiveTop4 = new Set<string>();
+    const songArchiveTop8 = new Set<string>();
+    const songArchiveTop16 = new Set<string>();
+    const songArchiveEarlyExits = new Set<string>();
     const finalsConversionSamplesByTalent = new Map<string, boolean[]>();
     const deepRunSamplesByTalent = new Map<string, boolean[]>();
     const earlyExitSamplesByTalent = new Map<string, boolean[]>();
@@ -6105,20 +6240,27 @@ export class DatabaseService {
       const top16Count = Number(row.is_top16 ?? 0);
       const talentIdentity = getHololiveCanonicalTalentIdentity(row.idol_id_snapshot, row.idol_name_snapshot);
 
+      const songIdentity = resolveSongIdentity(row.youtube_video_id, row.canonical_performance_key);
+      const representativeTalent = songIdentity.representative?.idol_id
+        ? getHololiveCanonicalTalentIdentity(songIdentity.representative.idol_id, row.idol_name_snapshot)
+        : talentIdentity;
+      const songArchiveKey = `${row.archive_id}|${songIdentity.canonicalPerformanceKey}`;
       const song =
-        songStats.get(row.youtube_video_id) ??
+        songStats.get(songIdentity.canonicalPerformanceKey) ??
         ({
-          youtubeVideoId: row.youtube_video_id,
-          title: row.title_snapshot,
-          topicId: this.isHololiveMusicTopic(row.topic_id) ? row.topic_id : null,
-          idolId: talentIdentity.id,
-          idolName: talentIdentity.name,
+          canonicalPerformanceKey: songIdentity.canonicalPerformanceKey,
+          youtubeVideoId: songIdentity.youtubeVideoId,
+          title: songIdentity.representative?.song_name || songIdentity.representative?.title || row.title_snapshot,
+          topicId: songIdentity.representative?.topic_id ?? (this.isHololiveMusicTopic(row.topic_id) ? row.topic_id : null),
+          idolId: representativeTalent.id,
+          idolName: representativeTalent.name,
           appearances: 0,
           wins: 0,
           losses: 0,
           winRate: 0,
           championCount: 0,
           finalistCount: 0,
+          runnerUpCount: 0,
           top4Count: 0,
           top8Count: 0,
           top16Count: 0,
@@ -6132,28 +6274,70 @@ export class DatabaseService {
           highStakesPerformanceWins: 0,
           highStakesPerformanceLosses: 0,
           highStakesPerformanceMatches: 0,
-          punchingUpScore: 0,
-          punchingUpWins: 0,
-          punchingUpOpportunities: 0,
+          strengthOfWinsScore: 0,
+          strengthOfWinsCount: 0,
+          strengthOfLossesScore: 0,
+          strengthOfLossesCount: 0,
+          punchingAboveScore: 0,
+          punchingAboveWins: 0,
+          punchingAboveOpportunities: 0,
+          clutchRate: 0,
+          clutchWins: 0,
+          clutchLosses: 0,
+          clutchMatches: 0,
+          pressureEdgeScore: 0,
+          pressureEdgeMatches: 0,
+          pressureEdgePositiveMatches: 0,
+          pressureEdgeNegativeMatches: 0,
+          upsetResilienceScore: 0,
+          upsetResilienceChecks: 0,
+          upsetResilienceUpsetLosses: 0,
           lastArchivedAt: row.archived_at
         } satisfies HololiveBracketSongStats);
-      song.appearances += 1;
+      if (!songArchiveAppearances.has(songArchiveKey)) {
+        song.appearances += 1;
+        songArchiveAppearances.add(songArchiveKey);
+      }
       song.wins += wins;
       song.losses += losses;
-      song.championCount += championCount;
-      song.finalistCount += finalistCount;
-      song.top4Count += top4Count;
-      song.top8Count += top8Count;
-      song.top16Count += top16Count;
-      song.firstRoundEliminations += firstRoundEliminated;
+      if (championCount > 0 && !songArchiveChampions.has(songArchiveKey)) {
+        song.championCount += 1;
+        songArchiveChampions.add(songArchiveKey);
+      }
+      if (finalistCount > 0 && !songArchiveFinalists.has(songArchiveKey)) {
+        song.finalistCount += 1;
+        songArchiveFinalists.add(songArchiveKey);
+      }
+      if (runnerUpCount > 0 && !songArchiveRunnerUps.has(songArchiveKey)) {
+        song.runnerUpCount += 1;
+        songArchiveRunnerUps.add(songArchiveKey);
+      }
+      if (top4Count > 0 && !songArchiveTop4.has(songArchiveKey)) {
+        song.top4Count += 1;
+        songArchiveTop4.add(songArchiveKey);
+      }
+      if (top8Count > 0 && !songArchiveTop8.has(songArchiveKey)) {
+        song.top8Count += 1;
+        songArchiveTop8.add(songArchiveKey);
+      }
+      if (top16Count > 0 && !songArchiveTop16.has(songArchiveKey)) {
+        song.top16Count += 1;
+        songArchiveTop16.add(songArchiveKey);
+      }
+      if (firstRoundEliminated > 0 && !songArchiveEarlyExits.has(songArchiveKey)) {
+        song.firstRoundEliminations += 1;
+        songArchiveEarlyExits.add(songArchiveKey);
+      }
       if (row.archived_at > song.lastArchivedAt) {
-        song.title = row.title_snapshot;
-        song.topicId = this.isHololiveMusicTopic(row.topic_id) ? row.topic_id : null;
-        song.idolId = talentIdentity.id;
-        song.idolName = talentIdentity.name;
+        if (!songIdentity.representative) {
+          song.title = row.title_snapshot;
+          song.topicId = this.isHololiveMusicTopic(row.topic_id) ? row.topic_id : null;
+          song.idolId = talentIdentity.id;
+          song.idolName = talentIdentity.name;
+        }
         song.lastArchivedAt = row.archived_at;
       }
-      songStats.set(row.youtube_video_id, song);
+      songStats.set(songIdentity.canonicalPerformanceKey, song);
 
       const talent =
         talentStats.get(talentIdentity.id) ??
@@ -6237,9 +6421,11 @@ export class DatabaseService {
       loser_title: string | null;
       winner_idol_id: string | null;
       winner_idol_name: string | null;
+      winner_canonical_performance_key: string | null;
       winner_view_count: number | null;
       loser_idol_id: string | null;
       loser_idol_name: string | null;
+      loser_canonical_performance_key: string | null;
       loser_view_count: number | null;
     }>(
       `SELECT m.archive_id, a.size AS archive_size, a.archived_at, m.round_index, m.match_index,
@@ -6248,9 +6434,11 @@ export class DatabaseService {
               loser.title_snapshot AS loser_title,
               winner.idol_id_snapshot AS winner_idol_id,
               winner.idol_name_snapshot AS winner_idol_name,
+              winner.canonical_performance_key AS winner_canonical_performance_key,
               COALESCE(winner_current_stats.view_count, winner.view_count_snapshot) AS winner_view_count,
               loser.idol_id_snapshot AS loser_idol_id,
               loser.idol_name_snapshot AS loser_idol_name,
+              loser.canonical_performance_key AS loser_canonical_performance_key,
               COALESCE(loser_current_stats.view_count, loser.view_count_snapshot) AS loser_view_count
        FROM hololive_bracket_archive_matches m
        INNER JOIN hololive_bracket_archives a ON a.id = m.archive_id
@@ -6275,14 +6463,19 @@ export class DatabaseService {
     const talentRatingRows = new Map<string, HololiveBracketRatingStatsRow>();
     const songRatingPeriods = new Map<string, Map<string, Glicko2Match[]>>();
     const talentRatingPeriods = new Map<string, Map<string, Glicko2Match[]>>();
+    const songPressureEdgeEventsByArchive = new Map<string, Array<{ winnerId: string; loserId: string; weight: number }>>();
     const pressureEdgeEventsByArchive = new Map<string, Array<{ winnerId: string; loserId: string; weight: number }>>();
+    const strengthOfWinsSamplesBySong = new Map<string, number[]>();
+    const strengthOfLossesSamplesBySong = new Map<string, number[]>();
+    const punchingAboveSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
+    const clutchSamplesBySong = new Map<string, ShrunkWeightedSignedScoreSample[]>();
+    const upsetResilienceSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
     const strengthOfWinsSamplesByTalent = new Map<string, number[]>();
     const strengthOfLossesSamplesByTalent = new Map<string, number[]>();
     const punchingAboveSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
-    const clutchSamplesByTalent = new Map<string, boolean[]>();
+    const clutchSamplesByTalent = new Map<string, ShrunkWeightedSignedScoreSample[]>();
     const upsetResilienceSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
     const highStakesSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
-    const punchingUpSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
     const ratingArchiveOrder: string[] = [];
 
     const getRatingPeriod = (periods: Map<string, Map<string, Glicko2Match[]>>, archiveId: string) => {
@@ -6354,8 +6547,15 @@ export class DatabaseService {
       const songRatingPeriod = getRatingPeriod(songRatingPeriods, row.archive_id);
       const talentRatingPeriod = getRatingPeriod(talentRatingPeriods, row.archive_id);
 
-      const winnerSong = songStats.get(row.winner_youtube_video_id);
-      const loserSong = songStats.get(loserYoutubeVideoId);
+      const winnerSongIdentity = resolveSongIdentity(
+        row.winner_youtube_video_id,
+        row.winner_canonical_performance_key
+      );
+      const loserSongIdentity = resolveSongIdentity(loserYoutubeVideoId, row.loser_canonical_performance_key);
+      const winnerSongKey = winnerSongIdentity.canonicalPerformanceKey;
+      const loserSongKey = loserSongIdentity.canonicalPerformanceKey;
+      const winnerSong = songStats.get(winnerSongKey);
+      const loserSong = songStats.get(loserSongKey);
       const winnerTalentIdentity = getHololiveCanonicalTalentIdentity(
         row.winner_idol_id ?? winnerSong?.idolId ?? null,
         row.winner_idol_name ?? winnerSong?.idolName ?? null
@@ -6364,32 +6564,48 @@ export class DatabaseService {
         row.loser_idol_id ?? loserSong?.idolId ?? null,
         row.loser_idol_name ?? loserSong?.idolName ?? null
       );
-      const winnerViews = row.winner_view_count == null ? null : Number(row.winner_view_count);
-      const loserViews = row.loser_view_count == null ? null : Number(row.loser_view_count);
-      const isDistinctSongResult = row.winner_youtube_video_id !== loserYoutubeVideoId;
+      const winnerViews =
+        winnerSongIdentity.representative?.view_count ??
+        (row.winner_view_count == null ? null : Number(row.winner_view_count));
+      const loserViews =
+        loserSongIdentity.representative?.view_count ??
+        (row.loser_view_count == null ? null : Number(row.loser_view_count));
+      const isDistinctSongResult = winnerSongKey !== loserSongKey;
       const archiveSize = this.normalizeHololiveBracketSize(row.archive_size);
       const finalRoundIndex = Math.log2(HOLOLIVE_BRACKET_SIZE_COUNTS[archiveSize]) - 1;
       const isClutchRound = row.round_index >= Math.max(0, finalRoundIndex - 2);
-      const winnerSongRating = ensureRatingRow(
-        songRatingRows,
-        row.winner_youtube_video_id,
-        row.winner_title ?? winnerSong?.title ?? row.winner_youtube_video_id,
-        winnerTalentIdentity.name || null,
-        row.archived_at
-      );
-      const loserSongRating = ensureRatingRow(
-        songRatingRows,
-        loserYoutubeVideoId,
-        row.loser_title ?? loserSong?.title ?? loserYoutubeVideoId,
-        loserTalentIdentity.name || null,
-        row.archived_at
-      );
-      winnerSongRating.wins += 1;
-      winnerSongRating.matches += 1;
-      loserSongRating.losses += 1;
-      loserSongRating.matches += 1;
-      addRatingMatch(songRatingPeriod, row.winner_youtube_video_id, loserYoutubeVideoId, 1);
-      addRatingMatch(songRatingPeriod, loserYoutubeVideoId, row.winner_youtube_video_id, 0);
+      if (isDistinctSongResult) {
+        const winnerSongRating = ensureRatingRow(
+          songRatingRows,
+          winnerSongKey,
+          winnerSong?.title ?? row.winner_title ?? winnerSongIdentity.youtubeVideoId,
+          (winnerSong?.idolName ?? winnerTalentIdentity.name) || null,
+          row.archived_at
+        );
+        const loserSongRating = ensureRatingRow(
+          songRatingRows,
+          loserSongKey,
+          loserSong?.title ?? row.loser_title ?? loserSongIdentity.youtubeVideoId,
+          (loserSong?.idolName ?? loserTalentIdentity.name) || null,
+          row.archived_at
+        );
+        winnerSongRating.wins += 1;
+        winnerSongRating.matches += 1;
+        loserSongRating.losses += 1;
+        loserSongRating.matches += 1;
+        addRatingMatch(songRatingPeriod, winnerSongKey, loserSongKey, 1);
+        addRatingMatch(songRatingPeriod, loserSongKey, winnerSongKey, 0);
+      }
+      if (isDistinctSongResult && loserViews != null && Number.isFinite(loserViews) && loserViews > 0) {
+        const samples = strengthOfWinsSamplesBySong.get(winnerSongKey) ?? [];
+        samples.push(loserViews);
+        strengthOfWinsSamplesBySong.set(winnerSongKey, samples);
+      }
+      if (isDistinctSongResult && winnerViews != null && Number.isFinite(winnerViews) && winnerViews > 0) {
+        const samples = strengthOfLossesSamplesBySong.get(loserSongKey) ?? [];
+        samples.push(winnerViews);
+        strengthOfLossesSamplesBySong.set(loserSongKey, samples);
+      }
       if (
         winnerTalentIdentity.id &&
         isDistinctSongResult &&
@@ -6422,6 +6638,13 @@ export class DatabaseService {
         loserViews > 0 &&
         winnerViews !== loserViews
       ) {
+        const underdogSongKey = winnerViews < loserViews ? winnerSongKey : loserSongKey;
+        const songSamples = punchingAboveSamplesBySong.get(underdogSongKey) ?? [];
+        songSamples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews < loserViews
+        });
+        punchingAboveSamplesBySong.set(underdogSongKey, songSamples);
         const underdogTalentId = winnerViews < loserViews ? winnerTalentIdentity.id : loserTalentIdentity.id;
         if (underdogTalentId) {
           const samples = punchingAboveSamplesByTalent.get(underdogTalentId) ?? [];
@@ -6432,27 +6655,46 @@ export class DatabaseService {
           punchingAboveSamplesByTalent.set(underdogTalentId, samples);
         }
       }
-      if (isDistinctSongResult && isClutchRound) {
+      if (
+        isDistinctSongResult &&
+        isClutchRound
+      ) {
+        const roundWeight = clutchRoundWeight(row.round_index, finalRoundIndex);
+        const winnerSamples = clutchSamplesBySong.get(winnerSongKey) ?? [];
+        winnerSamples.push({ value: 1, weight: roundWeight });
+        clutchSamplesBySong.set(winnerSongKey, winnerSamples);
+        const loserSamples = clutchSamplesBySong.get(loserSongKey) ?? [];
+        loserSamples.push({ value: -1, weight: roundWeight });
+        clutchSamplesBySong.set(loserSongKey, loserSamples);
+        const events = songPressureEdgeEventsByArchive.get(row.archive_id) ?? [];
+        events.push({ winnerId: winnerSongKey, loserId: loserSongKey, weight: roundWeight });
+        songPressureEdgeEventsByArchive.set(row.archive_id, events);
+      }
+      if (
+        isDistinctSongResult &&
+        isClutchRound &&
+        winnerTalentIdentity.id &&
+        loserTalentIdentity.id &&
+        winnerTalentIdentity.id !== loserTalentIdentity.id
+      ) {
+        const roundWeight = clutchRoundWeight(row.round_index, finalRoundIndex);
         if (winnerTalentIdentity.id) {
           const samples = clutchSamplesByTalent.get(winnerTalentIdentity.id) ?? [];
-          samples.push(true);
+          samples.push({ value: 1, weight: roundWeight });
           clutchSamplesByTalent.set(winnerTalentIdentity.id, samples);
         }
         if (loserTalentIdentity.id) {
           const samples = clutchSamplesByTalent.get(loserTalentIdentity.id) ?? [];
-          samples.push(false);
+          samples.push({ value: -1, weight: roundWeight });
           clutchSamplesByTalent.set(loserTalentIdentity.id, samples);
         }
-        if (winnerTalentIdentity.id && loserTalentIdentity.id && winnerTalentIdentity.id !== loserTalentIdentity.id) {
-          const events = pressureEdgeEventsByArchive.get(row.archive_id) ?? [];
-          const weight = clutchRoundWeight(row.round_index, finalRoundIndex);
-          events.push({
-            winnerId: winnerTalentIdentity.id,
-            loserId: loserTalentIdentity.id,
-            weight
-          });
-          pressureEdgeEventsByArchive.set(row.archive_id, events);
-        }
+        const events = pressureEdgeEventsByArchive.get(row.archive_id) ?? [];
+        events.push({
+          winnerId: winnerTalentIdentity.id,
+          loserId: loserTalentIdentity.id,
+          weight: roundWeight
+        });
+        pressureEdgeEventsByArchive.set(row.archive_id, events);
       }
       if (
         isDistinctSongResult &&
@@ -6464,6 +6706,13 @@ export class DatabaseService {
         loserViews > 0 &&
         winnerViews !== loserViews
       ) {
+        const favoredSongKey = winnerViews > loserViews ? winnerSongKey : loserSongKey;
+        const songSamples = upsetResilienceSamplesBySong.get(favoredSongKey) ?? [];
+        songSamples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews > loserViews
+        });
+        upsetResilienceSamplesBySong.set(favoredSongKey, songSamples);
         const favoredTalentId = winnerViews > loserViews ? winnerTalentIdentity.id : loserTalentIdentity.id;
         if (favoredTalentId) {
           const samples = upsetResilienceSamplesByTalent.get(favoredTalentId) ?? [];
@@ -6483,12 +6732,12 @@ export class DatabaseService {
         winnerViews > 0 &&
         loserViews > 0
       ) {
-        const winnerSamples = highStakesSamplesBySong.get(row.winner_youtube_video_id) ?? [];
+        const winnerSamples = highStakesSamplesBySong.get(winnerSongKey) ?? [];
         winnerSamples.push({ weight: Math.log1p(loserViews), success: true });
-        highStakesSamplesBySong.set(row.winner_youtube_video_id, winnerSamples);
-        const loserSamples = highStakesSamplesBySong.get(loserYoutubeVideoId) ?? [];
+        highStakesSamplesBySong.set(winnerSongKey, winnerSamples);
+        const loserSamples = highStakesSamplesBySong.get(loserSongKey) ?? [];
         loserSamples.push({ weight: Math.log1p(winnerViews), success: false });
-        highStakesSamplesBySong.set(loserYoutubeVideoId, loserSamples);
+        highStakesSamplesBySong.set(loserSongKey, loserSamples);
       }
       if (winnerSong) {
         if (loserViews != null) {
@@ -6500,31 +6749,12 @@ export class DatabaseService {
           winnerSong.giantKillerScore += loserViews - winnerViews;
         }
 
-        if (previousSongResults.has(`${loserYoutubeVideoId}|${row.winner_youtube_video_id}`)) {
+        if (previousSongResults.has(`${loserSongKey}|${winnerSongKey}`)) {
           winnerSong.revengeWins += 1;
         }
       }
 
-      if (
-        isDistinctSongResult &&
-        winnerViews != null &&
-        loserViews != null &&
-        Number.isFinite(winnerViews) &&
-        Number.isFinite(loserViews) &&
-        winnerViews > 0 &&
-        loserViews > 0 &&
-        winnerViews !== loserViews
-      ) {
-        const underdogVideoId = winnerViews < loserViews ? row.winner_youtube_video_id : loserYoutubeVideoId;
-        const samples = punchingUpSamplesBySong.get(underdogVideoId) ?? [];
-        samples.push({
-          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
-          success: winnerViews < loserViews
-        });
-        punchingUpSamplesBySong.set(underdogVideoId, samples);
-      }
-
-      previousSongResults.add(`${row.winner_youtube_video_id}|${loserYoutubeVideoId}`);
+      previousSongResults.add(`${winnerSongKey}|${loserSongKey}`);
 
       const winnerIdolId = winnerTalentIdentity.id;
       const loserIdolId = loserTalentIdentity.id;
@@ -6608,6 +6838,32 @@ export class DatabaseService {
       }));
 
     for (const result of calculateRobustViewStrengthScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        values: strengthOfWinsSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      }))
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.strengthOfWinsScore = result.score;
+        song.strengthOfWinsCount = result.count;
+      }
+    }
+
+    for (const result of calculateRobustViewStrengthScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        values: strengthOfLossesSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      }))
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.strengthOfLossesScore = result.score;
+        song.strengthOfLossesCount = result.count;
+      }
+    }
+
+    for (const result of calculateRobustViewStrengthScores(
       [...talentStats.values()].map((talent) => ({
         id: talent.idolId,
         values: strengthOfWinsSamplesByTalent.get(talent.idolId) ?? []
@@ -6671,8 +6927,8 @@ export class DatabaseService {
 
     for (const result of calculateRobustWeightedSuccessRates(
       [...songStats.values()].map((song) => ({
-        id: song.youtubeVideoId,
-        samples: highStakesSamplesBySong.get(song.youtubeVideoId) ?? []
+        id: song.canonicalPerformanceKey,
+        samples: highStakesSamplesBySong.get(song.canonicalPerformanceKey) ?? []
       })),
       3,
       Number.POSITIVE_INFINITY
@@ -6686,11 +6942,57 @@ export class DatabaseService {
       }
     }
 
-    for (const result of calculateRobustWeightedSuccessRates(
+    for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        samples: punchingAboveSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      })),
+      "underdog"
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.punchingAboveScore = result.score;
+        song.punchingAboveWins = result.successCount;
+        song.punchingAboveOpportunities = result.count;
+      }
+    }
+
+    for (const result of calculateShrunkWeightedSignedScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        samples: clutchSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      }))
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.clutchRate = result.score;
+        song.clutchWins = result.positiveCount;
+        song.clutchLosses = result.negativeCount;
+        song.clutchMatches = result.count;
+      }
+    }
+
+    for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        samples: upsetResilienceSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      })),
+      "favorite"
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.upsetResilienceScore = result.score;
+        song.upsetResilienceChecks = result.count;
+        song.upsetResilienceUpsetLosses = result.failureCount;
+      }
+    }
+
+    for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
       [...talentStats.values()].map((talent) => ({
         id: talent.idolId,
         samples: punchingAboveSamplesByTalent.get(talent.idolId) ?? []
-      }))
+      })),
+      "underdog"
     )) {
       const talent = talentStats.get(result.id);
       if (talent) {
@@ -6699,47 +7001,33 @@ export class DatabaseService {
         talent.punchingAboveOpportunities = result.count;
       }
     }
-
-    for (const result of calculateShrunkBinaryRates(
+    for (const result of calculateShrunkWeightedSignedScores(
       [...talentStats.values()].map((talent) => ({
         id: talent.idolId,
-        values: clutchSamplesByTalent.get(talent.idolId) ?? []
+        samples: clutchSamplesByTalent.get(talent.idolId) ?? []
       }))
     )) {
       const talent = talentStats.get(result.id);
       if (talent) {
         talent.clutchRate = result.score;
-        talent.clutchWins = result.successCount;
-        talent.clutchLosses = result.failureCount;
+        talent.clutchWins = result.positiveCount;
+        talent.clutchLosses = result.negativeCount;
         talent.clutchMatches = result.count;
       }
     }
 
-    for (const result of calculateRobustWeightedSuccessRates(
+    for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
       [...talentStats.values()].map((talent) => ({
         id: talent.idolId,
         samples: upsetResilienceSamplesByTalent.get(talent.idolId) ?? []
-      }))
+      })),
+      "favorite"
     )) {
       const talent = talentStats.get(result.id);
       if (talent) {
         talent.upsetResilienceScore = result.score;
         talent.upsetResilienceChecks = result.count;
         talent.upsetResilienceUpsetLosses = result.failureCount;
-      }
-    }
-
-    for (const result of calculateRobustPositiveOpportunityScores(
-      [...songStats.values()].map((song) => ({
-        id: song.youtubeVideoId,
-        samples: punchingUpSamplesBySong.get(song.youtubeVideoId) ?? []
-      }))
-    )) {
-      const song = songStats.get(result.id);
-      if (song) {
-        song.punchingUpScore = result.score;
-        song.punchingUpWins = result.successCount;
-        song.punchingUpOpportunities = result.count;
       }
     }
 
@@ -6751,12 +7039,73 @@ export class DatabaseService {
       right.appearances - left.appearances ||
       ("title" in left ? left.title.localeCompare((right as HololiveBracketSongStats).title) : left.idolName.localeCompare((right as HololiveBracketTalentStats).idolName));
     const bySongTitle = (left: HololiveBracketSongStats, right: HololiveBracketSongStats) => left.title.localeCompare(right.title);
-    const finalsWithoutTitle = (song: HololiveBracketSongStats) => Math.max(0, song.finalistCount - song.championCount);
+    const finalsWithoutTitle = (song: HololiveBracketSongStats) => song.runnerUpCount;
     const giantKillerAverageScore = (song: HololiveBracketSongStats) => (song.upsetWins > 0 ? song.giantKillerScore / song.upsetWins : 0);
     const bigGameAverageScore = (song: HololiveBracketSongStats) => (song.bigGameWins > 0 ? song.bigGameScore / song.bigGameWins : 0);
     const rivalries = [...rivalryStats.values()];
     const finalsRivalries = [...finalsRivalryStats.values()];
     const sortedSongsByWins = [...songs].sort(byWins);
+    const sortedSongsByTitles = [...songs]
+      .filter((song) => song.championCount > 0)
+      .sort((left, right) => right.championCount - left.championCount || right.finalistCount - left.finalistCount || byWins(left, right));
+    const sortedSongsByRunnerUps = [...songs]
+      .filter((song) => song.runnerUpCount > 0)
+      .sort((left, right) => right.runnerUpCount - left.runnerUpCount || right.finalistCount - left.finalistCount || byWins(left, right));
+    const sortedSongsByDeepRuns = [...songs]
+      .filter((song) => song.top4Count > 0)
+      .sort((left, right) => right.top4Count - left.top4Count || right.championCount - left.championCount || byWins(left, right));
+    const sortedSongsByEarlyExits = [...songs]
+      .filter((song) => song.firstRoundEliminations > 0)
+      .sort(
+        (left, right) =>
+          right.firstRoundEliminations - left.firstRoundEliminations ||
+          right.appearances - left.appearances ||
+          right.losses - left.losses ||
+          bySongTitle(left, right)
+      );
+    const sortedSongsByStrengthOfWins = [...songs]
+      .filter((song) => song.strengthOfWinsScore > 0 && song.strengthOfWinsCount > 0)
+      .sort(
+        (left, right) =>
+          right.strengthOfWinsScore - left.strengthOfWinsScore ||
+          right.strengthOfWinsCount - left.strengthOfWinsCount ||
+          byWins(left, right)
+      );
+    const sortedSongsByStrengthOfLosses = [...songs]
+      .filter((song) => song.strengthOfLossesScore > 0 && song.strengthOfLossesCount > 0)
+      .sort(
+        (left, right) =>
+          right.strengthOfLossesScore - left.strengthOfLossesScore ||
+          right.strengthOfLossesCount - left.strengthOfLossesCount ||
+          byWins(left, right)
+      );
+    const sortedSongsByPunchingAbove = [...songs]
+      .filter((song) => song.punchingAboveScore > 0 && song.punchingAboveWins > 0)
+      .sort(
+        (left, right) =>
+          right.punchingAboveScore - left.punchingAboveScore ||
+          right.punchingAboveWins - left.punchingAboveWins ||
+          right.punchingAboveOpportunities - left.punchingAboveOpportunities ||
+          byWins(left, right)
+      );
+    const sortedSongsByClutchRate = [...songs]
+      .filter((song) => song.clutchMatches > 0)
+      .sort(
+        (left, right) =>
+          right.clutchRate - left.clutchRate ||
+          right.clutchWins - left.clutchWins ||
+          right.clutchMatches - left.clutchMatches ||
+          byWins(left, right)
+      );
+    const sortedSongsByUpsetResilience = [...songs]
+      .filter((song) => song.upsetResilienceChecks > 0)
+      .sort(
+        (left, right) =>
+          right.upsetResilienceScore - left.upsetResilienceScore ||
+          right.upsetResilienceChecks - left.upsetResilienceChecks ||
+          left.upsetResilienceUpsetLosses - right.upsetResilienceUpsetLosses ||
+          byWins(left, right)
+      );
     const sortedTalentsByWins = [...talents].sort(byWins);
     const sortedTalentsByTitles = [...talents]
       .filter((talent) => talent.championCount > 0)
@@ -6856,7 +7205,13 @@ export class DatabaseService {
     );
     let songRatings = new Map<string, Glicko2Rating>();
     let talentRatings = new Map<string, Glicko2Rating>();
+    const pressureEdgeSamplesBySong = new Map<string, ShrunkWeightedSignedScoreSample[]>();
     const pressureEdgeSamplesByTalent = new Map<string, ShrunkWeightedSignedScoreSample[]>();
+    const pushSongPressureEdgeSample = (songId: string, value: number, weight: number) => {
+      const samples = pressureEdgeSamplesBySong.get(songId) ?? [];
+      samples.push({ value, weight });
+      pressureEdgeSamplesBySong.set(songId, samples);
+    };
     const pushPressureEdgeSample = (talentId: string, value: number, weight: number) => {
       const samples = pressureEdgeSamplesByTalent.get(talentId) ?? [];
       samples.push({ value, weight });
@@ -6864,6 +7219,13 @@ export class DatabaseService {
     };
 
     for (const archiveId of ratingArchiveOrder) {
+      const songPressureEvents = songPressureEdgeEventsByArchive.get(archiveId) ?? [];
+      for (const event of songPressureEvents) {
+        const winnerRating = songRatings.get(event.winnerId) ?? createDefaultGlicko2Rating();
+        const loserRating = songRatings.get(event.loserId) ?? createDefaultGlicko2Rating();
+        pushSongPressureEdgeSample(event.winnerId, 1 - getGlicko2ExpectedScore(winnerRating, loserRating), event.weight);
+        pushSongPressureEdgeSample(event.loserId, 0 - getGlicko2ExpectedScore(loserRating, winnerRating), event.weight);
+      }
       const pressureEvents = pressureEdgeEventsByArchive.get(archiveId) ?? [];
       for (const event of pressureEvents) {
         const winnerRating = talentRatings.get(event.winnerId) ?? createDefaultGlicko2Rating();
@@ -6882,6 +7244,21 @@ export class DatabaseService {
       const talentPeriod = talentRatingPeriods.get(archiveId);
       if (talentPeriod && talentPeriod.size > 0) {
         talentRatings = updateGlicko2RatingPeriod(talentRatings, talentPeriod);
+      }
+    }
+
+    for (const result of calculateShrunkWeightedSignedScores(
+      [...songStats.values()].map((song) => ({
+        id: song.canonicalPerformanceKey,
+        samples: pressureEdgeSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+      }))
+    )) {
+      const song = songStats.get(result.id);
+      if (song) {
+        song.pressureEdgeScore = result.score;
+        song.pressureEdgeMatches = result.count;
+        song.pressureEdgePositiveMatches = result.positiveCount;
+        song.pressureEdgeNegativeMatches = result.negativeCount;
       }
     }
 
@@ -6908,9 +7285,27 @@ export class DatabaseService {
         talent.pressureEdgeNegativeMatches = updated.pressureEdgeNegativeMatches;
       }
     }
+    for (const song of songs) {
+      const updated = songStats.get(song.canonicalPerformanceKey);
+      if (updated) {
+        song.pressureEdgeScore = updated.pressureEdgeScore;
+        song.pressureEdgeMatches = updated.pressureEdgeMatches;
+        song.pressureEdgePositiveMatches = updated.pressureEdgePositiveMatches;
+        song.pressureEdgeNegativeMatches = updated.pressureEdgeNegativeMatches;
+      }
+    }
 
     const sortedTalentsByPressureEdge = [...talents]
       .filter((talent) => talent.pressureEdgeMatches > 0)
+      .sort(
+        (left, right) =>
+          right.pressureEdgeScore - left.pressureEdgeScore ||
+          right.pressureEdgePositiveMatches - left.pressureEdgePositiveMatches ||
+          right.pressureEdgeMatches - left.pressureEdgeMatches ||
+          byWins(left, right)
+      );
+    const sortedSongsByPressureEdge = [...songs]
+      .filter((song) => song.pressureEdgeMatches > 0)
       .sort(
         (left, right) =>
           right.pressureEdgeScore - left.pressureEdgeScore ||
@@ -6958,6 +7353,16 @@ export class DatabaseService {
       rivalryStats: sortedRivalries,
       finalsRivalryStats: sortedFinalsRivalries,
       topSongsByWins: sortedSongsByWins.slice(0, 10),
+      topSongsByTitles: sortedSongsByTitles.slice(0, 10),
+      topSongsByRunnerUps: sortedSongsByRunnerUps.slice(0, 10),
+      topSongsByDeepRuns: sortedSongsByDeepRuns.slice(0, 10),
+      topSongsByEarlyExits: sortedSongsByEarlyExits.slice(0, 10),
+      topSongsByStrengthOfWins: sortedSongsByStrengthOfWins.slice(0, 10),
+      topSongsByStrengthOfLosses: sortedSongsByStrengthOfLosses.slice(0, 10),
+      topSongsByClutchRate: sortedSongsByClutchRate.slice(0, 10),
+      topSongsByPressureEdge: sortedSongsByPressureEdge.slice(0, 10),
+      topSongsByPunchingAbove: sortedSongsByPunchingAbove.slice(0, 10),
+      topSongsByUpsetResilience: sortedSongsByUpsetResilience.slice(0, 10),
       topSongsByWinRate: [...songs]
         .filter((song) => song.wins + song.losses > 0)
         .sort((left, right) => right.winRate - left.winRate || right.wins - left.wins || right.appearances - left.appearances)
@@ -7038,18 +7443,6 @@ export class DatabaseService {
             right.highStakesPerformanceWins - left.highStakesPerformanceWins ||
             right.highStakesPerformanceMatches - left.highStakesPerformanceMatches ||
             right.bigGameScore - left.bigGameScore ||
-            bySongTitle(left, right)
-        )
-        .slice(0, 10),
-      topSongsByPunchingUpScore: [...songs]
-        .filter((song) => song.punchingUpScore > 0 && song.punchingUpWins > 0)
-        .sort(
-          (left, right) =>
-            right.punchingUpScore - left.punchingUpScore ||
-            right.punchingUpWins - left.punchingUpWins ||
-            right.punchingUpOpportunities - left.punchingUpOpportunities ||
-            right.giantKillerScore - left.giantKillerScore ||
-            right.wins - left.wins ||
             bySongTitle(left, right)
         )
         .slice(0, 10),
@@ -9243,6 +9636,66 @@ export class DatabaseService {
     }
   }
 
+  private hasHololiveMusicPersonalReferences(row: {
+    youtube_video_id: string;
+    item_id: string;
+    canonical_performance_key: string | null;
+  }): boolean {
+    const count = (sql: string, params: unknown[] = []) =>
+      Number(this.select<{ count: number }>(sql, params)[0]?.count ?? 0);
+    const videoId = row.youtube_video_id;
+    const markerKeys = [`video:${videoId}`, row.canonical_performance_key?.trim() ?? ""].filter(Boolean);
+
+    if (
+      markerKeys.length > 0 &&
+      count(
+        `SELECT COUNT(*) AS count
+         FROM hololive_music_marker_keys
+         WHERE marker_key IN (${markerKeys.map(() => "?").join(", ")})`,
+        markerKeys
+      ) > 0
+    ) {
+      return true;
+    }
+
+    const videoReferenceQueries: Array<[string, unknown[]]> = [
+      ["SELECT COUNT(*) AS count FROM hololive_music_exclusions WHERE youtube_video_id = ?", [videoId]],
+      ["SELECT COUNT(*) AS count FROM hololive_music_playlist_items WHERE youtube_video_id = ?", [videoId]],
+      ["SELECT COUNT(*) AS count FROM hololive_music_queue_items WHERE youtube_video_id = ?", [videoId]],
+      ["SELECT COUNT(*) AS count FROM hololive_music_player_state WHERE current_youtube_video_id = ?", [videoId]],
+      ["SELECT COUNT(*) AS count FROM hololive_bracket_entries WHERE youtube_video_id = ?", [videoId]],
+      ["SELECT COUNT(*) AS count FROM hololive_bracket_archive_entries WHERE youtube_video_id = ?", [videoId]],
+      [
+        `SELECT COUNT(*) AS count
+         FROM hololive_bracket_archive_matches
+         WHERE entry_a_youtube_video_id = ?
+            OR entry_b_youtube_video_id = ?
+            OR winner_youtube_video_id = ?
+            OR loser_youtube_video_id = ?`,
+        [videoId, videoId, videoId, videoId]
+      ]
+    ];
+    if (videoReferenceQueries.some(([sql, params]) => count(sql, params) > 0)) {
+      return true;
+    }
+
+    return (
+      count(
+        `SELECT COUNT(*) AS count
+         FROM tracked_entries
+         WHERE item_id = ?
+           AND (
+             status != 'planned'
+             OR rating IS NOT NULL
+             OR NULLIF(TRIM(COALESCE(notes, '')), '') IS NOT NULL
+             OR started_at IS NOT NULL
+             OR completed_at IS NOT NULL
+           )`,
+        [row.item_id]
+      ) > 0 || count("SELECT COUNT(*) AS count FROM list_items WHERE item_id = ?", [row.item_id]) > 0
+    );
+  }
+
   private purgeRejectedHolodexMusicRows(): void {
     if (!this.tableExists("hololive_music_videos")) {
       return;
@@ -9250,6 +9703,8 @@ export class DatabaseService {
 
     const rows = this.select<{
       youtube_video_id: string;
+      item_id: string;
+      canonical_performance_key: string | null;
       youtube_url: string;
       title: string;
       status: string;
@@ -9268,6 +9723,8 @@ export class DatabaseService {
       song_names_json: string | null;
     }>(
       `SELECT v.youtube_video_id,
+              v.item_id,
+              v.canonical_performance_key,
               v.youtube_url,
               v.title,
               v.status,
@@ -9291,7 +9748,7 @@ export class DatabaseService {
     );
     const channelContext = this.getHololiveChannelContext();
     const idolMetadata = this.getHololiveIdolMetadataMap();
-    const rejectedIds = rows
+    const rejectedRows = rows
       .filter((row) => {
         const catalogRow: HolodexCatalogRow = {
           youtubeVideoId: row.youtube_video_id,
@@ -9318,19 +9775,48 @@ export class DatabaseService {
         };
         return Boolean(getRowCleanupReason(catalogRow, {}, { [row.youtube_video_id]: detail })) ||
           this.shouldRejectExternalOriginalSourceRow(catalogRow, detail, channelContext, idolMetadata);
-      })
-      .map((row) => row.youtube_video_id);
+      });
+    const rejectedIds = rejectedRows.map((row) => row.youtube_video_id);
+    const hasOrphanStats =
+      this.tableExists("hololive_music_video_stats") &&
+      this.scalarCount(
+        `SELECT COUNT(*)
+         FROM hololive_music_video_stats stats
+         WHERE NOT EXISTS (
+           SELECT 1
+           FROM hololive_music_videos videos
+           WHERE videos.youtube_video_id = stats.youtube_video_id
+         )`
+      ) > 0;
 
-    if (rejectedIds.length === 0) {
+    if (rejectedIds.length === 0 && !hasOrphanStats) {
       return;
     }
 
-    this.transaction(() => {
+    const purgeRows = () => {
       const currentState = this.ensureHololiveMusicPlayerState();
-      for (const youtubeVideoId of rejectedIds) {
-        this.run("DELETE FROM hololive_music_playlist_items WHERE youtube_video_id = ?", [youtubeVideoId]);
-        this.run("DELETE FROM hololive_music_queue_items WHERE youtube_video_id = ?", [youtubeVideoId]);
-        this.deleteHololiveMusicVideoData(youtubeVideoId);
+      for (const row of rejectedRows) {
+        if (this.hasHololiveMusicPersonalReferences(row)) {
+          this.run(
+            `UPDATE hololive_music_videos
+             SET official_catalog_active = 0,
+                 updated_at = ?
+             WHERE youtube_video_id = ?`,
+            [new Date().toISOString(), row.youtube_video_id]
+          );
+        } else {
+          this.deleteHololiveMusicVideoData(row.youtube_video_id, { deleteStats: true });
+        }
+      }
+      if (hasOrphanStats) {
+        this.run(
+          `DELETE FROM hololive_music_video_stats
+           WHERE NOT EXISTS (
+             SELECT 1
+             FROM hololive_music_videos
+             WHERE hololive_music_videos.youtube_video_id = hololive_music_video_stats.youtube_video_id
+           )`
+        );
       }
 
       if (currentState.currentYoutubeVideoId && rejectedIds.includes(currentState.currentYoutubeVideoId)) {
@@ -9342,7 +9828,13 @@ export class DatabaseService {
           currentYoutubeVideoId: null
         });
       }
-    });
+    };
+
+    if (this.inTransaction) {
+      purgeRows();
+    } else {
+      this.transaction(purgeRows);
+    }
   }
 
   private deleteHololiveMusicVideoData(
@@ -9890,8 +10382,8 @@ export class DatabaseService {
            (youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id, channel_id, channel_name,
             published_at, duration_seconds, song_name, original_channel_id, provided_to_youtube,
             participants_json, participant_idol_ids_json, canonical_song_key, canonical_performance_key,
-            owned_idol_ids_json, featured_idol_ids_json, source_kind, source_run_id, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            owned_idol_ids_json, featured_idol_ids_json, source_kind, official_catalog_active, source_run_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
          ON CONFLICT(youtube_video_id) DO UPDATE SET
            item_id = excluded.item_id,
            idol_id = excluded.idol_id,
@@ -9913,6 +10405,7 @@ export class DatabaseService {
            owned_idol_ids_json = excluded.owned_idol_ids_json,
            featured_idol_ids_json = excluded.featured_idol_ids_json,
            source_kind = excluded.source_kind,
+           official_catalog_active = 1,
            source_run_id = excluded.source_run_id,
            updated_at = excluded.updated_at
          WHERE hololive_music_videos.source_kind != 'user'`,
@@ -10278,6 +10771,137 @@ export class DatabaseService {
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
+  }
+
+  private purgeSupersededDirectUploadRows(runId: string): number {
+    const rows = this.select<{
+      youtube_video_id: string;
+      title: string;
+      song_name: string | null;
+      topic_id: HololiveMusicTopic;
+      canonical_song_key: string;
+      channel_id: string | null;
+      owned_idol_ids_json: string;
+      provided_to_youtube: number;
+      duration_seconds: number | null;
+      view_count: number | null;
+      published_at: string | null;
+      song_names_json: string | null;
+    }>(
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key,
+              v.channel_id, v.owned_idol_ids_json, v.provided_to_youtube, v.duration_seconds, stats.view_count,
+              v.published_at, details.song_names_json
+       FROM hololive_music_videos v
+       LEFT JOIN hololive_music_video_stats stats
+         ON stats.youtube_video_id = v.youtube_video_id
+       LEFT JOIN hololive_music_detail_cache details
+         ON details.youtube_video_id = v.youtube_video_id
+       WHERE v.provided_to_youtube = 0
+         AND COALESCE(v.source_kind, 'official') != 'user'
+       ORDER BY v.topic_id, v.channel_id, v.published_at, v.youtube_video_id`
+    );
+    if (rows.length < 2) {
+      return 0;
+    }
+
+    const hasStructuredSongName = (row: (typeof rows)[number]) =>
+      Boolean(row.song_name?.trim()) || this.parseJsonStringArray(row.song_names_json).length > 0;
+    const ownerKey = (row: (typeof rows)[number]) => {
+      const idolIds = this.parseJsonStringArray(row.owned_idol_ids_json).sort();
+      return idolIds.length > 0 ? idolIds.join("+") : row.channel_id?.trim() ?? "";
+    };
+    const groupKey = (row: (typeof rows)[number], songKey: string) =>
+      JSON.stringify([row.topic_id, row.channel_id?.trim() ?? "", ownerKey(row), songKey]);
+    const structuredRowsByKey = new Map<string, typeof rows>();
+
+    for (const row of rows) {
+      if (!hasStructuredSongName(row)) {
+        continue;
+      }
+      const songKey = this.buildHololiveDirectDuplicateKey(row.canonical_song_key);
+      if (!songKey || !row.channel_id?.trim() || !ownerKey(row)) {
+        continue;
+      }
+      const key = groupKey(row, songKey);
+      structuredRowsByKey.set(key, [...(structuredRowsByKey.get(key) ?? []), row]);
+    }
+
+    const removals: HolodexDuplicateRemoval[] = [];
+    for (const staleRow of rows) {
+      if (hasStructuredSongName(staleRow) || !staleRow.channel_id?.trim() || !ownerKey(staleRow)) {
+        continue;
+      }
+      const quotedSongKey = this.getHololiveQuotedDuplicateKey(staleRow.title);
+      if (!quotedSongKey) {
+        continue;
+      }
+
+      const candidates = structuredRowsByKey.get(groupKey(staleRow, quotedSongKey)) ?? [];
+      const eligibleCandidates = candidates.filter((candidate) => {
+        const stalePublishedAt = Date.parse(staleRow.published_at ?? "");
+        const candidatePublishedAt = Date.parse(candidate.published_at ?? "");
+        if (!Number.isFinite(stalePublishedAt) || !Number.isFinite(candidatePublishedAt) || candidatePublishedAt <= stalePublishedAt) {
+          return false;
+        }
+
+        const staleDuration = staleRow.duration_seconds ?? 0;
+        const candidateDuration = candidate.duration_seconds ?? 0;
+        const substantiallyLonger =
+          staleDuration > 0 && candidateDuration > 0 && candidateDuration >= staleDuration * 1.15;
+        const staleViews = staleRow.view_count ?? 0;
+        const candidateViews = candidate.view_count ?? 0;
+        const materiallyMoreViewed = staleViews > 0 && candidateViews >= staleViews * 1.5;
+        if (!substantiallyLonger && !materiallyMoreViewed) {
+          return false;
+        }
+        if (staleViews > 0 && candidateViews > 0 && candidateViews <= staleViews) {
+          return false;
+        }
+
+        return this.compareHololiveMusicDisplayRow(candidate, staleRow) > 0;
+      });
+      const keptRow = [...eligibleCandidates].sort((left, right) =>
+        this.compareHololiveMusicDisplayRow(right, left)
+      )[0];
+      if (!keptRow) {
+        continue;
+      }
+
+      removals.push({
+        removedYoutubeVideoId: staleRow.youtube_video_id,
+        removedTitle: staleRow.title,
+        keptYoutubeVideoId: keptRow.youtube_video_id,
+        keptTitle: keptRow.title,
+        reason: "superseded_direct_upload",
+        songName: keptRow.song_name || keptRow.title,
+        removedPublishedAt: staleRow.published_at || "",
+        keptPublishedAt: keptRow.published_at || ""
+      });
+    }
+
+    if (removals.length === 0) {
+      return 0;
+    }
+    for (const removal of removals) {
+      this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+    }
+    this.upsertHolodexDuplicateRemovals(removals, runId);
+    return removals.length;
+  }
+
+  private buildHololiveDirectDuplicateKey(value: string | null | undefined): string {
+    const key = buildNormalizedHololiveMusicKey(value ?? "");
+    if (!key || /[a-z]/iu.test(key) || !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(key)) {
+      return key;
+    }
+    return key.replace(/\s+/gu, "");
+  }
+
+  private getHololiveQuotedDuplicateKey(title: string): string {
+    const match = /["'\u201c\u2018\u300e\u300c](.{2,80}?)["'\u201d\u2019\u300f\u300d]/u.exec(
+      normalizeHololiveMusicText(title)
+    );
+    return match ? this.buildHololiveDirectDuplicateKey(match[1]) : "";
   }
 
   private transferHololiveMusicReferencesFromDuplicateRemovals(runId: string): void {
@@ -10678,7 +11302,8 @@ export class DatabaseService {
       !existingColumns.has("canonical_performance_key") ||
       !existingColumns.has("owned_idol_ids_json") ||
       !existingColumns.has("featured_idol_ids_json") ||
-      !existingColumns.has("source_kind");
+      !existingColumns.has("source_kind") ||
+      !existingColumns.has("official_catalog_active");
 
     if (!needsRewrite) {
       this.deleteExcludedHolodexChannelData();
@@ -10708,6 +11333,7 @@ export class DatabaseService {
       owned_idol_ids_json: string | null;
       featured_idol_ids_json: string | null;
       source_kind: HololiveMusicSourceKind | null;
+      official_catalog_active: number | null;
       source_run_id: string | null;
       updated_at: string;
     }>(
@@ -10732,6 +11358,7 @@ export class DatabaseService {
          ${selectExpression("owned_idol_ids_json", "'[]'")},
          ${selectExpression("featured_idol_ids_json", "'[]'")},
          ${selectExpression("source_kind", "'official'")},
+         ${selectExpression("official_catalog_active", "1")},
          ${selectExpression("source_run_id", "NULL")},
          ${selectExpression("updated_at", "''")}
        FROM hololive_music_videos`
@@ -10763,6 +11390,7 @@ export class DatabaseService {
           owned_idol_ids_json TEXT NOT NULL DEFAULT '[]',
           featured_idol_ids_json TEXT NOT NULL DEFAULT '[]',
           source_kind TEXT NOT NULL DEFAULT 'official' CHECK(source_kind IN ('official', 'user')),
+          official_catalog_active INTEGER NOT NULL DEFAULT 1 CHECK(official_catalog_active IN (0, 1)),
           source_run_id TEXT REFERENCES hololive_music_refresh_runs(id),
           updated_at TEXT NOT NULL
         )`
@@ -10789,8 +11417,8 @@ export class DatabaseService {
            (youtube_video_id, item_id, idol_id, youtube_url, title, status, topic_id, channel_id, channel_name,
               published_at, duration_seconds, song_name, original_channel_id, provided_to_youtube,
               participants_json, participant_idol_ids_json, canonical_song_key, canonical_performance_key,
-              owned_idol_ids_json, featured_idol_ids_json, source_kind, source_run_id, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              owned_idol_ids_json, featured_idol_ids_json, source_kind, official_catalog_active, source_run_id, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             row.youtube_video_id,
             row.item_id,
@@ -10813,6 +11441,7 @@ export class DatabaseService {
             row.owned_idol_ids_json || "[]",
             row.featured_idol_ids_json || "[]",
             row.source_kind === "user" ? "user" : "official",
+            row.official_catalog_active === 0 ? 0 : 1,
             row.source_run_id || null,
             row.updated_at || now
           ]
@@ -10827,6 +11456,9 @@ export class DatabaseService {
       this.run("CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_channel ON hololive_music_videos(channel_id)");
       this.run("CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_song ON hololive_music_videos(song_name)");
       this.run("CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_source_kind ON hololive_music_videos(source_kind)");
+      this.run(
+        "CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_catalog_active ON hololive_music_videos(official_catalog_active, source_kind)"
+      );
       this.run("CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_canonical_song ON hololive_music_videos(canonical_song_key)");
       this.run(
         "CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_canonical_performance ON hololive_music_videos(canonical_performance_key)"

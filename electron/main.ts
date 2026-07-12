@@ -45,6 +45,19 @@ function resolveWindowIcon(): string {
   return app.isPackaged ? path.join(process.resourcesPath, "ico.ico") : path.join(process.cwd(), "ico.ico");
 }
 
+function readBundledReleaseNotes(): string {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8")) as {
+      build?: { releaseInfo?: { releaseNotes?: unknown } };
+    };
+    return typeof packageJson.build?.releaseInfo?.releaseNotes === "string"
+      ? packageJson.build.releaseInfo.releaseNotes.trim()
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 function resolveRendererRoot(): string {
   return app.isPackaged ? path.join(__dirname, "../../dist") : path.join(process.cwd(), "dist");
 }
@@ -371,7 +384,20 @@ async function createMainWindow(): Promise<void> {
   const fetchScheduler = new FetchScheduler(database, createSourceAdapters());
   const holodexMusicService = new HolodexMusicService(database);
   const youtubeVideoStatsService = new YouTubeVideoStatsService(database);
-  const updateService = new UpdateService({ isPackaged: app.isPackaged });
+  const updateService = new UpdateService({
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion(),
+    releaseStatePath: path.join(paths.dataDirectory, "pending-installed-update.json"),
+    startupInstalledRelease:
+      app.isPackaged && process.argv.includes("--updated")
+        ? {
+            version: app.getVersion(),
+            releaseName: `Holoshelf ${app.getVersion()}`,
+            releaseDate: null,
+            releaseNotes: readBundledReleaseNotes()
+          }
+        : null
+  });
   installIpcHandlers({
     appName: "Holoshelf",
     dataDirectory: paths.dataDirectory,

@@ -69,6 +69,13 @@ export interface UpdateStatus {
   updatedAt: string;
 }
 
+export interface InstalledUpdateRelease {
+  version: string;
+  releaseName: string | null;
+  releaseDate: string | null;
+  releaseNotes: string;
+}
+
 export interface ImageSaveRequest {
   defaultFileName: string;
   dataUrl: string;
@@ -515,6 +522,14 @@ export interface IpcChannelMap {
   "updates:install": {
     request: null;
     response: UpdateStatus;
+  };
+  "updates:installed-release": {
+    request: null;
+    response: InstalledUpdateRelease | null;
+  };
+  "updates:installed-release:dismiss": {
+    request: null;
+    response: { dismissed: boolean };
   };
   "app:save-image": {
     request: ImageSaveRequest;

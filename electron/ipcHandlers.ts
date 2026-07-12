@@ -604,6 +604,10 @@ export function installIpcHandlers(context: IpcContext): void {
 
   handle("updates:install", async () => context.updateService.restartToInstall());
 
+  handle("updates:installed-release", async () => context.updateService.getInstalledRelease());
+
+  handle("updates:installed-release:dismiss", async () => context.updateService.dismissInstalledRelease());
+
   handle("app:save-image", async (_event, payload) => {
     const input = imageSaveSchema.parse(payload);
     const safeFileName = safePngFileName(input.defaultFileName);

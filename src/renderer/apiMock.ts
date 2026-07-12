@@ -31,7 +31,7 @@ import type {
   SourceHealth
 } from "../shared/contracts";
 import {
-  calculateRobustPositiveOpportunityScores,
+  calculateConfidenceAdjustedExpectedPerformanceScores,
   calculateRobustViewStrengthScores,
   calculateRobustWeightedSuccessRates,
   calculateShrunkBinaryRates,
@@ -39,8 +39,23 @@ import {
   type RobustWeightedRateSample,
   type ShrunkWeightedSignedScoreSample
 } from "../shared/bracketStatsMath";
+import {
+  createDefaultGlicko2Rating,
+  getConservativeGlicko2Rating,
+  getGlicko2ExpectedScore,
+  updateGlicko2RatingPeriod,
+  type Glicko2Match,
+  type Glicko2Rating
+} from "../shared/glicko2";
 import { hololiveBracketRoundLabel } from "../shared/hololiveBracketLabels";
-import type { HololiveUndoKind, HoloshelfBridge, IpcChannel, IpcChannelMap, UpdateStatus } from "../shared/ipc";
+import type {
+  HololiveUndoKind,
+  HoloshelfBridge,
+  InstalledUpdateRelease,
+  IpcChannel,
+  IpcChannelMap,
+  UpdateStatus
+} from "../shared/ipc";
 
 const now = new Date().toISOString();
 const mockSettings: Record<string, string> = {};
@@ -53,6 +68,16 @@ let mockUpdateStatus: UpdateStatus = {
   error: null,
   updatedAt: now
 };
+let mockInstalledUpdateRelease: InstalledUpdateRelease | null =
+  new URLSearchParams(window.location.search).get("updatePreview") === "1"
+    ? {
+        version: "1.1.7",
+        releaseName: "Holoshelf 1.1.7",
+        releaseDate: "2026-07-11T18:00:00.000Z",
+        releaseNotes:
+          "- Official song removals now carry into installed libraries\n- Duplicate and unavailable songs are cleaned up safely\n- Playlists, ratings, brackets, and custom imports remain protected\n- Update notes now appear after installation"
+      }
+    : null;
 const mockHololiveMusicMarkers: Record<string, IpcChannelMap["hololive:music-marker:set"]["response"]> = {};
 const mockHololiveMusicExclusions: Record<string, IpcChannelMap["hololive:music:exclude"]["response"]["data"]> = {};
 const mockFavoritePositions: Record<string, number> = {};
@@ -1413,6 +1438,11 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   const archives = listMockHololiveBracketArchiveSummaries();
   const archivedBrackets = [...mockHololiveBracketArchives.values()].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   const currentViewCountsByVideoId = new Map(mockHololiveMusicRows.map((row) => [row.youtubeVideoId, row.viewCount ?? null]));
+  const currentRowsByCanonicalKey = new Map(
+    mockHololiveMusicRows.map((row) => [row.canonicalPerformanceKey?.trim() || row.youtubeVideoId, row])
+  );
+  const canonicalSongKeyFor = (entry: HololiveBracketEntry) => entry.canonicalPerformanceKey?.trim() || entry.youtubeVideoId;
+  const representativeSongFor = (entry: HololiveBracketEntry) => currentRowsByCanonicalKey.get(canonicalSongKeyFor(entry)) ?? null;
   const currentViewCountFor = (youtubeVideoId: string, snapshotViewCount: number | null | undefined) => {
     const currentViewCount = currentViewCountsByVideoId.get(youtubeVideoId);
     return currentViewCount ?? snapshotViewCount ?? null;
@@ -1428,17 +1458,39 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   const strengthOfWinsSamplesByTalent = new Map<string, number[]>();
   const strengthOfLossesSamplesByTalent = new Map<string, number[]>();
   const punchingAboveSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
-  const clutchSamplesByTalent = new Map<string, boolean[]>();
+  const clutchSamplesByTalent = new Map<string, ShrunkWeightedSignedScoreSample[]>();
   const pressureEdgeSamplesByTalent = new Map<string, ShrunkWeightedSignedScoreSample[]>();
   const upsetResilienceSamplesByTalent = new Map<string, RobustWeightedRateSample[]>();
   const highStakesSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
-  const punchingUpSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
+  const strengthOfWinsSamplesBySong = new Map<string, number[]>();
+  const strengthOfLossesSamplesBySong = new Map<string, number[]>();
+  const punchingAboveSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
+  const clutchSamplesBySong = new Map<string, ShrunkWeightedSignedScoreSample[]>();
+  const pressureEdgeSamplesBySong = new Map<string, ShrunkWeightedSignedScoreSample[]>();
+  const upsetResilienceSamplesBySong = new Map<string, RobustWeightedRateSample[]>();
+  let songRatings = new Map<string, Glicko2Rating>();
+  let talentRatings = new Map<string, Glicko2Rating>();
 
   for (const bracket of archivedBrackets) {
     const matches = bracket.rounds.flatMap((round) => round.matches);
     const finalRoundIndex = Math.max(0, ...matches.map((match) => match.roundIndex));
     const finalMatch = matches.find((match) => match.roundIndex === finalRoundIndex && match.matchIndex === 0);
     const finalistIds = new Set([finalMatch?.entryA?.id, finalMatch?.entryB?.id].filter((id): id is string => Boolean(id)));
+    const seenSongAppearances = new Set<string>();
+    const seenSongChampions = new Set<string>();
+    const seenSongFinalists = new Set<string>();
+    const seenSongRunnerUps = new Set<string>();
+    const seenSongTop4 = new Set<string>();
+    const seenSongTop8 = new Set<string>();
+    const seenSongTop16 = new Set<string>();
+    const seenSongEarlyExits = new Set<string>();
+    const songRatingPeriod = new Map<string, Glicko2Match[]>();
+    const talentRatingPeriod = new Map<string, Glicko2Match[]>();
+    const addRatingMatch = (period: Map<string, Glicko2Match[]>, playerId: string, opponentId: string, score: 0 | 1) => {
+      const matches = period.get(playerId) ?? [];
+      matches.push({ opponentId, score });
+      period.set(playerId, matches);
+    };
 
     for (const entry of bracket.entries) {
       const participatedMatches = matches.filter((match) => match.entryA?.id === entry.id || match.entryB?.id === entry.id);
@@ -1453,20 +1505,24 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       const isRunnerUp = isFinalist && !isChampion ? 1 : 0;
       const earlyExit = loss && loss.roundIndex === 0 ? 1 : 0;
 
+      const canonicalPerformanceKey = canonicalSongKeyFor(entry);
+      const representative = representativeSongFor(entry);
       const song =
-        songStats.get(entry.youtubeVideoId) ??
+        songStats.get(canonicalPerformanceKey) ??
         ({
-          youtubeVideoId: entry.youtubeVideoId,
-          title: entry.title,
-          topicId: entry.topicId,
-          idolId: entry.idolId,
-          idolName: entry.idolName,
+          canonicalPerformanceKey,
+          youtubeVideoId: representative?.youtubeVideoId ?? entry.youtubeVideoId,
+          title: representative?.songName?.trim() || representative?.title || entry.title,
+          topicId: representative?.topicId ?? entry.topicId,
+          idolId: representative?.idolId ?? entry.idolId,
+          idolName: representative?.participants.find((participant) => participant.idolId === representative.idolId)?.idolName ?? entry.idolName,
           appearances: 0,
           wins: 0,
           losses: 0,
           winRate: 0,
           championCount: 0,
           finalistCount: 0,
+          runnerUpCount: 0,
           top4Count: 0,
           top8Count: 0,
           top16Count: 0,
@@ -1480,22 +1536,62 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           highStakesPerformanceWins: 0,
           highStakesPerformanceLosses: 0,
           highStakesPerformanceMatches: 0,
-          punchingUpScore: 0,
-          punchingUpWins: 0,
-          punchingUpOpportunities: 0,
+          strengthOfWinsScore: 0,
+          strengthOfWinsCount: 0,
+          strengthOfLossesScore: 0,
+          strengthOfLossesCount: 0,
+          punchingAboveScore: 0,
+          punchingAboveWins: 0,
+          punchingAboveOpportunities: 0,
+          clutchRate: 0,
+          clutchWins: 0,
+          clutchLosses: 0,
+          clutchMatches: 0,
+          pressureEdgeScore: 0,
+          pressureEdgeMatches: 0,
+          pressureEdgePositiveMatches: 0,
+          pressureEdgeNegativeMatches: 0,
+          upsetResilienceScore: 0,
+          upsetResilienceChecks: 0,
+          upsetResilienceUpsetLosses: 0,
           lastArchivedAt: bracket.updatedAt
         } satisfies HololiveBracketStatsOverview["topSongsByWins"][number]);
-      song.appearances += 1;
+      if (!seenSongAppearances.has(canonicalPerformanceKey)) {
+        song.appearances += 1;
+        seenSongAppearances.add(canonicalPerformanceKey);
+      }
       song.wins += wins;
       song.losses += loss ? 1 : 0;
-      song.championCount += isChampion;
-      song.finalistCount += isFinalist;
-      song.top4Count += topRound >= top4Round ? 1 : 0;
-      song.top8Count += topRound >= top8Round ? 1 : 0;
-      song.top16Count += topRound >= top16Round ? 1 : 0;
-      song.firstRoundEliminations += loss?.roundIndex === 0 ? 1 : 0;
+      if (isChampion && !seenSongChampions.has(canonicalPerformanceKey)) {
+        song.championCount += 1;
+        seenSongChampions.add(canonicalPerformanceKey);
+      }
+      if (isFinalist && !seenSongFinalists.has(canonicalPerformanceKey)) {
+        song.finalistCount += 1;
+        seenSongFinalists.add(canonicalPerformanceKey);
+      }
+      if (isRunnerUp && !seenSongRunnerUps.has(canonicalPerformanceKey)) {
+        song.runnerUpCount += 1;
+        seenSongRunnerUps.add(canonicalPerformanceKey);
+      }
+      if (topRound >= top4Round && !seenSongTop4.has(canonicalPerformanceKey)) {
+        song.top4Count += 1;
+        seenSongTop4.add(canonicalPerformanceKey);
+      }
+      if (topRound >= top8Round && !seenSongTop8.has(canonicalPerformanceKey)) {
+        song.top8Count += 1;
+        seenSongTop8.add(canonicalPerformanceKey);
+      }
+      if (topRound >= top16Round && !seenSongTop16.has(canonicalPerformanceKey)) {
+        song.top16Count += 1;
+        seenSongTop16.add(canonicalPerformanceKey);
+      }
+      if (loss?.roundIndex === 0 && !seenSongEarlyExits.has(canonicalPerformanceKey)) {
+        song.firstRoundEliminations += 1;
+        seenSongEarlyExits.add(canonicalPerformanceKey);
+      }
       song.winRate = song.wins + song.losses > 0 ? song.wins / (song.wins + song.losses) : 0;
-      songStats.set(entry.youtubeVideoId, song);
+      songStats.set(canonicalPerformanceKey, song);
 
       const talent =
         talentStats.get(entry.idolId) ??
@@ -1575,17 +1671,40 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         continue;
       }
 
-      const winnerSong = songStats.get(winner.youtubeVideoId);
-      const loserViews = currentViewCountFor(loser.youtubeVideoId, loser.viewCount);
-      const winnerViews = currentViewCountFor(winner.youtubeVideoId, winner.viewCount);
-      const isDistinctSongResult = winner.youtubeVideoId !== loser.youtubeVideoId;
+      const winnerSongKey = canonicalSongKeyFor(winner);
+      const loserSongKey = canonicalSongKeyFor(loser);
+      const winnerSong = songStats.get(winnerSongKey);
+      const loserViews = representativeSongFor(loser)?.viewCount ?? currentViewCountFor(loser.youtubeVideoId, loser.viewCount);
+      const winnerViews = representativeSongFor(winner)?.viewCount ?? currentViewCountFor(winner.youtubeVideoId, winner.viewCount);
+      const isDistinctSongResult = winnerSongKey !== loserSongKey;
       const isClutchRound = match.roundIndex >= Math.max(0, finalRoundIndex - 2);
+      if (isDistinctSongResult) {
+        if (isClutchRound) {
+          const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
+          const winnerRating = songRatings.get(winnerSongKey) ?? createDefaultGlicko2Rating();
+          const loserRating = songRatings.get(loserSongKey) ?? createDefaultGlicko2Rating();
+          const winnerPressure = pressureEdgeSamplesBySong.get(winnerSongKey) ?? [];
+          winnerPressure.push({ value: 1 - getGlicko2ExpectedScore(winnerRating, loserRating), weight: roundWeight });
+          pressureEdgeSamplesBySong.set(winnerSongKey, winnerPressure);
+          const loserPressure = pressureEdgeSamplesBySong.get(loserSongKey) ?? [];
+          loserPressure.push({ value: -getGlicko2ExpectedScore(loserRating, winnerRating), weight: roundWeight });
+          pressureEdgeSamplesBySong.set(loserSongKey, loserPressure);
+        }
+        addRatingMatch(songRatingPeriod, winnerSongKey, loserSongKey, 1);
+        addRatingMatch(songRatingPeriod, loserSongKey, winnerSongKey, 0);
+      }
       if (isDistinctSongResult && loserViews != null && Number.isFinite(loserViews) && loserViews > 0) {
+        const songSamples = strengthOfWinsSamplesBySong.get(winnerSongKey) ?? [];
+        songSamples.push(loserViews);
+        strengthOfWinsSamplesBySong.set(winnerSongKey, songSamples);
         const samples = strengthOfWinsSamplesByTalent.get(winner.idolId) ?? [];
         samples.push(loserViews);
         strengthOfWinsSamplesByTalent.set(winner.idolId, samples);
       }
       if (isDistinctSongResult && winnerViews != null && Number.isFinite(winnerViews) && winnerViews > 0) {
+        const songSamples = strengthOfLossesSamplesBySong.get(loserSongKey) ?? [];
+        songSamples.push(winnerViews);
+        strengthOfLossesSamplesBySong.set(loserSongKey, songSamples);
         const samples = strengthOfLossesSamplesByTalent.get(loser.idolId) ?? [];
         samples.push(winnerViews);
         strengthOfLossesSamplesByTalent.set(loser.idolId, samples);
@@ -1601,6 +1720,13 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         winnerViews !== loserViews
       ) {
         const underdogTalentId = winnerViews < loserViews ? winner.idolId : loser.idolId;
+        const underdogSongKey = winnerViews < loserViews ? winnerSongKey : loserSongKey;
+        const songSamples = punchingAboveSamplesBySong.get(underdogSongKey) ?? [];
+        songSamples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews < loserViews
+        });
+        punchingAboveSamplesBySong.set(underdogSongKey, songSamples);
         const samples = punchingAboveSamplesByTalent.get(underdogTalentId) ?? [];
         samples.push({
           weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
@@ -1608,22 +1734,23 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         });
         punchingAboveSamplesByTalent.set(underdogTalentId, samples);
       }
-      if (isDistinctSongResult && isClutchRound) {
+      if (isDistinctSongResult && isClutchRound && winner.idolId !== loser.idolId) {
+        const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
         const winnerSamples = clutchSamplesByTalent.get(winner.idolId) ?? [];
-        winnerSamples.push(true);
+        winnerSamples.push({ value: 1, weight: roundWeight });
         clutchSamplesByTalent.set(winner.idolId, winnerSamples);
         const loserSamples = clutchSamplesByTalent.get(loser.idolId) ?? [];
-        loserSamples.push(false);
+        loserSamples.push({ value: -1, weight: roundWeight });
         clutchSamplesByTalent.set(loser.idolId, loserSamples);
-        if (winner.idolId !== loser.idolId) {
-          const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
-          const winnerPressure = pressureEdgeSamplesByTalent.get(winner.idolId) ?? [];
-          winnerPressure.push({ value: 0.5, weight: roundWeight });
-          pressureEdgeSamplesByTalent.set(winner.idolId, winnerPressure);
-          const loserPressure = pressureEdgeSamplesByTalent.get(loser.idolId) ?? [];
-          loserPressure.push({ value: -0.5, weight: roundWeight });
-          pressureEdgeSamplesByTalent.set(loser.idolId, loserPressure);
-        }
+      }
+      if (isDistinctSongResult && isClutchRound) {
+        const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
+        const winnerSamples = clutchSamplesBySong.get(winnerSongKey) ?? [];
+        winnerSamples.push({ value: 1, weight: roundWeight });
+        clutchSamplesBySong.set(winnerSongKey, winnerSamples);
+        const loserSamples = clutchSamplesBySong.get(loserSongKey) ?? [];
+        loserSamples.push({ value: -1, weight: roundWeight });
+        clutchSamplesBySong.set(loserSongKey, loserSamples);
       }
       if (
         isDistinctSongResult &&
@@ -1636,6 +1763,13 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         winnerViews !== loserViews
       ) {
         const favoredTalentId = winnerViews > loserViews ? winner.idolId : loser.idolId;
+        const favoredSongKey = winnerViews > loserViews ? winnerSongKey : loserSongKey;
+        const songSamples = upsetResilienceSamplesBySong.get(favoredSongKey) ?? [];
+        songSamples.push({
+          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
+          success: winnerViews > loserViews
+        });
+        upsetResilienceSamplesBySong.set(favoredSongKey, songSamples);
         const samples = upsetResilienceSamplesByTalent.get(favoredTalentId) ?? [];
         samples.push({
           weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
@@ -1652,12 +1786,12 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         winnerViews > 0 &&
         loserViews > 0
       ) {
-        const winnerSamples = highStakesSamplesBySong.get(winner.youtubeVideoId) ?? [];
+        const winnerSamples = highStakesSamplesBySong.get(winnerSongKey) ?? [];
         winnerSamples.push({ weight: Math.log1p(loserViews), success: true });
-        highStakesSamplesBySong.set(winner.youtubeVideoId, winnerSamples);
-        const loserSamples = highStakesSamplesBySong.get(loser.youtubeVideoId) ?? [];
+        highStakesSamplesBySong.set(winnerSongKey, winnerSamples);
+        const loserSamples = highStakesSamplesBySong.get(loserSongKey) ?? [];
         loserSamples.push({ weight: Math.log1p(winnerViews), success: false });
-        highStakesSamplesBySong.set(loser.youtubeVideoId, loserSamples);
+        highStakesSamplesBySong.set(loserSongKey, loserSamples);
       }
       if (winnerSong) {
         if (loserViews != null) {
@@ -1668,33 +1802,29 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           winnerSong.upsetWins += 1;
           winnerSong.giantKillerScore += loserViews - winnerViews;
         }
-        if (previousSongResults.has(`${loser.youtubeVideoId}|${winner.youtubeVideoId}`)) {
+        if (previousSongResults.has(`${loserSongKey}|${winnerSongKey}`)) {
           winnerSong.revengeWins += 1;
         }
       }
-      if (
-        isDistinctSongResult &&
-        winnerViews != null &&
-        loserViews != null &&
-        Number.isFinite(winnerViews) &&
-        Number.isFinite(loserViews) &&
-        winnerViews > 0 &&
-        loserViews > 0 &&
-        winnerViews !== loserViews
-      ) {
-        const underdogVideoId = winnerViews < loserViews ? winner.youtubeVideoId : loser.youtubeVideoId;
-        const samples = punchingUpSamplesBySong.get(underdogVideoId) ?? [];
-        samples.push({
-          weight: Math.log2(Math.max(winnerViews, loserViews) / Math.min(winnerViews, loserViews)),
-          success: winnerViews < loserViews
-        });
-        punchingUpSamplesBySong.set(underdogVideoId, samples);
-      }
-      previousSongResults.add(`${winner.youtubeVideoId}|${loser.youtubeVideoId}`);
+      previousSongResults.add(`${winnerSongKey}|${loserSongKey}`);
 
       if (winner.idolId === loser.idolId) {
         continue;
       }
+
+      if (isClutchRound) {
+        const roundWeight = match.roundIndex >= finalRoundIndex ? 1.5 : match.roundIndex === finalRoundIndex - 1 ? 1.25 : 1;
+        const winnerRating = talentRatings.get(winner.idolId) ?? createDefaultGlicko2Rating();
+        const loserRating = talentRatings.get(loser.idolId) ?? createDefaultGlicko2Rating();
+        const winnerPressure = pressureEdgeSamplesByTalent.get(winner.idolId) ?? [];
+        winnerPressure.push({ value: 1 - getGlicko2ExpectedScore(winnerRating, loserRating), weight: roundWeight });
+        pressureEdgeSamplesByTalent.set(winner.idolId, winnerPressure);
+        const loserPressure = pressureEdgeSamplesByTalent.get(loser.idolId) ?? [];
+        loserPressure.push({ value: -getGlicko2ExpectedScore(loserRating, winnerRating), weight: roundWeight });
+        pressureEdgeSamplesByTalent.set(loser.idolId, loserPressure);
+      }
+      addRatingMatch(talentRatingPeriod, winner.idolId, loser.idolId, 1);
+      addRatingMatch(talentRatingPeriod, loser.idolId, winner.idolId, 0);
 
       const [left, right] = [
         { id: winner.idolId, name: winner.idolName },
@@ -1753,6 +1883,8 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
         addRivalryResult(finalsRivalryStats);
       }
     }
+    songRatings = updateGlicko2RatingPeriod(songRatings, songRatingPeriod);
+    talentRatings = updateGlicko2RatingPeriod(talentRatings, talentRatingPeriod);
   }
 
   const byWins = <T extends { wins: number; championCount: number; appearances: number }>(left: T, right: T) =>
@@ -1763,6 +1895,30 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     song.bigGameWins > 0 ? song.bigGameScore / song.bigGameWins : 0;
   const songs = [...songStats.values()];
   const talents = [...talentStats.values()];
+  for (const result of calculateRobustViewStrengthScores(
+    songs.map((song) => ({
+      id: song.canonicalPerformanceKey,
+      values: strengthOfWinsSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+    }))
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.strengthOfWinsScore = result.score;
+      song.strengthOfWinsCount = result.count;
+    }
+  }
+  for (const result of calculateRobustViewStrengthScores(
+    songs.map((song) => ({
+      id: song.canonicalPerformanceKey,
+      values: strengthOfLossesSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+    }))
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.strengthOfLossesScore = result.score;
+      song.strengthOfLossesCount = result.count;
+    }
+  }
   for (const result of calculateRobustViewStrengthScores(
     talents.map((talent) => ({
       id: talent.idolId,
@@ -1822,8 +1978,8 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   }
   for (const result of calculateRobustWeightedSuccessRates(
     songs.map((song) => ({
-      id: song.youtubeVideoId,
-      samples: highStakesSamplesBySong.get(song.youtubeVideoId) ?? []
+      id: song.canonicalPerformanceKey,
+      samples: highStakesSamplesBySong.get(song.canonicalPerformanceKey) ?? []
     })),
     3,
     Number.POSITIVE_INFINITY
@@ -1836,11 +1992,12 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       song.highStakesPerformanceMatches = result.count;
     }
   }
-  for (const result of calculateRobustWeightedSuccessRates(
+  for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
     talents.map((talent) => ({
       id: talent.idolId,
       samples: punchingAboveSamplesByTalent.get(talent.idolId) ?? []
-    }))
+    })),
+    "underdog"
   )) {
     const talent = talentStats.get(result.id);
     if (talent) {
@@ -1849,17 +2006,17 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       talent.punchingAboveOpportunities = result.count;
     }
   }
-  for (const result of calculateShrunkBinaryRates(
+  for (const result of calculateShrunkWeightedSignedScores(
     talents.map((talent) => ({
       id: talent.idolId,
-      values: clutchSamplesByTalent.get(talent.idolId) ?? []
+      samples: clutchSamplesByTalent.get(talent.idolId) ?? []
     }))
   )) {
     const talent = talentStats.get(result.id);
     if (talent) {
       talent.clutchRate = result.score;
-      talent.clutchWins = result.successCount;
-      talent.clutchLosses = result.failureCount;
+      talent.clutchWins = result.positiveCount;
+      talent.clutchLosses = result.negativeCount;
       talent.clutchMatches = result.count;
     }
   }
@@ -1877,11 +2034,12 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       talent.pressureEdgeNegativeMatches = result.negativeCount;
     }
   }
-  for (const result of calculateRobustWeightedSuccessRates(
+  for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
     talents.map((talent) => ({
       id: talent.idolId,
       samples: upsetResilienceSamplesByTalent.get(talent.idolId) ?? []
-    }))
+    })),
+    "favorite"
   )) {
     const talent = talentStats.get(result.id);
     if (talent) {
@@ -1890,17 +2048,60 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
       talent.upsetResilienceUpsetLosses = result.failureCount;
     }
   }
-  for (const result of calculateRobustPositiveOpportunityScores(
+  for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
     songs.map((song) => ({
-      id: song.youtubeVideoId,
-      samples: punchingUpSamplesBySong.get(song.youtubeVideoId) ?? []
+      id: song.canonicalPerformanceKey,
+      samples: punchingAboveSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+    })),
+    "underdog"
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.punchingAboveScore = result.score;
+      song.punchingAboveWins = result.successCount;
+      song.punchingAboveOpportunities = result.count;
+    }
+  }
+  for (const result of calculateShrunkWeightedSignedScores(
+    songs.map((song) => ({
+      id: song.canonicalPerformanceKey,
+      samples: clutchSamplesBySong.get(song.canonicalPerformanceKey) ?? []
     }))
   )) {
     const song = songStats.get(result.id);
     if (song) {
-      song.punchingUpScore = result.score;
-      song.punchingUpWins = result.successCount;
-      song.punchingUpOpportunities = result.count;
+      song.clutchRate = result.score;
+      song.clutchWins = result.positiveCount;
+      song.clutchLosses = result.negativeCount;
+      song.clutchMatches = result.count;
+    }
+  }
+  for (const result of calculateShrunkWeightedSignedScores(
+    songs.map((song) => ({
+      id: song.canonicalPerformanceKey,
+      samples: pressureEdgeSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+    }))
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.pressureEdgeScore = result.score;
+      song.pressureEdgeMatches = result.count;
+      song.pressureEdgePositiveMatches = result.positiveCount;
+      song.pressureEdgeNegativeMatches = result.negativeCount;
+    }
+  }
+  for (const result of calculateConfidenceAdjustedExpectedPerformanceScores(
+    songs.map((song) => ({
+      id: song.canonicalPerformanceKey,
+      samples: upsetResilienceSamplesBySong.get(song.canonicalPerformanceKey) ?? []
+    })),
+    "favorite"
+  )) {
+    const song = songStats.get(result.id);
+    if (song) {
+      song.upsetResilienceScore = result.score;
+      song.upsetResilienceChecks = result.count;
+      song.upsetResilienceUpsetLosses = result.failureCount;
     }
   }
   const bySongTitle = (left: HololiveBracketStatsOverview["topSongsByWins"][number], right: HololiveBracketStatsOverview["topSongsByWins"][number]) =>
@@ -1908,6 +2109,54 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   const rivalries = [...rivalryStats.values()];
   const finalsRivalries = [...finalsRivalryStats.values()];
   const sortedSongsByWins = [...songs].sort(byWins);
+  const sortedSongsByTitles = [...songs]
+    .filter((song) => song.championCount > 0)
+    .sort((left, right) => right.championCount - left.championCount || right.finalistCount - left.finalistCount || byWins(left, right));
+  const sortedSongsByRunnerUps = [...songs]
+    .filter((song) => song.runnerUpCount > 0)
+    .sort((left, right) => right.runnerUpCount - left.runnerUpCount || right.finalistCount - left.finalistCount || byWins(left, right));
+  const sortedSongsByDeepRuns = [...songs]
+    .filter((song) => song.top4Count > 0)
+    .sort((left, right) => right.top4Count - left.top4Count || right.championCount - left.championCount || byWins(left, right));
+  const sortedSongsByEarlyExits = [...songs]
+    .filter((song) => song.firstRoundEliminations > 0)
+    .sort((left, right) => right.firstRoundEliminations - left.firstRoundEliminations || right.appearances - left.appearances || byWins(left, right));
+  const sortedSongsByStrengthOfWins = [...songs]
+    .filter((song) => song.strengthOfWinsScore > 0 && song.strengthOfWinsCount > 0)
+    .sort((left, right) => right.strengthOfWinsScore - left.strengthOfWinsScore || right.strengthOfWinsCount - left.strengthOfWinsCount || byWins(left, right));
+  const sortedSongsByStrengthOfLosses = [...songs]
+    .filter((song) => song.strengthOfLossesScore > 0 && song.strengthOfLossesCount > 0)
+    .sort((left, right) => right.strengthOfLossesScore - left.strengthOfLossesScore || right.strengthOfLossesCount - left.strengthOfLossesCount || byWins(left, right));
+  const sortedSongsByPunchingAbove = [...songs]
+    .filter((song) => song.punchingAboveScore > 0 && song.punchingAboveWins > 0)
+    .sort(
+      (left, right) =>
+        right.punchingAboveScore - left.punchingAboveScore ||
+        right.punchingAboveWins - left.punchingAboveWins ||
+        right.punchingAboveOpportunities - left.punchingAboveOpportunities ||
+        byWins(left, right)
+    );
+  const sortedSongsByClutchRate = [...songs]
+    .filter((song) => song.clutchMatches > 0)
+    .sort((left, right) => right.clutchRate - left.clutchRate || right.clutchWins - left.clutchWins || right.clutchMatches - left.clutchMatches || byWins(left, right));
+  const sortedSongsByPressureEdge = [...songs]
+    .filter((song) => song.pressureEdgeMatches > 0)
+    .sort(
+      (left, right) =>
+        right.pressureEdgeScore - left.pressureEdgeScore ||
+        right.pressureEdgePositiveMatches - left.pressureEdgePositiveMatches ||
+        right.pressureEdgeMatches - left.pressureEdgeMatches ||
+        byWins(left, right)
+    );
+  const sortedSongsByUpsetResilience = [...songs]
+    .filter((song) => song.upsetResilienceChecks > 0)
+    .sort(
+      (left, right) =>
+        right.upsetResilienceScore - left.upsetResilienceScore ||
+        right.upsetResilienceChecks - left.upsetResilienceChecks ||
+        left.upsetResilienceUpsetLosses - right.upsetResilienceUpsetLosses ||
+        byWins(left, right)
+    );
   const sortedTalentsByWins = [...talents].sort(byWins);
   const sortedTalentsByTitles = [...talents]
     .filter((talent) => talent.championCount > 0)
@@ -2018,28 +2267,31 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     items: T[],
     getId: (item: T) => string,
     getLabel: (item: T) => string,
-    getDetail: (item: T) => string | null
+    getDetail: (item: T) => string | null,
+    ratings: Map<string, Glicko2Rating>
   ): HololiveBracketStatsOverview["topSongRatings"] =>
     items
       .filter((item) => item.wins + item.losses > 0)
-      .map((item) => {
+      .flatMap((item) => {
+        const id = getId(item);
+        const currentRating = ratings.get(id);
+        if (!currentRating) {
+          return [];
+        }
         const matches = item.wins + item.losses;
-        const winRate = matches > 0 ? item.wins / matches : 0;
-        const rating = 1500 + item.wins * 34 - item.losses * 22 + item.championCount * 38 + winRate * 70;
-        const ratingDeviation = Math.max(60, 350 - matches * 26);
-        return {
-          id: getId(item),
+        return [{
+          id,
           label: getLabel(item),
           detail: getDetail(item),
-          rating,
-          conservativeRating: rating - ratingDeviation * 2,
-          ratingDeviation,
-          volatility: 0.06,
+          rating: currentRating.rating,
+          conservativeRating: getConservativeGlicko2Rating(currentRating),
+          ratingDeviation: currentRating.ratingDeviation,
+          volatility: currentRating.volatility,
           wins: item.wins,
           losses: item.losses,
           matches,
           lastArchivedAt: item.lastArchivedAt
-        };
+        }];
       })
       .sort(
         (left, right) =>
@@ -2062,6 +2314,16 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     rivalryStats: sortedRivalries,
     finalsRivalryStats: sortedFinalsRivalries,
     topSongsByWins: sortedSongsByWins.slice(0, 10),
+    topSongsByTitles: sortedSongsByTitles.slice(0, 10),
+    topSongsByRunnerUps: sortedSongsByRunnerUps.slice(0, 10),
+    topSongsByDeepRuns: sortedSongsByDeepRuns.slice(0, 10),
+    topSongsByEarlyExits: sortedSongsByEarlyExits.slice(0, 10),
+    topSongsByStrengthOfWins: sortedSongsByStrengthOfWins.slice(0, 10),
+    topSongsByStrengthOfLosses: sortedSongsByStrengthOfLosses.slice(0, 10),
+    topSongsByClutchRate: sortedSongsByClutchRate.slice(0, 10),
+    topSongsByPressureEdge: sortedSongsByPressureEdge.slice(0, 10),
+    topSongsByPunchingAbove: sortedSongsByPunchingAbove.slice(0, 10),
+    topSongsByUpsetResilience: sortedSongsByUpsetResilience.slice(0, 10),
     topSongsByWinRate: [...songs].sort((left, right) => right.winRate - left.winRate || byWins(left, right)).slice(0, 10),
     topSongsByAppearances: [...songs].sort((left, right) => right.appearances - left.appearances || byWins(left, right)).slice(0, 10),
     topSongsByFinalsWithoutTitle: [...songs]
@@ -2128,18 +2390,6 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
           bySongTitle(left, right)
       )
       .slice(0, 10),
-    topSongsByPunchingUpScore: [...songs]
-      .filter((song) => song.punchingUpScore > 0 && song.punchingUpWins > 0)
-      .sort(
-        (left, right) =>
-          right.punchingUpScore - left.punchingUpScore ||
-          right.punchingUpWins - left.punchingUpWins ||
-          right.punchingUpOpportunities - left.punchingUpOpportunities ||
-          right.giantKillerScore - left.giantKillerScore ||
-          byWins(left, right) ||
-          bySongTitle(left, right)
-      )
-      .slice(0, 10),
     topTalents: sortedTalentsByWins.slice(0, 10),
     topTalentsByWins: sortedTalentsByWins.slice(0, 10),
     topTalentsByTitles: sortedTalentsByTitles.slice(0, 10),
@@ -2158,15 +2408,17 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
     topTalentsByUpsetResilience: sortedTalentsByUpsetResilience.slice(0, 10),
     topSongRatings: buildRatingRows(
       songs,
-      (song) => song.youtubeVideoId,
+      (song) => song.canonicalPerformanceKey,
       (song) => song.title,
-      (song) => song.idolName ?? null
+      (song) => song.idolName ?? null,
+      songRatings
     ),
     topTalentRatings: buildRatingRows(
       talents,
       (talent) => talent.idolId,
       (talent) => talent.idolName,
-      () => null
+      () => null,
+      talentRatings
     ),
     topRivalries: sortedRivalries.slice(0, 10),
     championHistory: archives.slice(0, 12)
@@ -2465,6 +2717,11 @@ const mockBridge: HoloshelfBridge = {
         return mockUpdateStatus as IpcChannelMap[C]["response"];
       case "updates:install":
         return mockUpdateStatus as IpcChannelMap[C]["response"];
+      case "updates:installed-release":
+        return mockInstalledUpdateRelease as IpcChannelMap[C]["response"];
+      case "updates:installed-release:dismiss":
+        mockInstalledUpdateRelease = null;
+        return { dismissed: true } as IpcChannelMap[C]["response"];
       case "app:save-image":
         return { filePath: "mock-bracket-export.png" } as IpcChannelMap[C]["response"];
       case "app:open-path":

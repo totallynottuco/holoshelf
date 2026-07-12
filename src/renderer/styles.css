@@ -2295,6 +2295,194 @@ select {
   background: linear-gradient(90deg, rgba(125, 231, 255, 0.9), rgba(88, 180, 222, 0.56));
 }
 
+.installed-update-backdrop {
+  position: fixed;
+  inset: 28px 0 0;
+  z-index: 2147482900;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 9, 14, 0.76);
+}
+
+.installed-update-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 76px));
+  overflow: hidden;
+  border: 1px solid rgba(90, 204, 232, 0.42);
+  border-radius: 8px;
+  background: #071923;
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(137, 233, 255, 0.06) inset;
+  color: #e9fbff;
+}
+
+.installed-update-header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 13px;
+  min-height: 84px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(93, 205, 231, 0.2);
+  background: #09212d;
+}
+
+.installed-update-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(111, 225, 244, 0.42);
+  border-radius: 7px;
+  background: #0c3040;
+  color: #82efff;
+  box-shadow: 0 0 0 3px rgba(86, 207, 229, 0.06);
+}
+
+.installed-update-header > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.installed-update-eyebrow {
+  color: #7bdced;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.installed-update-header h2 {
+  margin: 0;
+  color: #f4fdff;
+  font-size: 21px;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.installed-update-notes {
+  min-height: 180px;
+  max-height: min(50vh, 500px);
+  padding: 20px 24px;
+  overflow-y: auto;
+  scrollbar-color: rgba(91, 196, 220, 0.62) #071923;
+  scrollbar-width: thin;
+}
+
+.installed-update-notes h3 {
+  margin: 18px 0 8px;
+  color: #8ee8f5;
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.installed-update-notes h3:first-child {
+  margin-top: 0;
+}
+
+.installed-update-notes p,
+.installed-update-notes ul {
+  margin: 0 0 12px;
+  color: #cce9ef;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.55;
+}
+
+.installed-update-notes ul {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.installed-update-notes li {
+  position: relative;
+  padding-left: 17px;
+}
+
+.installed-update-notes li::before {
+  position: absolute;
+  top: 0.67em;
+  left: 1px;
+  width: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: #72d9ea;
+  content: "";
+}
+
+.installed-update-notes strong {
+  color: #f5fdff;
+  font-weight: 850;
+}
+
+.installed-update-footer {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-top: 1px solid rgba(93, 205, 231, 0.18);
+  background: #06151e;
+}
+
+.installed-update-footer span {
+  color: #79adba;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.installed-update-footer button {
+  min-width: 92px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(98, 219, 239, 0.58);
+  border-radius: 6px;
+  background: #0d3b4c;
+  color: #ecfcff;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.installed-update-footer button:hover,
+.installed-update-footer button:focus-visible {
+  border-color: #83e8f7;
+  background: #124b5e;
+  outline: none;
+}
+
+@media (max-width: 640px) {
+  .installed-update-backdrop {
+    padding: 12px;
+  }
+
+  .installed-update-header {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 10px;
+    min-height: 74px;
+    padding: 13px;
+  }
+
+  .installed-update-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .installed-update-header h2 {
+    font-size: 17px;
+  }
+
+  .installed-update-notes {
+    padding: 16px;
+  }
+}
+
 @keyframes hololive-toast-progress-drain {
   to {
     transform: scaleX(0);
@@ -2335,14 +2523,15 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 18px;
   min-width: 0;
-  min-height: 0;
+  min-height: 30px;
   padding: 0;
-  border-bottom: 1px solid rgba(64, 171, 210, 0.05);
+  border-bottom: 1px solid rgba(64, 171, 210, 0.14);
 }
 
 .hololive-bracket-stats-tabs,
+.hololive-bracket-stats-scope-switcher,
 .hololive-bracket-stats-sort,
 .hololive-bracket-rating-control,
 .hololive-bracket-rating-switcher {
@@ -2353,7 +2542,7 @@ select {
 
 .hololive-bracket-stats-tabs {
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 18px;
 }
 
 .hololive-bracket-stats-sort button,
@@ -2414,16 +2603,16 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 20px;
-  padding: 1px 2px 2px;
+  min-height: 30px;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: #9bd9e9;
   cursor: pointer;
   font: inherit;
-  font-size: 10px;
-  font-weight: 880;
+  font-size: 11px;
+  font-weight: 820;
   line-height: 1;
 }
 
@@ -2454,6 +2643,51 @@ select {
 
 .hololive-bracket-stats-tabs button[aria-selected="true"]::after {
   background: rgba(100, 216, 248, 0.88);
+}
+
+.hololive-bracket-stats-scope-switcher {
+  flex: 0 0 auto;
+  gap: 14px;
+}
+
+.hololive-bracket-stats-scope-switcher button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #9fc8d8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.hololive-bracket-stats-scope-switcher button::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.hololive-bracket-stats-scope-switcher button[aria-pressed="true"] {
+  color: #ffffff;
+}
+
+.hololive-bracket-stats-scope-switcher button[aria-pressed="true"]::after {
+  background: rgba(125, 231, 191, 0.8);
+}
+
+.hololive-bracket-stats-scope-switcher button:disabled {
+  color: rgba(159, 200, 216, 0.42);
+  cursor: not-allowed;
 }
 
 .hololive-bracket-rating-control {
@@ -2490,6 +2724,181 @@ select {
   overflow: hidden;
 }
 
+.hololive-bracket-stats-view.section-detailed {
+  overflow: hidden;
+  padding-bottom: 12px;
+}
+
+.hololive-bracket-detailed-stats,
+.hololive-bracket-detailed-table-scroll {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.hololive-bracket-detailed-stats {
+  overflow: hidden;
+}
+
+.hololive-bracket-detailed-table-scroll {
+  overflow: auto;
+  border-top: 1px solid rgba(76, 180, 214, 0.2);
+  border-bottom: 1px solid rgba(76, 180, 214, 0.14);
+  scrollbar-gutter: stable;
+}
+
+.hololive-bracket-detailed-table {
+  width: 100%;
+  min-width: 1600px;
+  border-spacing: 0;
+  border-collapse: separate;
+  table-layout: fixed;
+  color: #d9edf3;
+  font-size: 12.5px;
+}
+
+.hololive-bracket-detailed-table th,
+.hololive-bracket-detailed-table td {
+  height: 40px;
+  padding: 0 10px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(60, 145, 174, 0.14);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hololive-bracket-detailed-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  height: 44px;
+  background: #091d27;
+  color: #91d8e9;
+  font-size: 12px;
+  box-shadow: 0 1px 0 rgba(86, 194, 226, 0.24);
+}
+
+.hololive-bracket-detailed-table th button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.hololive-bracket-detailed-table th button:hover,
+.hololive-bracket-detailed-table th button:focus-visible,
+.hololive-bracket-detailed-table th[aria-sort]:not([aria-sort="none"]) button {
+  color: #ffffff;
+  outline: none;
+}
+
+.hololive-bracket-detailed-table th button svg {
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.hololive-bracket-detailed-table tbody tr:hover td {
+  background: rgba(61, 170, 202, 0.07);
+  color: #ffffff;
+}
+
+.hololive-bracket-detailed-table .rank {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 46px;
+  color: #77cde1;
+  background: #071720;
+  font-weight: 900;
+}
+
+.hololive-bracket-detailed-table thead .rank {
+  z-index: 6;
+  background: #091d27;
+}
+
+.hololive-bracket-detailed-table .talent {
+  position: sticky;
+  left: 46px;
+  z-index: 2;
+  width: 210px;
+  background: #071720;
+  color: #f1f8fa;
+  font-weight: 900;
+  text-align: left;
+  box-shadow: 1px 0 0 rgba(82, 177, 207, 0.18);
+}
+
+.hololive-bracket-detailed-table thead .talent {
+  z-index: 6;
+  background: #091d27;
+}
+
+.hololive-bracket-detailed-table th.talent button {
+  justify-content: flex-start;
+}
+
+.hololive-bracket-detailed-table tbody tr:hover .rank,
+.hololive-bracket-detailed-table tbody tr:hover .talent {
+  background: #0a202a;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-rank {
+  width: 46px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-talent {
+  width: 210px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-rating {
+  width: 112px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-wins,
+.hololive-bracket-detailed-table col.detailed-col-titles {
+  width: 75px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-runnerUps,
+.hololive-bracket-detailed-table col.detailed-col-deepRuns,
+.hololive-bracket-detailed-table col.detailed-col-earlyExits {
+  width: 100px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-strengthWins {
+  width: 140px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-strengthLosses {
+  width: 145px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-clutch {
+  width: 105px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-pressure,
+.hololive-bracket-detailed-table col.detailed-col-overperformer {
+  width: 120px;
+}
+
+.hololive-bracket-detailed-table col.detailed-col-reliable {
+  width: 112px;
+}
+
 .hololive-bracket-stats-view > .hololive-bracket-record-grid {
   min-height: 0;
   overflow: auto;
@@ -2506,6 +2915,34 @@ select {
   min-width: 0;
   min-height: 0;
   padding: 0 0 8px;
+}
+
+.hololive-bracket-award-grid.song {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  align-content: stretch;
+  gap: 10px 14px;
+  height: 100%;
+}
+
+.hololive-bracket-stats-overview.song {
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.hololive-bracket-award-card.song {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  container-type: size;
+}
+
+.hololive-bracket-award-card.song .hololive-bracket-award-body {
+  align-self: start;
+  justify-self: center;
+  width: auto;
+  max-width: 100%;
+  height: min(56.25cqw, calc(100cqh - 30px));
+  aspect-ratio: 16 / 9;
 }
 
 .hololive-bracket-award-card {
@@ -2657,6 +3094,37 @@ select {
   filter:
     drop-shadow(0 16px 14px rgba(0, 0, 0, 0.24))
     drop-shadow(0 0 18px rgba(255, 255, 255, 0.12));
+}
+
+.hololive-bracket-award-card.song .hololive-bracket-award-image {
+  place-items: center;
+}
+
+.hololive-bracket-award-card.song .hololive-bracket-award-image img {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  object-position: center;
+  transform: none;
+  filter:
+    saturate(0.96)
+    contrast(1.03);
+}
+
+.hololive-bracket-award-card.song .hololive-bracket-award-image::after {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--award-accent-deep) 28%, rgba(2, 8, 14, 0.34)), transparent 28%, transparent 58%, rgba(2, 8, 14, 0.74)),
+    linear-gradient(90deg, color-mix(in srgb, var(--award-accent) 22%, transparent), transparent 30% 70%, color-mix(in srgb, var(--award-accent-deep) 18%, transparent));
+}
+
+.hololive-bracket-award-card.song .hololive-bracket-award-body::after {
+  right: -12%;
+  bottom: -24%;
+  width: 54%;
+  height: 66%;
+  background: radial-gradient(ellipse, color-mix(in srgb, var(--award-accent) 22%, transparent), transparent 68%);
 }
 
 .hololive-bracket-award-image > span {
@@ -2904,6 +3372,15 @@ select {
     max-height: none;
     transform: translateX(-50%);
   }
+
+
+  .hololive-bracket-award-card.song .hololive-bracket-award-image img {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: none;
+  }
+
 }
 
 @media (max-width: 940px) {
@@ -2916,6 +3393,14 @@ select {
   .hololive-bracket-award-image img {
     bottom: -36%;
     height: calc(144% - 26px);
+  }
+
+
+  .hololive-bracket-award-card.song .hololive-bracket-award-image img {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: none;
   }
 }
 

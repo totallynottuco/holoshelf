@@ -444,6 +444,7 @@ export interface HololiveBracketArchiveSummary {
 }
 
 export interface HololiveBracketSongStats {
+  canonicalPerformanceKey: string;
   youtubeVideoId: string;
   title: string;
   topicId?: HololiveMusicTopic | null;
@@ -455,6 +456,7 @@ export interface HololiveBracketSongStats {
   winRate: number;
   championCount: number;
   finalistCount: number;
+  runnerUpCount: number;
   top4Count: number;
   top8Count: number;
   top16Count: number;
@@ -468,9 +470,24 @@ export interface HololiveBracketSongStats {
   highStakesPerformanceWins: number;
   highStakesPerformanceLosses: number;
   highStakesPerformanceMatches: number;
-  punchingUpScore: number;
-  punchingUpWins: number;
-  punchingUpOpportunities: number;
+  strengthOfWinsScore: number;
+  strengthOfWinsCount: number;
+  strengthOfLossesScore: number;
+  strengthOfLossesCount: number;
+  punchingAboveScore: number;
+  punchingAboveWins: number;
+  punchingAboveOpportunities: number;
+  clutchRate: number;
+  clutchWins: number;
+  clutchLosses: number;
+  clutchMatches: number;
+  pressureEdgeScore: number;
+  pressureEdgeMatches: number;
+  pressureEdgePositiveMatches: number;
+  pressureEdgeNegativeMatches: number;
+  upsetResilienceScore: number;
+  upsetResilienceChecks: number;
+  upsetResilienceUpsetLosses: number;
   lastArchivedAt: string;
 }
 
@@ -551,6 +568,16 @@ export interface HololiveBracketStatsOverview {
   rivalryStats: HololiveBracketRivalryStats[];
   finalsRivalryStats: HololiveBracketRivalryStats[];
   topSongsByWins: HololiveBracketSongStats[];
+  topSongsByTitles: HololiveBracketSongStats[];
+  topSongsByRunnerUps: HololiveBracketSongStats[];
+  topSongsByDeepRuns: HololiveBracketSongStats[];
+  topSongsByEarlyExits: HololiveBracketSongStats[];
+  topSongsByStrengthOfWins: HololiveBracketSongStats[];
+  topSongsByStrengthOfLosses: HololiveBracketSongStats[];
+  topSongsByClutchRate: HololiveBracketSongStats[];
+  topSongsByPressureEdge: HololiveBracketSongStats[];
+  topSongsByPunchingAbove: HololiveBracketSongStats[];
+  topSongsByUpsetResilience: HololiveBracketSongStats[];
   topSongsByWinRate: HololiveBracketSongStats[];
   topSongsByAppearances: HololiveBracketSongStats[];
   topSongsByFinalsWithoutTitle: HololiveBracketSongStats[];
@@ -562,7 +589,6 @@ export interface HololiveBracketStatsOverview {
   topSongsByBigGameScore: HololiveBracketSongStats[];
   topSongsByBigGameAverage: HololiveBracketSongStats[];
   topSongsByHighStakesPerformance: HololiveBracketSongStats[];
-  topSongsByPunchingUpScore: HololiveBracketSongStats[];
   topTalents: HololiveBracketTalentStats[];
   topTalentsByWins: HololiveBracketTalentStats[];
   topTalentsByTitles: HololiveBracketTalentStats[];

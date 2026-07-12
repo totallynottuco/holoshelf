@@ -87,6 +87,9 @@ describe("Holodex cleanup rules", () => {
       row({ youtubeVideoId: "solo-version", title: "\u77ac\u9593\u30cf\u30fc\u30c8\u30d3\u30fc\u30c8 (\u4e00\u6761\u8389\u3005\u83ef SOLO ver.)" }),
       row({ youtubeVideoId: "solo-lower-version", title: "\u30bb\u30ab\u30a4\u306e\u8272\u5f69 (AZKi solo ver.)" }),
       row({ youtubeVideoId: "promo-mv", title: "\u300eRED HEART\u300f1st\u30aa\u30ea\u30b8\u30ca\u30eb\u30bd\u30f3\u30b0-\u5ba3\u4f1dMV-" }),
+      row({ youtubeVideoId: "album-release", title: "\u30101st Full Album\u3011\u201cUnAlive\" Calliope Mori Releasing 3.21.2022" }),
+      row({ youtubeVideoId: "jp-digest", title: "\u3010Blu-ray\u767a\u58f2\u76f4\u524d\u3011\u5927\u5207\u30d5\u30a9\u30c8\u30b0\u30e9\u30d5\u3010Bloom, \u30c0\u30a4\u30b8\u30a7\u30b9\u30c8MV\u3011" }),
+      row({ youtubeVideoId: "album-track", title: "\u30101st ALBUM\u53ce\u9332\u66f2\u3011Midnight Song / AZKi\u3010without U\u3011" }),
       row({ youtubeVideoId: "daybreak-frontline", title: "DAYBREAK FRONTLINE" }),
       row({ youtubeVideoId: "false-promotion", title: "Promotion Day" }),
       row({ youtubeVideoId: "song-name-variant", title: "Plain Display Title" }),
@@ -115,8 +118,8 @@ describe("Holodex cleanup rules", () => {
 
     const result = cleanupCatalogRows(rows, {}, details);
 
-    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["song", "daybreak-frontline", "false-promotion"]);
-    expect(result.removedByBaseRules).toBe(19);
+    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["song", "album-track", "daybreak-frontline", "false-promotion"]);
+    expect(result.removedByBaseRules).toBe(21);
     expect(buildHololiveMusicSongKey({ songName: "\u6d77\u60f3\u5217\u8eca (Daybreak ver.)" })).toBe(
       buildHololiveMusicSongKey({ songName: "\u6d77\u60f3\u5217\u8eca" })
     );
@@ -130,6 +133,33 @@ describe("Holodex cleanup rules", () => {
       buildHololiveMusicSongKey({ songName: "\u30bb\u30ab\u30a4\u306e\u8272\u5f69" })
     );
     expect(buildHololiveMusicSongKey({ songName: "DAYBREAK FRONTLINE" })).toBe("daybreak frontline");
+  });
+
+  it("filters study and work compilations plus duration-backed long mashups", () => {
+    const rows = [
+      row({
+        youtubeVideoId: "K0UCqgBd6Nk",
+        title: "【KFP OST】Kiara Bangers To Study To 【Pineapple, Mirage, Chimera, Perfume, Tasty】"
+      }),
+      row({ youtubeVideoId: "work-mix", title: "Hololive Music For Working" }),
+      row({ youtubeVideoId: "long-mashup", title: "Hololive 50 Song Mashup" }),
+      row({ youtubeVideoId: "short-mashup", title: "Special Mashup Song" }),
+      row({ youtubeVideoId: "normal-long-song", title: "The Long Journey" })
+    ];
+    const details = Object.fromEntries(
+      [
+        detail({ youtubeVideoId: "K0UCqgBd6Nk", duration: 1035 }),
+        detail({ youtubeVideoId: "work-mix", duration: 900 }),
+        detail({ youtubeVideoId: "long-mashup", duration: 1200 }),
+        detail({ youtubeVideoId: "short-mashup", duration: 240 }),
+        detail({ youtubeVideoId: "normal-long-song", duration: 900 })
+      ].map((entry) => [entry.youtubeVideoId, entry])
+    );
+
+    const result = cleanupCatalogRows(rows, {}, details);
+
+    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["short-mashup", "normal-long-song"]);
+    expect(result.removedByBaseRules).toBe(3);
   });
 
   it("filters non-song variants without dropping similar normal words", () => {
