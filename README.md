@@ -8,6 +8,6 @@ Holoshelf is a Windows desktop app for keeping a local Hololive music, talent, t
 - Hololive music catalog built from Holodex data, including originals, covers, collabs, and duplicate cleanup.
 - YouTube playlist-style player, queue, favorites, markers, ratings, and exclusions.
 - Custom talent support for personal local additions.
-- Ability to create competition-style tournament brackets made up of songs, with historical results stats.
+- Single- and double-elimination song brackets with saved runs, exports, and format-filtered historical stats.
 - Optional Holodex and YouTube API keys that are locally stored for manual updating.
 - GitHub Releases auto-update support for packaged Windows builds.

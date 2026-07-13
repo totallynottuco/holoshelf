@@ -57,6 +57,16 @@ const openPathSchema = z.object({
   filePath: z.string().trim().min(1)
 });
 
+const findInPageSchema = z.object({
+  text: z.string().min(1).max(500),
+  forward: z.boolean().optional(),
+  findNext: z.boolean().optional()
+});
+
+const stopFindInPageSchema = z.object({
+  action: z.enum(["clearSelection", "keepSelection", "activateSelection"])
+});
+
 const catalogListSchema = z.object({
   moduleId: z.enum(["hololive"]).optional(),
   query: z.string().optional(),
@@ -277,6 +287,14 @@ const hololiveChannelsListSchema = z
 const hololiveCustomTalentInputSchema = z.object({
   channelInput: z.string().trim().min(1).max(500),
   displayName: z.string().trim().max(120).optional().nullable(),
+  cardImageUrl: z
+    .string()
+    .trim()
+    .url()
+    .max(1000)
+    .refine((value) => new URL(value).protocol === "https:", "Overview image URL must use HTTPS")
+    .optional()
+    .nullable(),
   originalSongsUrl: z.string().trim().url().optional().nullable(),
   coversUrl: z.string().trim().url().optional().nullable()
 });
@@ -388,6 +406,8 @@ const hololivePlayerStateUpdateSchema = z.object({
 });
 
 const hololiveBracketSizeSchema = z.enum(["RO16", "RO32", "RO64", "RO128", "RO256"]);
+const hololiveBracketFormatSchema = z.enum(["single_elimination", "double_elimination"]);
+const hololiveBracketStatsFormatSchema = z.enum(["all", "single_elimination", "double_elimination"]);
 const hololiveBracketGenerationStyleSchema = z.enum(["top_songs", "random_songs"]);
 const hololiveMusicTopicSchema = z.enum(["Original_Song", "Music_Cover"]);
 const hololiveBracketRatingBucketSchema = z.enum(["unrated", "favorite", "like", "neutral", "dislike"]);
@@ -418,6 +438,7 @@ const hololiveBracketGenerationFiltersSchema = z.object({
 
 const hololiveBracketCreateSchema = z.object({
   size: hololiveBracketSizeSchema,
+  format: hololiveBracketFormatSchema.optional().default("single_elimination"),
   generationStyle: hololiveBracketGenerationStyleSchema.optional().default("top_songs"),
   filters: hololiveBracketGenerationFiltersSchema.optional().nullable(),
   name: z.string().trim().max(120).optional().nullable()
@@ -439,6 +460,9 @@ const hololiveBracketUndoSchema = z.object({
 
 const hololiveBracketResetSchema = z.object({
   bracketId: z.string().trim().min(1)
+});
+const hololiveBracketStatsSchema = z.object({
+  format: hololiveBracketStatsFormatSchema.optional().default("all")
 });
 
 const hololiveBracketDuplicateSchema = z.object({
@@ -633,6 +657,22 @@ export function installIpcHandlers(context: IpcContext): void {
       throw new Error(openError);
     }
     return { opened: true };
+  });
+
+  handle("app:find-in-page", async (event, payload) => {
+    const input = findInPageSchema.parse(payload);
+    return {
+      requestId: event.sender.findInPage(input.text, {
+        forward: input.forward ?? true,
+        findNext: input.findNext ?? false
+      })
+    };
+  });
+
+  handle("app:find-in-page:stop", async (event, payload) => {
+    const input = stopFindInPageSchema.parse(payload);
+    event.sender.stopFindInPage(input.action);
+    return { stopped: true };
   });
 
   handle("app:data-backup:export", async () => {
@@ -990,7 +1030,14 @@ export function installIpcHandlers(context: IpcContext): void {
 
   handle("hololive:custom-talents:upsert", async (_event, payload) => {
     const input = hololiveCustomTalentInputSchema.parse(payload);
-    return context.holodexMusicService.upsertCustomTalent(input);
+    const record = await context.holodexMusicService.upsertCustomTalent(input);
+    if (record.idol.cardImageUrl) {
+      await refreshHololiveIcons(context, [record.idol.id]);
+    }
+    return {
+      ...record,
+      idol: context.database.listHololiveIdols().find((idol) => idol.id === record.idol.id) ?? record.idol
+    };
   });
 
   handle("hololive:custom-talents:delete", async (_event, payload) => {
@@ -1197,7 +1244,10 @@ export function installIpcHandlers(context: IpcContext): void {
     return context.database.applyHololiveUndo(input.token);
   });
 
-  handle("hololive:brackets:stats", async () => context.database.getHololiveBracketStatsOverview());
+  handle("hololive:brackets:stats", async (_event, payload) => {
+    const input = hololiveBracketStatsSchema.parse(payload ?? {});
+    return context.database.getHololiveBracketStatsOverview(input.format);
+  });
 }
 
 function getHololiveTierData(context: IpcContext, boardId?: string | null): HololiveTierListData {
@@ -1217,7 +1267,10 @@ function ensureCurrentHololiveImageCacheRows(context: IpcContext): void {
     const targets: Array<{ kind: HololiveImageCacheKind; sourceUrl: string | null | undefined }> = [
       { kind: "icon", sourceUrl: idol.iconUrl },
       { kind: "profile", sourceUrl: idol.profileImageUrl },
-      { kind: "card", sourceUrl: idol.cardImageUrl ?? idol.profileImageUrl }
+      {
+        kind: "card",
+        sourceUrl: idol.source === "custom" ? idol.cardImageUrl : idol.cardImageUrl ?? idol.profileImageUrl
+      }
     ];
 
     return targets.flatMap((target) => {
@@ -1257,7 +1310,10 @@ function withHololiveSeedImageFallbacks(data: HololiveTierListData): HololiveTie
       ...idol,
       cachedIconUrl: idol.cachedIconUrl ?? resolveExistingHololiveCachedImageUrl(idol.slug, "icon"),
       cachedProfileImageUrl: idol.cachedProfileImageUrl ?? resolveExistingHololiveCachedImageUrl(idol.slug, "profile"),
-      cachedCardImageUrl: resolveExistingHololiveCachedImageUrl(idol.slug, "card") ?? idol.cachedCardImageUrl
+      cachedCardImageUrl:
+        idol.source === "custom" && !idol.cardImageUrl
+          ? null
+          : resolveExistingHololiveCachedImageUrl(idol.slug, "card") ?? idol.cachedCardImageUrl
     }))
   };
 }
@@ -1282,8 +1338,8 @@ function getHololiveImageFileStats(fileName: string): nodeFs.Stats | null {
 
   const paths = getAppPaths(app);
   const versionCandidates = [
-    path.join(paths.hololiveImageDirectory, safeFileName),
-    paths.seedDirectory ? path.join(paths.seedDirectory, "images", "hololive", safeFileName) : null
+    paths.seedDirectory ? path.join(paths.seedDirectory, "images", "hololive", safeFileName) : null,
+    path.join(paths.hololiveImageDirectory, safeFileName)
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   return (
@@ -1340,7 +1396,9 @@ async function refreshHololiveIcons(
       imageTargets.push({ idolId: idol.id, slug: idol.slug, kind: "profile", sourceUrl: idol.profileImageUrl });
     }
 
-    const cardImageUrl = idol.cardImageUrl || idol.profileImageUrl || idol.iconUrl;
+    const cardImageUrl = idol.source === "custom"
+      ? idol.cardImageUrl
+      : idol.cardImageUrl || idol.profileImageUrl || idol.iconUrl;
     if (cardImageUrl) {
       imageTargets.push({ idolId: idol.id, slug: idol.slug, kind: "card", sourceUrl: cardImageUrl });
     }
@@ -1385,7 +1443,11 @@ async function refreshHololiveIcons(
       }
 
       const bytes = Buffer.from(await response.arrayBuffer());
-      const optimized = await optimizeHololiveImage(bytes, target.kind);
+      const optimized = await optimizeHololiveImage(
+        bytes,
+        target.kind,
+        idols.find((idol) => idol.id === target.idolId)?.source === "custom"
+      );
       await fs.writeFile(localPath, optimized.bytes);
       await deleteSupersededHololiveImageFiles(context.hololiveImageDirectory, target.slug, target.kind, localFilename);
       cacheEntries.push({
@@ -1454,7 +1516,8 @@ function getHololiveImageCacheMimeType(kind: HololiveImageCacheKind): string {
 
 async function optimizeHololiveImage(
   bytes: Buffer,
-  kind: HololiveImageCacheKind
+  kind: HololiveImageCacheKind,
+  preserveCardAspect = false
 ): Promise<{ bytes: Buffer; mimeType: string }> {
   if (kind === "icon") {
     return {
@@ -1473,6 +1536,16 @@ async function optimizeHololiveImage(
   }
 
   if (kind === "card") {
+    if (preserveCardAspect) {
+      return {
+        bytes: await sharp(bytes, { animated: false, failOn: "none" })
+          .rotate()
+          .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+          .png({ compressionLevel: 9, palette: true, quality: 92, colors: 256 })
+          .toBuffer(),
+        mimeType: "image/png"
+      };
+    }
     try {
       const subject = await sharp(bytes, { animated: false, failOn: "none" })
         .rotate()

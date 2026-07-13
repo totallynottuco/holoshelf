@@ -16,6 +16,7 @@ import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
 const emptyInput: HololiveCustomTalentInput = {
   channelInput: "",
   displayName: "",
+  cardImageUrl: "",
   originalSongsUrl: "",
   coversUrl: ""
 };
@@ -35,6 +36,7 @@ function customTalentInput(input: HololiveCustomTalentInput): HololiveCustomTale
   return {
     channelInput: input.channelInput.trim(),
     displayName: normalizeOptional(input.displayName),
+    cardImageUrl: normalizeOptional(input.cardImageUrl),
     originalSongsUrl: normalizeOptional(input.originalSongsUrl),
     coversUrl: normalizeOptional(input.coversUrl)
   };
@@ -397,6 +399,16 @@ export function HololiveCustomImportPage() {
                   value={form.displayName ?? ""}
                   onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
                   placeholder="Optional override"
+                  autoComplete="off"
+                />
+              </label>
+              <label>
+                <span>Overview image</span>
+                <input
+                  value={form.cardImageUrl ?? ""}
+                  onChange={(event) => setForm((current) => ({ ...current, cardImageUrl: event.target.value }))}
+                  placeholder="Optional portrait image URL"
+                  type="url"
                   autoComplete="off"
                 />
               </label>

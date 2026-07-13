@@ -6,7 +6,7 @@ import { ensureAppPaths, getAppPaths } from "./services/appPaths";
 import { DatabaseService } from "./services/database";
 import { FetchScheduler } from "./services/fetchScheduler";
 import { HolodexMusicService } from "./services/holodexMusicService";
-import { mergeBundledOfficialData, repairBundledOfficialImageCache } from "./services/officialDataMergeService";
+import { mergeBundledOfficialData } from "./services/officialDataMergeService";
 import { UpdateService } from "./services/updateService";
 import { YouTubeVideoStatsService } from "./services/youtubeVideoStatsService";
 import { createSourceAdapters, trackerModules } from "../src/modules/registry";
@@ -172,7 +172,7 @@ function registerAppProtocol(): void {
       return new Response(new Uint8Array(imageFile.contents), {
         headers: {
           "content-type": getMimeType(imageFile.filePath),
-          "cache-control": "no-store, max-age=0"
+          "cache-control": "public, max-age=31536000, immutable"
         }
       });
     }
@@ -225,6 +225,10 @@ function registerYouTubeEmbedHeaders(): void {
 
 function shouldLogRendererConsole(level: number, message: string, sourceId: string): boolean {
   const normalizedMessage = message.trim();
+
+  if (normalizedMessage.includes("Unable to preventDefault inside passive event listener invocation")) {
+    return false;
+  }
 
   if (
     level <= 2 &&
@@ -303,6 +307,12 @@ function createHoloshelfWindow(): BrowserWindow {
     writeAppLog(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
   });
 
+  createdWindow.webContents.on("found-in-page", (_event, result) => {
+    if (!createdWindow.isDestroyed() && !createdWindow.webContents.isDestroyed()) {
+      createdWindow.webContents.send("app:find-in-page:result", result);
+    }
+  });
+
   return window;
 }
 
@@ -350,24 +360,8 @@ async function loadStartupScreen(window: BrowserWindow): Promise<void> {
   await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
-function scheduleBundledOfficialDataMerge(database: DatabaseService, paths: ReturnType<typeof getAppPaths>): void {
-  if (!app.isPackaged) {
-    return;
-  }
-
-  setTimeout(() => {
-    void mergeBundledOfficialData({
-      database,
-      paths,
-      isPackaged: app.isPackaged,
-      log: writeAppLog
-    }).catch((error) => {
-      writeAppLog(`[official-data] merge failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-    });
-  }, 1500);
-}
-
 async function createMainWindow(): Promise<void> {
+  const startupStartedAt = Date.now();
   const paths = getAppPaths(app);
   mainWindow = createHoloshelfWindow();
   await loadStartupScreen(mainWindow);
@@ -378,7 +372,9 @@ async function createMainWindow(): Promise<void> {
   );
 
   const database = new DatabaseService(paths.databasePath, paths.backupDirectory);
+  const databaseStartedAt = Date.now();
   await database.init();
+  writeAppLog(`[startup] database ready in ${Date.now() - databaseStartedAt}ms`);
   database.upsertModuleManifests(trackerModules);
 
   const fetchScheduler = new FetchScheduler(database, createSourceAdapters());
@@ -419,21 +415,23 @@ async function createMainWindow(): Promise<void> {
   updateService.attachWindow(mainWindow);
   updateService.initialize();
 
-  await repairBundledOfficialImageCache({
-    database,
-    paths,
-    log: writeAppLog
-  }).catch((error) => {
-    writeAppLog(`[official-data] image cache repair failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-  });
-
   if (app.isPackaged) {
+    const mergeStartedAt = Date.now();
+    await mergeBundledOfficialData({
+      database,
+      paths,
+      isPackaged: true,
+      log: writeAppLog
+    }).catch((error) => {
+      writeAppLog(`[official-data] merge failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    });
+    writeAppLog(`[startup] official data ready in ${Date.now() - mergeStartedAt}ms`);
     await mainWindow.loadURL("app://holoshelf/index.html");
-    scheduleBundledOfficialDataMerge(database, paths);
     void updateService.checkForUpdates();
   } else {
     await mainWindow.loadURL("http://127.0.0.1:5173");
   }
+  writeAppLog(`[startup] renderer ready in ${Date.now() - startupStartedAt}ms`);
 }
 
 app.whenReady().then(async () => {

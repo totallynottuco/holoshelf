@@ -10,4 +10,10 @@ Holodex API is used as a source for Hololive channel and music metadata. YouTube
 
 The Holoshelf bracket feature was inspired by Quizei: https://quizei.com/
 
+Double-elimination tournament topology and result propagation use Brackets Manager, Brackets Memory DB, and Brackets Model by Corentin Girard (Drarig29). They are distributed under permissive licenses identified in their published packages and source repositories:
+
+- https://github.com/Drarig29/brackets-manager.js
+- https://github.com/Drarig29/brackets-storage
+- https://github.com/Drarig29/brackets-model
+
 Holoshelf does not grant rights to any third-party trademarks, character likenesses, music, video content, API data, or other third-party materials.

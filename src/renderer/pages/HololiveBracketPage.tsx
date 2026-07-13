@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type WheelEvent as ReactWheelEvent } from "react";
 import {
   ArrowUpDown,
   BarChart3,
@@ -12,15 +12,20 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  MoveHorizontal,
+  MoveVertical,
   RotateCcw,
   Swords,
   Trash2,
   Trophy,
-  Undo2
+  Undo2,
+  ZoomIn,
+  ZoomOut
 } from "lucide-react";
 import type {
   HololiveBracket,
   HololiveBracketEntry,
+  HololiveBracketFormat,
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketHistoryParticipation,
@@ -31,6 +36,7 @@ import type {
   HololiveBracketRivalryStats,
   HololiveBracketSize,
   HololiveBracketStatsOverview,
+  HololiveBracketStatsFormat,
   HololiveBracketSummary,
   HololiveBracketArchiveSummary,
   HololiveBracketSongStats,
@@ -61,6 +67,16 @@ import { renderHololiveBracketExportPng } from "../lib/hololiveBracketExport";
 import { useDismissableLayer } from "../lib/useDismissableLayer";
 
 const BRACKET_SIZES: HololiveBracketSize[] = ["RO16", "RO32", "RO64", "RO128", "RO256"];
+const BRACKET_ZOOM_MIN = 0.05;
+const BRACKET_ZOOM_MAX = 8;
+const BRACKET_DEFAULT_VISUAL_SCALE = 0.99;
+const BRACKET_ZOOM_STORAGE_PREFIX = "holoshelf.bracketZoom.v4.";
+const BRACKET_FIT_MODE_STORAGE_PREFIX = "holoshelf.bracketFitMode.v4.";
+type BracketFitMode = "none" | "height" | "width";
+const BRACKET_FORMATS: Array<{ value: HololiveBracketFormat; label: string }> = [
+  { value: "single_elimination", label: "Single" },
+  { value: "double_elimination", label: "Double" }
+];
 const HOLOLIVE_BRACKET_SIZE_COUNTS: Record<HololiveBracketSize, number> = {
   RO16: 16,
   RO32: 32,
@@ -68,6 +84,78 @@ const HOLOLIVE_BRACKET_SIZE_COUNTS: Record<HololiveBracketSize, number> = {
   RO128: 128,
   RO256: 256
 };
+
+function storedBracketZoom(bracketId: string): number | null {
+  try {
+    const value = Number.parseFloat(window.localStorage.getItem(`${BRACKET_ZOOM_STORAGE_PREFIX}${bracketId}`) ?? "");
+    return Number.isFinite(value) ? Math.min(BRACKET_ZOOM_MAX, Math.max(BRACKET_ZOOM_MIN, value)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeBracketZoom(bracketId: string, zoom: number): void {
+  try {
+    window.localStorage.setItem(`${BRACKET_ZOOM_STORAGE_PREFIX}${bracketId}`, String(zoom));
+  } catch {
+    // Local storage can be unavailable in hardened browser contexts.
+  }
+}
+
+function storedBracketFitMode(viewKey: string): BracketFitMode {
+  try {
+    const storedMode = window.localStorage.getItem(`${BRACKET_FIT_MODE_STORAGE_PREFIX}${viewKey}`);
+    if (storedMode === "height" || storedMode === "width") {
+      return storedMode;
+    }
+    return "none";
+  } catch {
+    return "none";
+  }
+}
+
+function storeBracketFitMode(viewKey: string, fitMode: BracketFitMode): void {
+  try {
+    window.localStorage.setItem(`${BRACKET_FIT_MODE_STORAGE_PREFIX}${viewKey}`, fitMode);
+  } catch {
+    // Local storage can be unavailable in hardened browser contexts.
+  }
+}
+
+function applyBracketFitMode(viewport: HTMLElement | null, fitMode: BracketFitMode): void {
+  if (!viewport) {
+    return;
+  }
+  if (fitMode === "height") {
+    viewport.setAttribute("data-bracket-fit-height", "true");
+  } else {
+    viewport.removeAttribute("data-bracket-fit-height");
+  }
+  if (fitMode === "width") {
+    viewport.setAttribute("data-bracket-fit-width", "true");
+  } else {
+    viewport.removeAttribute("data-bracket-fit-width");
+  }
+}
+
+function renderedBracketBaseBounds(canvas: HTMLElement, zoom: number): { width: number; height: number } {
+  const canvasRect = canvas.getBoundingClientRect();
+  const content = canvas.querySelectorAll<HTMLElement>(
+    ".hololive-bracket-round > header, .hololive-bracket-match-body, .hololive-bracket-champion-strip"
+  );
+  let right = 0;
+  let bottom = 0;
+  for (const element of content) {
+    const rect = element.getBoundingClientRect();
+    right = Math.max(right, (rect.right - canvasRect.left) / zoom);
+    bottom = Math.max(bottom, (rect.bottom - canvasRect.top) / zoom);
+  }
+  return {
+    width: Math.max(1, right, canvasRect.width / zoom),
+    height: Math.max(1, bottom || canvasRect.height / zoom)
+  };
+}
+
 const BRACKET_GENERATION_STYLES: Array<{ value: HololiveBracketGenerationStyle; label: string }> = [
   { value: "top_songs", label: "Top Songs" },
   { value: "random_songs", label: "Random Songs" }
@@ -75,6 +163,8 @@ const BRACKET_GENERATION_STYLES: Array<{ value: HololiveBracketGenerationStyle; 
 const BRACKET_TOPIC_VALUES: HololiveMusicTopic[] = ["Original_Song", "Music_Cover"];
 const BRACKET_VOCAL_SCOPE_VALUES: HololiveBracketVocalScope[] = ["solo", "group"];
 const BRACKET_TALENT_STATUS_VALUES: HololiveBracketTalentStatusFilter[] = ["active", "alumni", "custom"];
+type BracketViewStage = "single" | "winners" | "losers" | "grand_final";
+type BracketRoundViewValue = "all" | `round:${number}`;
 const BRACKET_RATING_BUCKET_VALUES: HololiveBracketRatingBucket[] = [
   "unrated",
   "favorite",
@@ -221,6 +311,15 @@ function displaySongTitle(title: string): string {
 }
 
 function matchLabel(match: HololiveBracketMatch): string {
+  if (match.stage === "winners") {
+    return `W${match.stageRoundIndex + 1}-${match.matchIndex + 1}`;
+  }
+  if (match.stage === "losers") {
+    return `L${match.stageRoundIndex + 1}-${match.matchIndex + 1}`;
+  }
+  if (match.stage === "grand_final") {
+    return "GF";
+  }
   return `R${match.roundIndex + 1}-${match.matchIndex + 1}`;
 }
 
@@ -241,10 +340,35 @@ function entryMeta(entry: HololiveBracketEntry): string {
 }
 
 function roundProgressLabel(activeBracket: HololiveBracket, currentMatch: HololiveBracketMatch): string {
-  const round = activeBracket.rounds[currentMatch.roundIndex];
+  const round = activeBracket.rounds.find(
+    (item) => item.stage === currentMatch.stage && item.stageRoundIndex === currentMatch.stageRoundIndex
+  );
   const matchCount = Math.max(round?.matches.length ?? 1, 1);
+  const stageLabel =
+    currentMatch.stage === "winners"
+      ? "Winners"
+      : currentMatch.stage === "losers"
+        ? "Losers"
+        : currentMatch.stage === "grand_final"
+          ? "Grand Final"
+          : null;
   const roundLabel = round ? displayHololiveBracketRoundLabel(round.label) : "Matchup";
-  return `${roundLabel} · ${currentMatch.matchIndex + 1}/${matchCount}`;
+  const label = stageLabel && currentMatch.stage !== "grand_final" ? `${stageLabel} - ${roundLabel}` : stageLabel ?? roundLabel;
+  return `${label} - ${currentMatch.matchIndex + 1}/${matchCount}`;
+}
+
+function bracketSongRecord(
+  songStats: HololiveBracketSongStats[] | null,
+  entry: HololiveBracketEntry | null | undefined
+): Pick<HololiveBracketSongStats, "wins" | "losses"> | null {
+  if (!songStats || !entry) {
+    return null;
+  }
+  return (
+    songStats.find((row) => row.canonicalPerformanceKey === entry.canonicalPerformanceKey) ??
+    songStats.find((row) => row.youtubeVideoId === entry.youtubeVideoId) ??
+    { wins: 0, losses: 0 }
+  );
 }
 
 function summaryLabel(summary: HololiveBracketSummary): string {
@@ -328,7 +452,7 @@ function MatchEntry({
   if (!entry) {
     return (
       <div className="hololive-bracket-entry empty">
-        <span>Pending</span>
+        <span><BracketSelectableText>Pending</BracketSelectableText></span>
       </div>
     );
   }
@@ -339,10 +463,8 @@ function MatchEntry({
     <div className={`hololive-bracket-entry${winner ? " winner" : ""}`}>
       <img src={youtubeThumbnailUrl(entry.youtubeVideoId)} alt="" loading="lazy" />
       <div>
-        <strong title={entry.title}>{visibleTitle}</strong>
-        <span title={entryMeta(entry)}>
-          {entry.idolName} / {topicLabel(entry)}
-        </span>
+        <strong title={entry.title}><BracketSelectableText>{visibleTitle}</BracketSelectableText></strong>
+        <span title={entryMeta(entry)}><BracketSelectableText>{entry.idolName} / {topicLabel(entry)}</BracketSelectableText></span>
       </div>
     </div>
   );
@@ -367,8 +489,11 @@ function BracketMatchCard({
       className={`hololive-bracket-match ${side}${pairClass}${current ? " current" : ""}`}
     >
       <div className="hololive-bracket-match-body">
-        <div className="hololive-bracket-match-label" title={`Round ${match.roundIndex + 1}, match ${match.matchIndex + 1}`}>
-          {matchLabel(match)}
+        <div
+          className="hololive-bracket-match-label"
+          title={`Round ${match.roundIndex + 1}, match ${match.matchIndex + 1}`}
+        >
+          <BracketSelectableText>{matchLabel(match)}</BracketSelectableText>
         </div>
         <MatchEntry entry={match.entryA} winner={match.winnerEntryId === match.entryA?.id} />
         <MatchEntry entry={match.entryB} winner={match.winnerEntryId === match.entryB?.id} />
@@ -381,6 +506,7 @@ function PlaySide({
   entry,
   side,
   disabled,
+  record,
   marker,
   playlists,
   onAddToPlaylist,
@@ -390,6 +516,7 @@ function PlaySide({
   entry: HololiveBracketEntry | null | undefined;
   side: "left" | "right";
   disabled: boolean;
+  record?: Pick<HololiveBracketSongStats, "wins" | "losses"> | null;
   marker?: HololiveMusicMarker | null;
   playlists: HololiveMusicPlayerData["playlists"];
   onAddToPlaylist: (entry: HololiveBracketEntry, playlistId: string) => Promise<void>;
@@ -484,6 +611,7 @@ function PlaySide({
           <div className="hololive-bracket-arena-meta" title={entryMeta(entry)}>
             <span>{entry.idolName}</span>
             <span>{topicLabel(entry)}</span>
+            {record ? <span className="song-record" title="Archived bracket match record">{record.wins}-{record.losses} W-L</span> : null}
             <span>{formatHololiveViewCount(entry.viewCount)}</span>
             <span>{formatHololiveSongDate(entry.publishedAt)}</span>
             <span>{formatHololiveDuration(entry.durationSeconds)}</span>
@@ -1402,6 +1530,7 @@ type BracketOverviewAward = {
   tooltip: string;
   theme: HololiveTalentTheme;
   visualKind: "talent" | "song";
+  imagePresentation: "render" | "custom-art" | "placeholder" | "song";
   leaderboard: BracketOverviewAwardLeaderboardItem[];
 };
 
@@ -1495,9 +1624,20 @@ function resolveTalentImage(talentsById: Map<string, HololiveIdol>, talentId: st
   return [...talentsById.values()].find((talent) => talent.displayName.toLowerCase() === normalizedName) ?? null;
 }
 
-function talentImageUrls(talent: HololiveIdol | null): Pick<BracketOverviewAward, "imageUrls"> {
+function talentImageUrls(
+  talent: HololiveIdol | null
+): Pick<BracketOverviewAward, "imageUrls" | "imagePresentation"> {
   if (!talent) {
-    return { imageUrls: [] };
+    return { imageUrls: [], imagePresentation: "placeholder" };
+  }
+  if (talent.source === "custom") {
+    const customImageUrls = [talent.cachedCardImageUrl, talent.cardImageUrl].filter(
+      (source): source is string => Boolean(source?.trim())
+    );
+    return {
+      imageUrls: [...new Set(customImageUrls)],
+      imagePresentation: customImageUrls.length > 0 ? "custom-art" : "placeholder"
+    };
   }
   const imageUrls = [
     resolveHololiveAwardCardImageUrl(talent.slug),
@@ -1510,7 +1650,8 @@ function talentImageUrls(talent: HololiveIdol | null): Pick<BracketOverviewAward
   ].filter((source): source is string => Boolean(source?.trim()));
 
   return {
-    imageUrls: [...new Set(imageUrls)]
+    imageUrls: [...new Set(imageUrls)],
+    imagePresentation: imageUrls.length > 0 ? "render" : "placeholder"
   };
 }
 
@@ -1584,6 +1725,347 @@ function createRatingAward(
   };
 }
 
+function BracketSelectableText({ children }: { children: ReactNode }) {
+  return <span className="hololive-bracket-selectable-text" data-bracket-selectable-text>{children}</span>;
+}
+
+function bracketRoundViewLabel(round: HololiveBracketRound, stage: BracketViewStage, isLast: boolean): string {
+  return stage === "winners" && isLast
+    ? "Winners Final"
+    : displayHololiveBracketRoundLabel(round.label);
+}
+
+function buildTwoSidedBracketTree(rounds: HololiveBracketRound[]) {
+  const nonFinalRounds = rounds.slice(0, -1);
+  const leftRounds = nonFinalRounds.map((round) => ({
+    ...round,
+    matches: round.matches.slice(0, Math.ceil(round.matches.length / 2))
+  }));
+  const rightRounds = nonFinalRounds
+    .map((round) => ({
+      ...round,
+      matches: round.matches.slice(Math.ceil(round.matches.length / 2))
+    }))
+    .reverse();
+  const finalRound = rounds[rounds.length - 1] ?? null;
+  const baseMatches = Math.max(
+    1,
+    leftRounds[0]?.matches.length ?? 0,
+    rightRounds[rightRounds.length - 1]?.matches.length ?? 0
+  );
+  return { leftRounds, rightRounds, finalRound, baseMatches };
+}
+
+type BracketViewportProps = {
+  zoom: number;
+  viewportRef: RefObject<HTMLDivElement | null>;
+  canvasRef: RefObject<HTMLDivElement | null>;
+  onWheel: (event: ReactWheelEvent<HTMLDivElement>) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+};
+
+function TwoSidedBracketView({
+  bracket,
+  rounds,
+  viewportClassName,
+  registerMatch,
+  connectorLayout,
+  showChampion,
+  ariaLabel,
+  zoom,
+  viewportRef,
+  canvasRef,
+  onWheel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp
+}: {
+  bracket: HololiveBracket;
+  rounds: HololiveBracketRound[];
+  viewportClassName?: string;
+  registerMatch: (matchId: string, element: HTMLElement | null) => void;
+  connectorLayout: BracketConnectorLayout;
+  showChampion: boolean;
+  ariaLabel: string;
+} & BracketViewportProps) {
+  const tree = buildTwoSidedBracketTree(rounds);
+  const finalRound = tree.finalRound;
+  const finalMatch = finalRound?.matches[0] ?? null;
+  const finalLabel = finalRound?.stage === "grand_final"
+    ? "Grand Final"
+    : finalRound?.stage === "winners"
+      ? "Winners Final"
+      : "Final";
+
+  return (
+    <div
+      className={`hololive-bracket-tree hololive-bracket-viewport${viewportClassName ? ` ${viewportClassName}` : ""}`}
+      ref={viewportRef}
+      style={{ "--bracket-base-matches": tree.baseMatches } as CSSProperties}
+      aria-label={ariaLabel}
+      onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <div
+        className="hololive-bracket-canvas hololive-bracket-zoom-content"
+        ref={canvasRef}
+        style={{ "--bracket-zoom": zoom } as CSSProperties}
+      >
+        {connectorLayout.paths.length > 0 ? (
+          <svg
+            className="hololive-bracket-lines"
+            width={connectorLayout.width}
+            height={connectorLayout.height}
+            viewBox={`0 0 ${connectorLayout.width} ${connectorLayout.height}`}
+            aria-hidden="true"
+          >
+            {connectorLayout.paths.map((path) => (
+              <path key={path.id} d={path.d} />
+            ))}
+          </svg>
+        ) : null}
+
+        <div className="hololive-bracket-side left">
+          {tree.leftRounds.map((round) => (
+            <section
+              className={roundClassName(round, bracket)}
+              key={`left-${round.stage}-${round.stageRoundIndex}`}
+              style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
+            >
+              <header><strong><BracketSelectableText>{displayHololiveBracketRoundLabel(round.label)}</BracketSelectableText></strong></header>
+              <div className="hololive-bracket-round-stack">
+                {round.matches.map((match) => (
+                  <BracketMatchCard
+                    key={match.id}
+                    match={match}
+                    side="left"
+                    current={bracket.currentMatchId === match.id}
+                    registerMatch={registerMatch}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        <section
+          className={
+            finalRound
+              ? roundClassName(finalRound, bracket, "hololive-bracket-final-round")
+              : "hololive-bracket-round hololive-bracket-final-round upcoming"
+          }
+          style={{ "--round-match-count": 1 } as CSSProperties}
+        >
+          <header><strong><BracketSelectableText>{finalLabel}</BracketSelectableText></strong></header>
+          <div className="hololive-bracket-round-stack">
+            {finalMatch ? (
+              <BracketMatchCard
+                match={finalMatch}
+                side="final"
+                current={bracket.currentMatchId === finalMatch.id}
+                registerMatch={registerMatch}
+              />
+            ) : (
+              <div className="hololive-bracket-entry empty">Pending</div>
+            )}
+            {showChampion && bracket.champion ? (
+              <div className="hololive-bracket-champion-strip">
+                <Trophy size={14} />
+                <strong title={bracket.champion.title}><BracketSelectableText>{displaySongTitle(bracket.champion.title)}</BracketSelectableText></strong>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <div className="hololive-bracket-side right">
+          {tree.rightRounds.map((round) => (
+            <section
+              className={roundClassName(round, bracket)}
+              key={`right-${round.stage}-${round.stageRoundIndex}`}
+              style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
+            >
+              <header><strong><BracketSelectableText>{displayHololiveBracketRoundLabel(round.label)}</BracketSelectableText></strong></header>
+              <div className="hololive-bracket-round-stack">
+                {round.matches.map((match) => (
+                  <BracketMatchCard
+                    key={match.id}
+                    match={match}
+                    side="right"
+                    current={bracket.currentMatchId === match.id}
+                    registerMatch={registerMatch}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BracketZoomControls({
+  zoom,
+  onZoomOut,
+  onReset,
+  onZoomIn,
+  onFitHeight,
+  onFitWidth
+}: {
+  zoom: number;
+  onZoomOut: () => void;
+  onReset: () => void;
+  onZoomIn: () => void;
+  onFitHeight: () => void;
+  onFitWidth: () => void;
+}) {
+  return (
+    <div className="hololive-bracket-zoom-controls" role="group" aria-label="Bracket zoom">
+      <button type="button" aria-label="Zoom out" title="Zoom out" onClick={onZoomOut} disabled={zoom <= BRACKET_ZOOM_MIN}>
+        <ZoomOut size={14} />
+      </button>
+      <button type="button" className="zoom-value" aria-label="Reset zoom" title="Reset zoom" onClick={onReset}>
+        {Math.round(zoom * 100)}%
+      </button>
+      <button type="button" aria-label="Zoom in" title="Zoom in" onClick={onZoomIn} disabled={zoom >= BRACKET_ZOOM_MAX}>
+        <ZoomIn size={14} />
+      </button>
+      <button type="button" aria-label="Fit height" title="Fit height" onClick={onFitHeight}>
+        <MoveVertical size={14} />
+      </button>
+      <button type="button" aria-label="Fit width" title="Fit width" onClick={onFitWidth}>
+        <MoveHorizontal size={14} />
+      </button>
+    </div>
+  );
+}
+
+function DoubleEliminationBracketView({
+  bracket,
+  rounds,
+  stage,
+  onStageChange,
+  registerMatch,
+  canvasRef,
+  connectorLayout,
+  zoom,
+  viewportRef,
+  onWheel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp
+}: {
+  bracket: HololiveBracket;
+  rounds: HololiveBracketRound[];
+  stage: "winners" | "losers" | "grand_final";
+  onStageChange: (stage: "winners" | "losers" | "grand_final") => void;
+  registerMatch: (matchId: string, element: HTMLElement | null) => void;
+  canvasRef: RefObject<HTMLDivElement | null>;
+  connectorLayout: BracketConnectorLayout;
+} & Omit<BracketViewportProps, "canvasRef" | "zoom"> & { zoom: number }) {
+  const stageOptions: Array<{ value: "winners" | "losers" | "grand_final"; label: string }> = [
+    { value: "winners", label: "Winners Bracket" },
+    { value: "losers", label: "Losers Bracket" },
+    { value: "grand_final", label: "Grand Finals" }
+  ];
+  const baseMatches = Math.max(1, ...rounds.map((round) => round.matches.length));
+
+  return (
+    <div className="hololive-double-bracket-view">
+      <div className="hololive-double-bracket-tabs" role="tablist" aria-label="Double-elimination bracket stage">
+        {stageOptions.map((option) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={stage === option.value}
+            className={stage === option.value ? "active" : ""}
+            key={option.value}
+            onClick={() => onStageChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {stage === "winners" || stage === "grand_final" ? (
+        <TwoSidedBracketView
+          bracket={bracket}
+          rounds={rounds}
+          viewportClassName={stage === "grand_final" ? "hololive-bracket-grand-final-view" : undefined}
+          registerMatch={registerMatch}
+          connectorLayout={connectorLayout}
+          showChampion={stage === "grand_final"}
+          ariaLabel={stage === "grand_final" ? "Grand Final" : "Winners bracket"}
+          zoom={zoom}
+          viewportRef={viewportRef}
+          canvasRef={canvasRef}
+          onWheel={onWheel}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
+      ) : (
+      <div
+        className={`hololive-double-bracket-canvas hololive-bracket-viewport stage-${stage}`}
+        ref={viewportRef}
+        style={{ "--bracket-base-matches": baseMatches } as CSSProperties}
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <div
+          className="hololive-double-bracket-content hololive-bracket-zoom-content"
+          ref={canvasRef}
+          style={{ "--bracket-zoom": zoom } as CSSProperties}
+        >
+        {connectorLayout.paths.length > 0 ? (
+          <svg
+            className="hololive-bracket-lines"
+            width={connectorLayout.width}
+            height={connectorLayout.height}
+            viewBox={`0 0 ${connectorLayout.width} ${connectorLayout.height}`}
+            aria-hidden="true"
+          >
+            {connectorLayout.paths.map((path) => (
+              <path key={path.id} d={path.d} />
+            ))}
+          </svg>
+        ) : null}
+        {rounds.map((round) => (
+          <section
+            className={roundClassName(round, bracket, "hololive-double-bracket-round")}
+            key={`${round.stage}-${round.stageRoundIndex}`}
+            style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
+          >
+            <header>
+              <strong><BracketSelectableText>{displayHololiveBracketRoundLabel(round.label)}</BracketSelectableText></strong>
+            </header>
+            <div className="hololive-bracket-round-stack">
+              {round.matches.map((match) => (
+                <BracketMatchCard
+                  key={match.id}
+                  match={match}
+                  side="left"
+                  current={bracket.currentMatchId === match.id}
+                  registerMatch={registerMatch}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+        </div>
+      </div>
+      )}
+    </div>
+  );
+}
+
 function songAwardImageUrls(youtubeVideoId: string | null | undefined): string[] {
   const videoId = youtubeVideoId?.trim();
   if (!videoId) {
@@ -1620,6 +2102,7 @@ function createSongAward(
     tooltip,
     theme: talentAwardTheme(talent, row?.idolId ?? null, row?.idolName ?? null),
     visualKind: "song",
+    imagePresentation: "song",
     leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => ({
       id: leader.canonicalPerformanceKey,
       name: displaySongTitle(leader.title),
@@ -1651,6 +2134,7 @@ function createSongRatingAward(
     tooltip: "Highest conservative Glicko-2 rating.",
     theme: talentAwardTheme(talent, winnerSong?.idolId ?? null, winnerSong?.idolName ?? null),
     visualKind: "song",
+    imagePresentation: "song",
     leaderboard: rows.slice(0, BRACKET_OVERVIEW_AWARD_LEADERBOARD_LIMIT).map((leader) => {
       const song = songByKey.get(leader.id);
       return {
@@ -1708,7 +2192,7 @@ function BracketOverviewAwardCard({ award }: { award: BracketOverviewAward }) {
 
   return (
     <article
-      className={`hololive-bracket-award-card ${award.visualKind}${award.winnerId ? "" : " empty"}`}
+      className={`hololive-bracket-award-card ${award.visualKind} ${award.imagePresentation}${award.winnerId ? "" : " empty"}`}
       style={awardStyle}
     >
       <h3 title={award.tooltip}>
@@ -2664,12 +3148,16 @@ function BracketDetailedStatsView({ stats }: { stats: HololiveBracketStatsOvervi
 export function BracketStatsView({
   stats,
   talents,
-  loading
+  loading,
+  format,
+  onFormatChange
 }: {
   stats: HololiveBracketStatsOverview | null;
   archives: HololiveBracketArchiveSummary[];
   talents: HololiveIdol[];
   loading: boolean;
+  format: HololiveBracketStatsFormat;
+  onFormatChange: (format: HololiveBracketStatsFormat) => void;
   deletingArchiveId: string | null;
   onDeleteArchive: (archive: HololiveBracketArchiveSummary) => void;
 }) {
@@ -2715,6 +3203,17 @@ export function BracketStatsView({
             </button>
           ))}
         </div>
+        <CompactSelect
+          ariaLabel="Bracket format history"
+          className="hololive-bracket-stats-format-select"
+          value={format}
+          options={[
+            { value: "all", label: "All Formats" },
+            { value: "single_elimination", label: "Single" },
+            { value: "double_elimination", label: "Double" }
+          ]}
+          onChange={(value) => onFormatChange(value as HololiveBracketStatsFormat)}
+        />
         {section === "overview" ? (
           <div className="hololive-bracket-stats-scope-switcher" role="group" aria-label="Stats subject">
             <button type="button" aria-pressed={subject === "talent"} onClick={() => setSubject("talent")}>
@@ -2738,6 +3237,17 @@ export function BracketStatsView({
 export function HololiveBracketPage() {
   const { showToast, showUndoToast } = useHololiveActionToast();
   const bracketCanvasRef = useRef<HTMLDivElement | null>(null);
+  const bracketViewportRef = useRef<HTMLDivElement | null>(null);
+  const bracketPanRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
+  const bracketSelectionBoundaryRef = useRef<HTMLElement | null>(null);
+  const pendingRoundViewportResetRef = useRef(false);
+  const bracketFitFrameRef = useRef<number | null>(null);
   const playArenaRef = useRef<HTMLDivElement | null>(null);
   const matchRefs = useRef(new Map<string, HTMLElement>());
   const createMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2747,6 +3257,7 @@ export function HololiveBracketPage() {
   const [summaries, setSummaries] = useState<HololiveBracketSummary[]>([]);
   const [activeBracket, setActiveBracket] = useState<HololiveBracket | null>(null);
   const [selectedSize, setSelectedSize] = useState<HololiveBracketSize>("RO64");
+  const [selectedFormat, setSelectedFormat] = useState<HololiveBracketFormat>("single_elimination");
   const [selectedGenerationStyle, setSelectedGenerationStyle] = useState<HololiveBracketGenerationStyle>("top_songs");
   const [includedRatingBuckets, setIncludedRatingBuckets] = useState<HololiveBracketRatingBucket[]>(BRACKET_RATING_BUCKET_VALUES);
   const [excludeTopViewedPerTalent, setExcludeTopViewedPerTalent] = useState(false);
@@ -2774,6 +3285,7 @@ export function HololiveBracketPage() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mode, setMode] = useState<"bracket" | "play" | "stats">("bracket");
+  const [doubleBracketStage, setDoubleBracketStage] = useState<"winners" | "losers" | "grand_final">("winners");
   const [loading, setLoading] = useState(true);
   const [statsLoading, setStatsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2782,9 +3294,14 @@ export function HololiveBracketPage() {
   const [exportToast, setExportToast] = useState<ExportToastState | null>(null);
   const [playerData, setPlayerData] = useState<HololiveMusicPlayerData | null>(null);
   const [statsOverview, setStatsOverview] = useState<HololiveBracketStatsOverview | null>(null);
+  const [playSongStats, setPlaySongStats] = useState<HololiveBracketSongStats[] | null>(null);
+  const [statsFormat, setStatsFormat] = useState<HololiveBracketStatsFormat>("all");
+  const statsCacheRef = useRef(new Map<HololiveBracketStatsFormat, HololiveBracketStatsOverview>());
   const [archiveSummaries, setArchiveSummaries] = useState<HololiveBracketArchiveSummary[]>([]);
   const [matchupMarkersByVideoId, setMatchupMarkersByVideoId] = useState<Record<string, HololiveMusicMarker | null>>({});
   const [arenaFullscreen, setArenaFullscreen] = useState(false);
+  const [bracketZoom, setBracketZoom] = useState(1);
+  const [roundViewByBracketStage, setRoundViewByBracketStage] = useState<Record<string, BracketRoundViewValue>>({});
   const [connectorLayout, setConnectorLayout] = useState<BracketConnectorLayout>(() => emptyBracketConnectorLayout());
 
   const completedCount = useMemo(
@@ -3035,38 +3552,286 @@ export function HololiveBracketPage() {
     }
   }, []);
 
-  const bracketTree = useMemo(() => {
-    if (!activeBracket) {
-      return null;
+  const clampBracketZoom = useCallback(
+    (value: number) => Math.min(BRACKET_ZOOM_MAX, Math.max(BRACKET_ZOOM_MIN, value)),
+    []
+  );
+  const activeBracketViewStage: BracketViewStage =
+    activeBracket?.format === "double_elimination" ? doubleBracketStage : "single";
+  const roundViewKey = activeBracket ? `${activeBracket.id}:${activeBracketViewStage}` : "";
+  const activeStageRounds = useMemo(
+    () => activeBracket?.rounds.filter((round) => round.stage === activeBracketViewStage) ?? [],
+    [activeBracket, activeBracketViewStage]
+  );
+  const roundViewOptions = useMemo(
+    () => [
+      { value: "all" as const, label: "Full bracket" },
+      ...activeStageRounds.slice(1).map((round, index) => ({
+        value: `round:${round.stageRoundIndex}` as const,
+        label: bracketRoundViewLabel(round, activeBracketViewStage, index === activeStageRounds.length - 2)
+      }))
+    ],
+    [activeBracketViewStage, activeStageRounds]
+  );
+  const roundViewSelectWidth = useMemo(() => {
+    const longestLabel = roundViewOptions.reduce((length, option) => Math.max(length, option.label.length), 0);
+    return `${Math.max(12, Math.min(21, longestLabel + 4))}ch`;
+  }, [roundViewOptions]);
+  const requestedRoundView = roundViewKey ? roundViewByBracketStage[roundViewKey] ?? "all" : "all";
+  const selectedRoundView = roundViewOptions.some((option) => option.value === requestedRoundView)
+    ? requestedRoundView
+    : "all";
+  const visibleBracketRounds = useMemo(() => {
+    if (selectedRoundView === "all") {
+      return activeStageRounds;
+    }
+    const startRound = Number.parseInt(selectedRoundView.slice("round:".length), 10);
+    return activeStageRounds.filter((round) => round.stageRoundIndex >= startRound);
+  }, [activeStageRounds, selectedRoundView]);
+  const effectiveBracketZoom = bracketZoom * BRACKET_DEFAULT_VISUAL_SCALE;
+  const roundViewRenderKey = `${roundViewKey}:${selectedRoundView}`;
+  const zoomViewKey = activeBracket ? `${activeBracket.id}:${activeBracketViewStage}:${selectedRoundView}` : "";
+  const rememberBracketZoom = useCallback(
+    (value: number, fitMode: BracketFitMode = "none") => {
+      if (zoomViewKey) {
+        storeBracketZoom(zoomViewKey, value);
+        storeBracketFitMode(zoomViewKey, fitMode);
+      }
+      applyBracketFitMode(bracketViewportRef.current, fitMode);
+    },
+    [zoomViewKey]
+  );
+  const cancelPendingBracketFit = useCallback(() => {
+    if (bracketFitFrameRef.current !== null) {
+      window.cancelAnimationFrame(bracketFitFrameRef.current);
+      bracketFitFrameRef.current = null;
+    }
+  }, []);
+  const changeBracketZoom = useCallback(
+    (amount: number) => {
+      cancelPendingBracketFit();
+      setBracketZoom((current) => {
+        const next = clampBracketZoom(current + amount);
+        rememberBracketZoom(next);
+        return next;
+      });
+    },
+    [cancelPendingBracketFit, clampBracketZoom, rememberBracketZoom]
+  );
+  const fitBracket = useCallback((fitMode: Exclude<BracketFitMode, "none">, maximumZoom = BRACKET_ZOOM_MAX) => {
+    cancelPendingBracketFit();
+
+    const applyFitPass = (remainingCorrections: number) => {
+      const viewport = bracketViewportRef.current;
+      const canvas = bracketCanvasRef.current;
+      if (!viewport || !canvas) {
+        bracketFitFrameRef.current = null;
+        return;
+      }
+
+      const currentZoom = Number.parseFloat(canvas.style.getPropertyValue("--bracket-zoom")) || 1;
+      const bounds = renderedBracketBaseBounds(canvas, currentZoom);
+      const viewportStyle = window.getComputedStyle(viewport);
+      const horizontalPadding =
+        Number.parseFloat(viewportStyle.paddingLeft || "0") + Number.parseFloat(viewportStyle.paddingRight || "0");
+      const verticalPadding =
+        Number.parseFloat(viewportStyle.paddingTop || "0") + Number.parseFloat(viewportStyle.paddingBottom || "0");
+      const availableSize =
+        fitMode === "width"
+          ? Math.max(1, viewport.clientWidth - horizontalPadding - 1)
+          : Math.max(1, viewport.clientHeight - verticalPadding - 2);
+      const baseSize = fitMode === "width" ? bounds.width : bounds.height;
+      const nextZoom = clampBracketZoom(
+        Math.min(maximumZoom, availableSize / baseSize / BRACKET_DEFAULT_VISUAL_SCALE)
+      );
+      const scaledSize = baseSize * BRACKET_DEFAULT_VISUAL_SCALE * nextZoom;
+      const appliedFitMode = scaledSize <= availableSize + 1 ? fitMode : "none";
+
+      setBracketZoom(nextZoom);
+      rememberBracketZoom(nextZoom, appliedFitMode);
+      viewport.scrollTo({ top: 0, left: 0 });
+
+      if (remainingCorrections > 0) {
+        bracketFitFrameRef.current = window.requestAnimationFrame(() => {
+          bracketFitFrameRef.current = null;
+          applyFitPass(remainingCorrections - 1);
+        });
+      }
+    };
+
+    applyFitPass(2);
+  }, [cancelPendingBracketFit, clampBracketZoom, rememberBracketZoom]);
+
+  const fitBracketToViewport = useCallback(
+    (maximumZoom = BRACKET_ZOOM_MAX) => fitBracket("width", maximumZoom),
+    [fitBracket]
+  );
+
+  const fitBracketVertically = useCallback(
+    (maximumZoom = BRACKET_ZOOM_MAX) => fitBracket("height", maximumZoom),
+    [fitBracket]
+  );
+
+  useEffect(() => cancelPendingBracketFit, [cancelPendingBracketFit]);
+
+  const selectRoundView = useCallback(
+    (value: BracketRoundViewValue) => {
+      if (!roundViewKey || value === selectedRoundView) {
+        return;
+      }
+      pendingRoundViewportResetRef.current = true;
+      setRoundViewByBracketStage((current) => ({ ...current, [roundViewKey]: value }));
+    },
+    [roundViewKey, selectedRoundView]
+  );
+
+  useLayoutEffect(() => {
+    if (!pendingRoundViewportResetRef.current || mode !== "bracket" || !activeBracket) {
+      return;
+    }
+    pendingRoundViewportResetRef.current = false;
+    const frameId = window.requestAnimationFrame(() => bracketViewportRef.current?.scrollTo({ top: 0, left: 0 }));
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeBracket, mode, roundViewRenderKey]);
+  const handleBracketWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (!event.ctrlKey || event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        return;
+      }
+      cancelPendingBracketFit();
+      setBracketZoom((current) => {
+        const next = clampBracketZoom(current + (event.deltaY > 0 ? -0.1 : 0.1));
+        if (next === current) return current;
+        rememberBracketZoom(next);
+        return next;
+      });
+    },
+    [cancelPendingBracketFit, clampBracketZoom, rememberBracketZoom]
+  );
+
+  useLayoutEffect(() => {
+    if (mode !== "bracket") {
+      return;
+    }
+    const viewport = bracketViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const applyWheelPolicy = (event: WheelEvent) => {
+      if (event.deltaY === 0 || Math.abs(event.deltaY) < Math.abs(event.deltaX)) {
+        return;
+      }
+      if (event.ctrlKey) {
+        event.preventDefault();
+        return;
+      }
+
+      const canScrollVertically =
+        !viewport.hasAttribute("data-bracket-fit-height") && viewport.scrollHeight > viewport.clientHeight + 1;
+      const canScrollHorizontally =
+        !viewport.hasAttribute("data-bracket-fit-width") && viewport.scrollWidth > viewport.clientWidth + 1;
+      if (!canScrollVertically && canScrollHorizontally) {
+        event.preventDefault();
+        const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 24
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? viewport.clientWidth
+            : 1;
+        viewport.scrollLeft += event.deltaY * deltaScale;
+      }
+    };
+    viewport.addEventListener("wheel", applyWheelPolicy, { passive: false });
+    return () => viewport.removeEventListener("wheel", applyWheelPolicy);
+  }, [activeBracket?.id, doubleBracketStage, mode, roundViewRenderKey]);
+  const constrainBracketSelection = useCallback(() => {
+    const boundary = bracketSelectionBoundaryRef.current;
+    const selection = window.getSelection();
+    if (!boundary || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return;
+    }
+    if (boundary.contains(selection.anchorNode) && boundary.contains(selection.focusNode)) {
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(boundary);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
+
+  useEffect(() => {
+    const finishSelection = () => window.requestAnimationFrame(() => {
+      constrainBracketSelection();
+      bracketSelectionBoundaryRef.current?.removeAttribute("data-bracket-selection-active");
+      bracketViewportRef.current?.removeAttribute("data-bracket-selecting-text");
+      bracketSelectionBoundaryRef.current = null;
+    });
+    document.addEventListener("selectionchange", constrainBracketSelection);
+    window.addEventListener("pointerup", finishSelection, true);
+    window.addEventListener("pointercancel", finishSelection, true);
+    return () => {
+      document.removeEventListener("selectionchange", constrainBracketSelection);
+      window.removeEventListener("pointerup", finishSelection, true);
+      window.removeEventListener("pointercancel", finishSelection, true);
+    };
+  }, [constrainBracketSelection]);
+
+  const handleBracketPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    const selectable = target?.closest<HTMLElement>("[data-bracket-selectable-text]") ?? null;
+    if (selectable) {
+      bracketSelectionBoundaryRef.current = selectable;
+      selectable.setAttribute("data-bracket-selection-active", "true");
+      event.currentTarget.setAttribute("data-bracket-selecting-text", "true");
+      return;
     }
 
-    const nonFinalRounds = activeBracket.rounds.slice(0, -1);
-    const leftRounds = nonFinalRounds.map((round) => {
-      const midpoint = Math.ceil(round.matches.length / 2);
-      return {
-        ...round,
-        matches: round.matches.slice(0, midpoint)
-      };
-    });
-    const rightRounds = nonFinalRounds
-      .map((round) => {
-        const midpoint = Math.ceil(round.matches.length / 2);
-        return {
-          ...round,
-          matches: round.matches.slice(midpoint)
-        };
-      })
-      .reverse();
-    const finalRound = activeBracket.rounds[activeBracket.rounds.length - 1] ?? null;
-    const baseMatches = Math.max(
-      1,
-      leftRounds[0]?.matches.length ?? 0,
-      rightRounds[rightRounds.length - 1]?.matches.length ?? 0
-    );
-
-    return { leftRounds, rightRounds, finalRound, baseMatches };
-  }, [activeBracket]);
-  const finalRound = bracketTree?.finalRound ?? null;
+    bracketSelectionBoundaryRef.current?.removeAttribute("data-bracket-selection-active");
+    event.currentTarget.removeAttribute("data-bracket-selecting-text");
+    bracketSelectionBoundaryRef.current = null;
+    window.getSelection()?.removeAllRanges();
+    if (target?.closest("button, input, select, a")) {
+      return;
+    }
+    const viewport = event.currentTarget;
+    const canPanHorizontally =
+      !viewport.hasAttribute("data-bracket-fit-width") && viewport.scrollWidth > viewport.clientWidth + 1;
+    const canPanVertically =
+      !viewport.hasAttribute("data-bracket-fit-height") && viewport.scrollHeight > viewport.clientHeight + 1;
+    if (!canPanHorizontally && !canPanVertically) {
+      return;
+    }
+    bracketPanRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop
+    };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("panning");
+  }, []);
+  const handleBracketPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = bracketPanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = event.currentTarget.hasAttribute("data-bracket-fit-width")
+      ? 0
+      : pan.scrollLeft - (event.clientX - pan.startX);
+    event.currentTarget.scrollTop = event.currentTarget.hasAttribute("data-bracket-fit-height")
+      ? 0
+      : pan.scrollTop - (event.clientY - pan.startY);
+  }, []);
+  const handleBracketPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = bracketPanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    bracketPanRef.current = null;
+    event.currentTarget.classList.remove("panning");
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
 
   const measureBracketConnectors = useCallback(() => {
     const canvas = bracketCanvasRef.current;
@@ -3083,8 +3848,8 @@ export function HololiveBracketPage() {
         }
         const rect = child.getBoundingClientRect();
         return {
-          right: Math.max(bounds.right, rect.right - canvasRect.left),
-          bottom: Math.max(bounds.bottom, rect.bottom - canvasRect.top)
+          right: Math.max(bounds.right, (rect.right - canvasRect.left) / effectiveBracketZoom),
+          bottom: Math.max(bounds.bottom, (rect.bottom - canvasRect.top) / effectiveBracketZoom)
         };
       },
       { right: canvas.clientWidth, bottom: canvas.clientHeight }
@@ -3099,19 +3864,20 @@ export function HololiveBracketPage() {
 
       const rect = body.getBoundingClientRect();
       return {
-        left: roundCoordinate(rect.left - canvasRect.left),
-        right: roundCoordinate(rect.right - canvasRect.left),
-        top: roundCoordinate(rect.top - canvasRect.top),
-        bottom: roundCoordinate(rect.bottom - canvasRect.top),
-        centerX: roundCoordinate(rect.left - canvasRect.left + rect.width / 2),
-        centerY: roundCoordinate(rect.top - canvasRect.top + rect.height / 2)
+        left: roundCoordinate((rect.left - canvasRect.left) / effectiveBracketZoom),
+        right: roundCoordinate((rect.right - canvasRect.left) / effectiveBracketZoom),
+        top: roundCoordinate((rect.top - canvasRect.top) / effectiveBracketZoom),
+        bottom: roundCoordinate((rect.bottom - canvasRect.top) / effectiveBracketZoom),
+        centerX: roundCoordinate((rect.left - canvasRect.left + rect.width / 2) / effectiveBracketZoom),
+        centerY: roundCoordinate((rect.top - canvasRect.top + rect.height / 2) / effectiveBracketZoom)
       };
     };
 
+    const visibleRounds = visibleBracketRounds;
     const paths: BracketConnectorPath[] = [];
-    for (let roundIndex = 1; roundIndex < activeBracket.rounds.length; roundIndex += 1) {
-      const previousRound = activeBracket.rounds[roundIndex - 1];
-      const round = activeBracket.rounds[roundIndex];
+    for (let roundIndex = 1; roundIndex < visibleRounds.length; roundIndex += 1) {
+      const previousRound = visibleRounds[roundIndex - 1];
+      const round = visibleRounds[roundIndex];
 
       for (const parent of round.matches) {
         const parentRect = getBodyRect(parent.id);
@@ -3119,10 +3885,13 @@ export function HololiveBracketPage() {
           continue;
         }
 
-        const children = [
-          previousRound.matches[parent.matchIndex * 2],
-          previousRound.matches[parent.matchIndex * 2 + 1]
-        ].filter((match): match is HololiveBracketMatch => Boolean(match));
+        const children =
+          previousRound.matches.length === round.matches.length
+            ? [previousRound.matches[parent.matchIndex]].filter((match): match is HololiveBracketMatch => Boolean(match))
+            : [
+                previousRound.matches[parent.matchIndex * 2],
+                previousRound.matches[parent.matchIndex * 2 + 1]
+              ].filter((match): match is HololiveBracketMatch => Boolean(match));
         const childRects = children
           .map((match) => ({ match, rect: getBodyRect(match.id) }))
           .filter((item): item is { match: HololiveBracketMatch; rect: NonNullable<ReturnType<typeof getBodyRect>> } =>
@@ -3176,7 +3945,7 @@ export function HololiveBracketPage() {
       }
       return nextLayout;
     });
-  }, [activeBracket, mode]);
+  }, [activeBracket, doubleBracketStage, effectiveBracketZoom, mode, visibleBracketRounds]);
 
   useLayoutEffect(() => {
     if (!activeBracket || mode !== "bracket") {
@@ -3229,15 +3998,23 @@ export function HololiveBracketPage() {
     }
   }
 
-  async function loadBracketStats() {
+  async function loadBracketStats(format: HololiveBracketStatsFormat = statsFormat) {
     setStatsLoading(true);
     try {
+      const cached = statsCacheRef.current.get(format);
+      if (cached) {
+        setStatsOverview(cached);
+      }
       const [nextStats, nextArchives, nextTierData] = await Promise.all([
-        api.invoke("hololive:brackets:stats", null),
+        api.invoke("hololive:brackets:stats", { format }),
         api.invoke("hololive:brackets:archives:list", null),
         api.invoke("hololive:tier-data", null)
       ]);
+      statsCacheRef.current.set(format, nextStats);
       setStatsOverview(nextStats);
+      if (format === "all") {
+        setPlaySongStats(nextStats.songStats);
+      }
       setArchiveSummaries(nextArchives);
       setBracketTalents(nextTierData.idols);
     } catch (nextError) {
@@ -3268,9 +4045,73 @@ export function HololiveBracketPage() {
 
   useEffect(() => {
     if (mode === "stats") {
-      void loadBracketStats();
+      void loadBracketStats(statsFormat);
     }
-  }, [mode]);
+  }, [mode, statsFormat]);
+
+  useEffect(() => {
+    if (mode !== "play") {
+      return;
+    }
+    const cached = statsCacheRef.current.get("all");
+    if (cached) {
+      setPlaySongStats(cached.songStats);
+      return;
+    }
+
+    let cancelled = false;
+    setPlaySongStats(null);
+    void api.invoke("hololive:brackets:stats", { format: "all" }).then(
+      (nextStats) => {
+        if (cancelled) return;
+        statsCacheRef.current.set("all", nextStats);
+        setPlaySongStats(nextStats.songStats);
+      },
+      (nextError) => {
+        if (!cancelled) {
+          showBracketError(nextError, "Could not load song records");
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBracket?.id, mode]);
+
+  useEffect(() => {
+    const stage = activeBracket?.currentMatch?.stage;
+    if (
+      activeBracket?.format === "double_elimination" &&
+      (stage === "winners" || stage === "losers" || stage === "grand_final")
+    ) {
+      setDoubleBracketStage(stage);
+    }
+  }, [activeBracket?.id, activeBracket?.currentMatchId, activeBracket?.currentMatch?.stage, activeBracket?.format]);
+
+  const selectDoubleBracketStage = useCallback(
+    (stage: "winners" | "losers" | "grand_final") => {
+      if (stage !== doubleBracketStage) {
+        pendingRoundViewportResetRef.current = true;
+      }
+      setDoubleBracketStage(stage);
+    },
+    [doubleBracketStage]
+  );
+
+  useLayoutEffect(() => {
+    if (mode !== "bracket" || !zoomViewKey) {
+      return;
+    }
+    cancelPendingBracketFit();
+    const savedZoom = storedBracketZoom(zoomViewKey);
+    if (savedZoom !== null) {
+      setBracketZoom(savedZoom);
+      applyBracketFitMode(bracketViewportRef.current, storedBracketFitMode(zoomViewKey));
+      return;
+    }
+    setBracketZoom(1);
+    applyBracketFitMode(bracketViewportRef.current, "none");
+  }, [cancelPendingBracketFit, mode, zoomViewKey]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -3396,6 +4237,7 @@ export function HololiveBracketPage() {
     try {
       const result = await api.invoke("hololive:brackets:create", {
         size: selectedSize,
+        format: selectedFormat,
         generationStyle,
         filters: createFilters,
         name
@@ -3433,6 +4275,9 @@ export function HololiveBracketPage() {
       });
       setActiveBracket(bracket);
       setSummaries(await api.invoke("hololive:brackets:list", null));
+      if (bracket.status === "complete") {
+        statsCacheRef.current.clear();
+      }
       if (bracket.status === "complete" && (statsOverview || archiveSummaries.length > 0)) {
         await loadBracketStats();
       }
@@ -3528,9 +4373,11 @@ export function HololiveBracketPage() {
     setDeletingArchiveId(archive.id);
     try {
       const response = await api.invoke("hololive:brackets:archives:delete", { archiveId: archive.id });
-      const nextStats = await api.invoke("hololive:brackets:stats", null);
+      statsCacheRef.current.clear();
+      const nextStats = await api.invoke("hololive:brackets:stats", { format: statsFormat });
       setArchiveSummaries(response.data);
       setStatsOverview(nextStats);
+      statsCacheRef.current.set(statsFormat, nextStats);
       if (response.undoToken) {
         showUndoToast({
           message: "Archive deleted",
@@ -3792,24 +4639,6 @@ export function HololiveBracketPage() {
               </button>
               {createMenuOpen && (
                 <div className="hololive-bracket-create-popover" role="dialog" aria-label="Create bracket">
-                  <div className="hololive-bracket-create-field size-field">
-                    <span>Size</span>
-                    <div className="hololive-bracket-create-options sizes" role="radiogroup" aria-label="Size">
-                      {BRACKET_SIZES.map((size) => (
-                        <button
-                          type="button"
-                          key={size}
-                          role="radio"
-                          aria-checked={selectedSize === size}
-                          className={selectedSize === size ? "active" : ""}
-                          disabled={busy}
-                          onClick={() => setSelectedSize(size)}
-                        >
-                          {size}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                   <div className="hololive-bracket-create-field style-field">
                     <span>Style</span>
                     <div className="hololive-bracket-create-options styles" role="radiogroup" aria-label="Style">
@@ -3828,11 +4657,49 @@ export function HololiveBracketPage() {
                       ))}
                     </div>
                   </div>
+                  <div className="hololive-bracket-create-field format-field">
+                    <span>Format</span>
+                    <div className="hololive-bracket-create-format-row">
+                      <div className="hololive-bracket-create-options formats" role="radiogroup" aria-label="Format">
+                        {BRACKET_FORMATS.map((format) => (
+                          <button
+                            type="button"
+                            key={format.value}
+                            role="radio"
+                            aria-checked={selectedFormat === format.value}
+                            className={selectedFormat === format.value ? "active" : ""}
+                            disabled={busy}
+                            onClick={() => setSelectedFormat(format.value)}
+                          >
+                            {format.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="hololive-bracket-create-field size-field">
+                    <span>Size</span>
+                    <div className="hololive-bracket-create-options sizes" role="radiogroup" aria-label="Size">
+                      {BRACKET_SIZES.map((size) => (
+                        <button
+                          type="button"
+                          key={size}
+                          role="radio"
+                          aria-checked={selectedSize === size}
+                          className={selectedSize === size ? "active" : ""}
+                          disabled={busy}
+                          onClick={() => setSelectedSize(size)}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <label className="hololive-bracket-create-name-field">
                     <span>Name</span>
                     <input
                       value={nameDraft}
-                      placeholder={`${BRACKET_GENERATION_STYLES.find((style) => style.value === selectedGenerationStyle)?.label ?? "Top Songs"} ${selectedSize} Bracket`}
+                      placeholder={`${BRACKET_GENERATION_STYLES.find((style) => style.value === selectedGenerationStyle)?.label ?? "Top Songs"} ${selectedSize}${selectedFormat === "double_elimination" ? " Double Elimination" : ""} Bracket`}
                       disabled={busy}
                       onChange={(event) => setNameDraft(event.target.value)}
                     />
@@ -4333,6 +5200,35 @@ export function HololiveBracketPage() {
                 </div>
               ) : null}
             </div>
+            {mode === "bracket" && activeBracket ? (
+              <>
+                <div
+                  className="hololive-bracket-round-view-control"
+                  style={{ "--bracket-round-view-width": roundViewSelectWidth } as CSSProperties}
+                >
+                  <span>View from</span>
+                  <CompactSelect
+                    ariaLabel="View bracket from round"
+                    className="hololive-bracket-round-view-select"
+                    value={selectedRoundView}
+                    options={roundViewOptions}
+                    onChange={(value) => selectRoundView(value as BracketRoundViewValue)}
+                  />
+                </div>
+                <BracketZoomControls
+                  zoom={bracketZoom}
+                  onZoomOut={() => changeBracketZoom(-0.1)}
+                  onReset={() => {
+                    cancelPendingBracketFit();
+                    setBracketZoom(1);
+                    rememberBracketZoom(1);
+                  }}
+                  onZoomIn={() => changeBracketZoom(0.1)}
+                  onFitHeight={() => fitBracketVertically()}
+                  onFitWidth={() => fitBracketToViewport()}
+                />
+              </>
+            ) : null}
         </div>
 
         {loading ? (
@@ -4346,6 +5242,8 @@ export function HololiveBracketPage() {
               archives={archiveSummaries}
               talents={bracketTalents}
               loading={statsLoading}
+              format={statsFormat}
+              onFormatChange={setStatsFormat}
               deletingArchiveId={deletingArchiveId}
               onDeleteArchive={(archive) => void removeArchive(archive)}
             />
@@ -4354,109 +5252,38 @@ export function HololiveBracketPage() {
               <Swords size={20} />
               No saved brackets yet.
             </div>
-          ) : mode === "bracket" && bracketTree ? (
-            <div
-              className="hololive-bracket-tree"
-              style={{ "--bracket-base-matches": bracketTree.baseMatches } as CSSProperties}
-              aria-label="Full two-sided bracket view"
-            >
-              <div className="hololive-bracket-canvas" ref={bracketCanvasRef}>
-                {connectorLayout.paths.length > 0 && (
-                  <svg
-                    className="hololive-bracket-lines"
-                    width={connectorLayout.width}
-                    height={connectorLayout.height}
-                    viewBox={`0 0 ${connectorLayout.width} ${connectorLayout.height}`}
-                    aria-hidden="true"
-                  >
-                    {connectorLayout.paths.map((path) => (
-                      <path key={path.id} d={path.d} />
-                    ))}
-                  </svg>
-                )}
-
-                <div className="hololive-bracket-side left">
-                  {bracketTree.leftRounds.map((round) => (
-                    <section
-                      className={roundClassName(round, activeBracket)}
-                      key={`left-${round.roundIndex}`}
-                      style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
-                    >
-                      <header>
-                        <strong>{displayHololiveBracketRoundLabel(round.label)}</strong>
-                      </header>
-                      <div className="hololive-bracket-round-stack">
-                        {round.matches.map((match) => (
-                          <BracketMatchCard
-                            key={match.id}
-                            match={match}
-                            side="left"
-                            current={activeBracket.currentMatchId === match.id}
-                            registerMatch={registerMatch}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-
-                <section
-                  className={
-                    finalRound
-                      ? roundClassName(finalRound, activeBracket, "hololive-bracket-final-round")
-                      : "hololive-bracket-round hololive-bracket-final-round upcoming"
-                  }
-                  style={{ "--round-match-count": 1 } as CSSProperties}
-                >
-                  <header>
-                    <strong>Final</strong>
-                  </header>
-                  <div className="hololive-bracket-round-stack">
-                    {finalRound?.matches[0] ? (
-                      <BracketMatchCard
-                        match={finalRound.matches[0]}
-                        side="final"
-                        current={activeBracket.currentMatchId === finalRound.matches[0].id}
-                        registerMatch={registerMatch}
-                      />
-                    ) : (
-                      <div className="hololive-bracket-entry empty">Pending</div>
-                    )}
-                    {activeBracket.champion && (
-                      <div className="hololive-bracket-champion-strip">
-                        <Trophy size={14} />
-                        <strong title={activeBracket.champion.title}>{displaySongTitle(activeBracket.champion.title)}</strong>
-                      </div>
-                    )}
-                  </div>
-                </section>
-
-                <div className="hololive-bracket-side right">
-                  {bracketTree.rightRounds.map((round) => (
-                    <section
-                      className={roundClassName(round, activeBracket)}
-                      key={`right-${round.roundIndex}`}
-                      style={{ "--round-match-count": Math.max(round.matches.length, 1) } as CSSProperties}
-                    >
-                      <header>
-                        <strong>{displayHololiveBracketRoundLabel(round.label)}</strong>
-                      </header>
-                      <div className="hololive-bracket-round-stack">
-                        {round.matches.map((match) => (
-                          <BracketMatchCard
-                            key={match.id}
-                            match={match}
-                            side="right"
-                            current={activeBracket.currentMatchId === match.id}
-                            registerMatch={registerMatch}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              </div>
-            </div>
+          ) : mode === "bracket" && activeBracket.format === "double_elimination" ? (
+            <DoubleEliminationBracketView
+              bracket={activeBracket}
+              rounds={visibleBracketRounds}
+              stage={doubleBracketStage}
+              onStageChange={selectDoubleBracketStage}
+              registerMatch={registerMatch}
+              canvasRef={bracketCanvasRef}
+              connectorLayout={connectorLayout}
+              zoom={effectiveBracketZoom}
+              viewportRef={bracketViewportRef}
+              onWheel={handleBracketWheel}
+              onPointerDown={handleBracketPointerDown}
+              onPointerMove={handleBracketPointerMove}
+              onPointerUp={handleBracketPointerUp}
+            />
+          ) : mode === "bracket" ? (
+            <TwoSidedBracketView
+              bracket={activeBracket}
+              rounds={visibleBracketRounds}
+              registerMatch={registerMatch}
+              connectorLayout={connectorLayout}
+              showChampion
+              ariaLabel={selectedRoundView === "all" ? "Full two-sided bracket view" : "Filtered two-sided bracket view"}
+              zoom={effectiveBracketZoom}
+              viewportRef={bracketViewportRef}
+              canvasRef={bracketCanvasRef}
+              onWheel={handleBracketWheel}
+              onPointerDown={handleBracketPointerDown}
+              onPointerMove={handleBracketPointerMove}
+              onPointerUp={handleBracketPointerUp}
+            />
           ) : (
             <div className="hololive-bracket-play-view" aria-label="Play matchup view">
               {activeBracket.champion ? (
@@ -4493,6 +5320,7 @@ export function HololiveBracketPage() {
                       entry={currentMatch.entryA}
                       side="left"
                       disabled={busy}
+                      record={bracketSongRecord(playSongStats, currentMatch.entryA)}
                       marker={currentMatch.entryA ? matchupMarkersByVideoId[currentMatch.entryA.youtubeVideoId] ?? null : null}
                       playlists={userPlaylists}
                       onAddToPlaylist={addBracketEntryToPlaylist}
@@ -4503,6 +5331,7 @@ export function HololiveBracketPage() {
                       entry={currentMatch.entryB}
                       side="right"
                       disabled={busy}
+                      record={bracketSongRecord(playSongStats, currentMatch.entryB)}
                       marker={currentMatch.entryB ? matchupMarkersByVideoId[currentMatch.entryB.youtubeVideoId] ?? null : null}
                       playlists={userPlaylists}
                       onAddToPlaylist={addBracketEntryToPlaylist}

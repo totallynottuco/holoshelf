@@ -9,10 +9,12 @@ import type {
   HololiveBracket,
   HololiveBracketArchiveSummary,
   HololiveBracketCreateWarning,
+  HololiveBracketFormat,
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketSize,
   HololiveBracketStatsOverview,
+  HololiveBracketStatsFormat,
   HololiveBracketSummary,
   HololiveChannelRefreshResult,
   HololiveCustomSongPreview,
@@ -91,6 +93,27 @@ export interface OpenPathRequest {
 
 export interface OpenPathResponse {
   opened: boolean;
+}
+
+export interface FindInPageRequest {
+  text: string;
+  forward?: boolean;
+  findNext?: boolean;
+}
+
+export interface FindInPageResponse {
+  requestId: number;
+}
+
+export interface FindInPageStopRequest {
+  action: "clearSelection" | "keepSelection" | "activateSelection";
+}
+
+export interface FindInPageResult {
+  requestId: number;
+  activeMatchOrdinal: number;
+  matches: number;
+  finalUpdate: boolean;
 }
 
 export interface DataSafetyExportResponse {
@@ -440,6 +463,7 @@ export interface HololivePlayerStateUpdateRequest {
 
 export interface HololiveBracketCreateRequest {
   size: HololiveBracketSize;
+  format?: HololiveBracketFormat;
   generationStyle?: HololiveBracketGenerationStyle;
   filters?: HololiveBracketGenerationFilters | null;
   name?: string | null;
@@ -466,6 +490,10 @@ export interface HololiveBracketUndoRequest {
 
 export interface HololiveBracketResetRequest {
   bracketId: string;
+}
+
+export interface HololiveBracketStatsRequest {
+  format?: HololiveBracketStatsFormat;
 }
 
 export interface HololiveBracketDuplicateRequest {
@@ -538,6 +566,14 @@ export interface IpcChannelMap {
   "app:open-path": {
     request: OpenPathRequest;
     response: OpenPathResponse;
+  };
+  "app:find-in-page": {
+    request: FindInPageRequest;
+    response: FindInPageResponse;
+  };
+  "app:find-in-page:stop": {
+    request: FindInPageStopRequest;
+    response: { stopped: boolean };
   };
   "app:data-backup:export": {
     request: null;
@@ -848,7 +884,7 @@ export interface IpcChannelMap {
     response: HololiveUndoApplyResponse;
   };
   "hololive:brackets:stats": {
-    request: null;
+    request: HololiveBracketStatsRequest | null;
     response: HololiveBracketStatsOverview;
   };
 }
@@ -869,4 +905,5 @@ export interface HoloshelfBridge {
   ): Promise<IpcChannelMap[C]["response"]>;
   onHololiveRefreshProgress(listener: (event: HololiveRefreshProgressEvent) => void): () => void;
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
+  onFindInPageResult(listener: (result: FindInPageResult) => void): () => void;
 }

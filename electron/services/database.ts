@@ -18,6 +18,7 @@ import type {
   HololiveBracketArchiveSummary,
   HololiveBracketCreateWarning,
   HololiveBracketEntry,
+  HololiveBracketFormat,
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketHistoryParticipation,
@@ -27,6 +28,8 @@ import type {
   HololiveBracketRound,
   HololiveBracketRivalryStats,
   HololiveBracketSize,
+  HololiveBracketStage,
+  HololiveBracketStatsFormat,
   HololiveBracketSongStats,
   HololiveBracketStatus,
   HololiveBracketStatsOverview,
@@ -88,6 +91,13 @@ import {
   type Glicko2Rating
 } from "../../src/shared/glicko2";
 import { hololiveBracketRoundLabel } from "../../src/shared/hololiveBracketLabels";
+import {
+  createHololiveDoubleEliminationState,
+  listHololiveDoubleEliminationMatches,
+  pickHololiveDoubleEliminationWinner,
+  undoHololiveDoubleEliminationMatch,
+  type HololiveDoubleEliminationEngineState
+} from "./hololiveBracketEngine";
 import {
   HOLOLIVE_FUWAMOCO_TALENT_ID,
   getHololiveCanonicalTalentIdentity,
@@ -312,6 +322,10 @@ interface HololiveBracketCandidateSelectionResult {
   selected: HololiveBracketCandidate[];
   warnings: HololiveBracketCreateWarning[];
 }
+
+const STARTUP_MAINTENANCE_SETTING = "internal.startupMaintenanceVersion";
+const STARTUP_MAINTENANCE_VERSION = "1";
+const STARTUP_MAINTENANCE_FINGERPRINT_SETTING = "internal.startupMaintenanceFingerprint";
 
 const MIGRATIONS = [
   {
@@ -1151,8 +1165,120 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_hololive_music_videos_catalog_active
         ON hololive_music_videos(official_catalog_active, source_kind);
     `
+  },
+  {
+    version: 32,
+    sql: `
+      ALTER TABLE hololive_brackets
+        ADD COLUMN bracket_format TEXT NOT NULL DEFAULT 'single_elimination';
+      ALTER TABLE hololive_brackets
+        ADD COLUMN engine_state_json TEXT;
+
+      ALTER TABLE hololive_bracket_matches
+        ADD COLUMN bracket_stage TEXT NOT NULL DEFAULT 'single';
+      ALTER TABLE hololive_bracket_matches
+        ADD COLUMN stage_round_index INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE hololive_bracket_matches
+        ADD COLUMN play_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE hololive_bracket_matches
+        ADD COLUMN engine_match_id INTEGER;
+      ALTER TABLE hololive_bracket_matches
+        ADD COLUMN late_round_weight REAL NOT NULL DEFAULT 0;
+      UPDATE hololive_bracket_matches
+         SET stage_round_index = round_index,
+             play_order = round_index * 1000 + match_index;
+
+      ALTER TABLE hololive_bracket_archives
+        ADD COLUMN bracket_format TEXT NOT NULL DEFAULT 'single_elimination';
+
+      ALTER TABLE hololive_bracket_archive_entries
+        ADD COLUMN eliminated_stage TEXT;
+      ALTER TABLE hololive_bracket_archive_entries
+        ADD COLUMN eliminated_stage_round_index INTEGER;
+
+      ALTER TABLE hololive_bracket_archive_matches
+        ADD COLUMN bracket_stage TEXT NOT NULL DEFAULT 'single';
+      ALTER TABLE hololive_bracket_archive_matches
+        ADD COLUMN stage_round_index INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE hololive_bracket_archive_matches
+        ADD COLUMN play_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE hololive_bracket_archive_matches
+        ADD COLUMN engine_match_id INTEGER;
+      ALTER TABLE hololive_bracket_archive_matches
+        ADD COLUMN late_round_weight REAL NOT NULL DEFAULT 0;
+      UPDATE hololive_bracket_archive_matches
+         SET stage_round_index = round_index,
+             play_order = round_index * 1000 + match_index;
+
+      CREATE INDEX IF NOT EXISTS idx_hololive_brackets_format
+        ON hololive_brackets(bracket_format, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_hololive_bracket_matches_stage
+        ON hololive_bracket_matches(bracket_id, bracket_stage, stage_round_index, match_index);
+      CREATE INDEX IF NOT EXISTS idx_hololive_bracket_archives_format
+        ON hololive_bracket_archives(bracket_format, archived_at);
+    `
+  },
+  {
+    version: 33,
+    sql: `
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ('internal.startupMaintenanceVersion', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at;
+
+      INSERT INTO settings (key, value, updated_at)
+      SELECT 'internal.startupMaintenanceFingerprint',
+             printf('%d:%d:%s:%d:%d:%s:%d:%d:%d',
+               (SELECT COUNT(*) FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+               (SELECT COALESCE(SUM(
+                  length(COALESCE(title, '')) + length(COALESCE(song_name, '')) +
+                  length(COALESCE(participants_json, '')) + length(COALESCE(canonical_song_key, '')) +
+                  length(COALESCE(canonical_performance_key, '')) + length(COALESCE(owned_idol_ids_json, '')) +
+                  length(COALESCE(featured_idol_ids_json, '')) + COALESCE(duration_seconds, 0) +
+                  COALESCE(official_catalog_active, 1)
+                ), 0) FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+               (SELECT COALESCE(MAX(updated_at), '') FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+               (SELECT COUNT(*) FROM hololive_music_detail_cache),
+               (SELECT COALESCE(SUM(length(COALESCE(song_names_json, '')) + length(COALESCE(mentions_json, '')) + length(COALESCE(collab_channel_ids_json, ''))), 0) FROM hololive_music_detail_cache),
+               (SELECT COALESCE(MAX(updated_at), '') FROM hololive_music_detail_cache),
+               (SELECT COUNT(*) FROM hololive_music_duplicate_removals),
+               (SELECT COALESCE(SUM(length(COALESCE(removed_youtube_video_id, '')) + length(COALESCE(kept_youtube_video_id, ''))), 0) FROM hololive_music_duplicate_removals),
+               (SELECT COUNT(*) FROM hololive_music_video_stats s WHERE NOT EXISTS (SELECT 1 FROM hololive_music_videos v WHERE v.youtube_video_id = s.youtube_video_id))
+             ),
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at;
+    `
+  },
+  {
+    version: 34,
+    sql: `
+      UPDATE hololive_idols
+         SET card_image_url = NULL,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE source = 'custom'
+         AND NULLIF(TRIM(COALESCE(card_image_url, '')), '') IS NOT NULL
+         AND TRIM(card_image_url) = TRIM(COALESCE(profile_image_url, ''));
+
+      DELETE FROM hololive_image_cache
+       WHERE kind = 'card'
+         AND idol_id IN (
+           SELECT id
+             FROM hololive_idols
+            WHERE source = 'custom'
+              AND NULLIF(TRIM(COALESCE(card_image_url, '')), '') IS NULL
+         );
+    `
   }
 ];
+
+export interface DatabaseServiceOptions {
+  persistWrites?: boolean;
+  createBackups?: boolean;
+  initializedDatabaseBytes?: Uint8Array;
+}
 
 export class DatabaseService {
   private db: Database | null = null;
@@ -1164,7 +1290,8 @@ export class DatabaseService {
 
   constructor(
     private readonly databasePath: string,
-    private readonly backupDirectory = path.join(path.dirname(databasePath), "backups")
+    private readonly backupDirectory = path.join(path.dirname(databasePath), "backups"),
+    private readonly options: DatabaseServiceOptions = {}
   ) {}
 
   async init(): Promise<void> {
@@ -1173,24 +1300,42 @@ export class DatabaseService {
       locateFile: () => wasmPath
     });
     this.SQL = SQL;
-    this.createBackup("startup");
+    if (this.options.createBackups !== false) {
+      this.createBackup("startup");
+    }
 
-    const bytes = fs.existsSync(this.databasePath) ? fs.readFileSync(this.databasePath) : undefined;
+    const bytes = this.options.initializedDatabaseBytes
+      ? Uint8Array.from(this.options.initializedDatabaseBytes)
+      : fs.existsSync(this.databasePath)
+        ? fs.readFileSync(this.databasePath)
+        : undefined;
     this.db = bytes ? new SQL.Database(bytes) : new SQL.Database();
     this.db.run("PRAGMA foreign_keys = ON");
+    if (this.options.initializedDatabaseBytes) {
+      this.dirty = false;
+      return;
+    }
     this.db.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
     this.applyMigrations();
-    this.migrateHololiveChannelsToMergedSchema();
-    this.migrateHololiveMusicVideosToMergedParticipants();
     this.seedHololiveTierData();
-    this.backfillHololiveMusicSourceKinds();
-    this.purgeExcludedHololiveMusicRows();
-    this.purgeRejectedHolodexMusicRows();
-    this.backfillHololiveMusicClassifications();
-    this.migrateHololiveMusicMarkersToKeyedSchema();
-    this.backfillHololiveMusicMarkerFallbackKeys();
-    this.repairHololiveMusicDuplicateRows("startup");
-    this.normalizeAllHololiveMusicPlaylistItemPositions();
+    const startupMaintenanceFingerprint = this.getStartupMaintenanceFingerprint();
+    if (
+      this.getSettingValue(STARTUP_MAINTENANCE_SETTING) !== STARTUP_MAINTENANCE_VERSION ||
+      this.getSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING) !== startupMaintenanceFingerprint
+    ) {
+      this.migrateHololiveChannelsToMergedSchema();
+      this.migrateHololiveMusicVideosToMergedParticipants();
+      this.backfillHololiveMusicSourceKinds();
+      this.purgeExcludedHololiveMusicRows();
+      this.purgeRejectedHolodexMusicRows();
+      this.backfillHololiveMusicClassifications();
+      this.migrateHololiveMusicMarkersToKeyedSchema();
+      this.backfillHololiveMusicMarkerFallbackKeys();
+      this.repairHololiveMusicDuplicateRows("startup");
+      this.normalizeAllHololiveMusicPlaylistItemPositions();
+      this.persistSettingValue(STARTUP_MAINTENANCE_SETTING, STARTUP_MAINTENANCE_VERSION);
+      this.persistSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING, this.getStartupMaintenanceFingerprint());
+    }
     if (this.dirty) {
       this.flush();
     }
@@ -1206,7 +1351,9 @@ export class DatabaseService {
            ON CONFLICT(id) DO UPDATE SET
              label = excluded.label,
              manifest_json = excluded.manifest_json,
-             updated_at = excluded.updated_at`,
+             updated_at = excluded.updated_at
+           WHERE modules.label IS NOT excluded.label
+              OR modules.manifest_json IS NOT excluded.manifest_json`,
           [manifest.id, manifest.label, JSON.stringify(manifest), now]
         );
       }
@@ -1470,8 +1617,13 @@ export class DatabaseService {
       throw new Error("A valid custom talent channel id is required");
     }
 
-    const existingByChannel = this.select<{ id: string; source: HololiveIdol["source"] }>(
-      "SELECT id, source FROM hololive_idols WHERE youtube_channel_id = ?",
+    const existingByChannel = this.select<{
+      id: string;
+      source: HololiveIdol["source"];
+      card_image_url: string | null;
+      profile_image_url: string | null;
+    }>(
+      "SELECT id, source, card_image_url, profile_image_url FROM hololive_idols WHERE youtube_channel_id = ?",
       [channelId]
     )[0];
     if (existingByChannel?.source === "official") {
@@ -1489,6 +1641,12 @@ export class DatabaseService {
     const youtubeChannelUrl = `https://www.youtube.com/channel/${channelId}`;
     const twitterHandle = preview.xHandle?.trim() ?? "";
     const twitterUrl = preview.xUrl?.trim() || (twitterHandle ? `https://x.com/${twitterHandle.replace(/^@/, "")}` : null);
+    const existingCardImageUrl =
+      existingByChannel?.card_image_url?.trim() &&
+      existingByChannel.card_image_url.trim() !== existingByChannel.profile_image_url?.trim()
+        ? existingByChannel.card_image_url.trim()
+        : null;
+    const cardImageUrl = preview.cardImageUrl?.trim() || existingCardImageUrl;
 
     this.transaction(() => {
       this.run(
@@ -1522,7 +1680,7 @@ export class DatabaseService {
           preview.officialUrl || youtubeChannelUrl,
           preview.iconUrl || preview.profileImageUrl || "",
           preview.profileImageUrl || preview.iconUrl || "",
-          preview.profileImageUrl || preview.iconUrl || "",
+          cardImageUrl,
           preview.youtubeChannelUrl || youtubeChannelUrl,
           channelId,
           twitterHandle || null,
@@ -1678,6 +1836,11 @@ export class DatabaseService {
     this.backfillHololiveMusicClassifications();
   }
 
+  markStartupMaintenanceCurrent(): void {
+    this.persistSettingValue(STARTUP_MAINTENANCE_SETTING, STARTUP_MAINTENANCE_VERSION);
+    this.persistSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING, this.getStartupMaintenanceFingerprint());
+  }
+
   repairRejectedHololiveMusicRows(): void {
     this.purgeRejectedHolodexMusicRows();
   }
@@ -1785,6 +1948,7 @@ export class DatabaseService {
         duplicateRows: matchedDuplicateCount,
         error: null
       });
+      this.markStartupMaintenanceCurrent();
     });
 
     const run = this.getHololiveMusicRefreshRun(runId);
@@ -5034,7 +5198,6 @@ export class DatabaseService {
     this.assertHololiveBoard(boardId);
     this.ensureHololiveBoardPlacements(boardId);
     const snapshot = {
-      board: this.selectTableRows("hololive_tier_boards", "WHERE id = ?", [boardId]),
       placements: this.selectTableRows("hololive_tier_placements", "WHERE board_id = ?", [boardId])
     };
 
@@ -5054,7 +5217,6 @@ export class DatabaseService {
 
     this.registerHololiveUndoAction("tier-board-clear", "Restore board placements", () => {
       this.run("DELETE FROM hololive_tier_placements WHERE board_id = ?", [boardId]);
-      this.insertOrReplaceRows("hololive_tier_boards", snapshot.board);
       this.insertOrReplaceRows("hololive_tier_placements", snapshot.placements);
     });
   }
@@ -5269,7 +5431,11 @@ export class DatabaseService {
              local_filename = excluded.local_filename,
              mime_type = excluded.mime_type,
              size_bytes = excluded.size_bytes,
-             updated_at = excluded.updated_at`,
+             updated_at = excluded.updated_at
+           WHERE hololive_image_cache.source_url IS NOT excluded.source_url
+              OR hololive_image_cache.local_filename IS NOT excluded.local_filename
+              OR hololive_image_cache.mime_type IS NOT excluded.mime_type
+              OR hololive_image_cache.size_bytes IS NOT excluded.size_bytes`,
           [
             input.idolId,
             input.kind,
@@ -5592,6 +5758,7 @@ export class DatabaseService {
       id: string;
       name: string;
       size: HololiveBracketSize;
+      bracket_format: HololiveBracketFormat;
       generation_style: HololiveBracketGenerationStyle;
       generation_filters_json: string | null;
       status: HololiveBracketStatus;
@@ -5602,7 +5769,7 @@ export class DatabaseService {
       total_matches: number;
       champion_title: string | null;
     }>(
-      `SELECT b.id, b.name, b.size, b.generation_style, b.generation_filters_json,
+      `SELECT b.id, b.name, b.size, b.bracket_format, b.generation_style, b.generation_filters_json,
               b.status, b.current_match_id, b.created_at, b.updated_at,
               COUNT(m.id) AS total_matches,
               SUM(CASE WHEN m.winner_entry_id IS NULL THEN 0 ELSE 1 END) AS completed_matches,
@@ -5624,6 +5791,7 @@ export class DatabaseService {
       id: row.id,
       name: row.name,
       size: this.normalizeHololiveBracketSize(row.size),
+      format: this.normalizeHololiveBracketFormat(row.bracket_format),
       generationStyle: this.normalizeHololiveBracketGenerationStyle(row.generation_style),
       generationFilters: this.normalizeHololiveBracketGenerationFilters(row.generation_filters_json),
       status: this.normalizeHololiveBracketStatus(row.status),
@@ -5636,22 +5804,25 @@ export class DatabaseService {
     }));
   }
 
-  createHololiveBracket(input: {
+  async createHololiveBracket(input: {
     size: HololiveBracketSize;
+    format?: HololiveBracketFormat | null;
     generationStyle?: HololiveBracketGenerationStyle | null;
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
-  }): HololiveBracket {
-    return this.createHololiveBracketResult(input).bracket;
+  }): Promise<HololiveBracket> {
+    return (await this.createHololiveBracketResult(input)).bracket;
   }
 
-  createHololiveBracketResult(input: {
+  async createHololiveBracketResult(input: {
     size: HololiveBracketSize;
+    format?: HololiveBracketFormat | null;
     generationStyle?: HololiveBracketGenerationStyle | null;
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
-  }): { bracket: HololiveBracket; warnings: HololiveBracketCreateWarning[] } {
+  }): Promise<{ bracket: HololiveBracket; warnings: HololiveBracketCreateWarning[] }> {
     const size = this.normalizeHololiveBracketSize(input.size);
+    const format = this.normalizeHololiveBracketFormat(input.format);
     const generationStyle = this.normalizeHololiveBracketGenerationStyle(input.generationStyle);
     const generationFilters = this.normalizeHololiveBracketGenerationFilters(input.filters);
     const generationFiltersJson = this.stringifyHololiveBracketGenerationFilters(generationFilters);
@@ -5661,7 +5832,9 @@ export class DatabaseService {
     const seed = randomUUID();
     const name =
       input.name?.trim() ||
-      `${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]} Bracket`;
+      `${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]}${
+        format === "double_elimination" ? " Double Elimination" : ""
+      } Bracket`;
     const generated = this.generateHololiveBracketEntries(id, size, seed, generationStyle, generationFilters);
     const entries = generated.entries;
     if (entries.length !== sizeCount) {
@@ -5669,13 +5842,35 @@ export class DatabaseService {
         `Could not generate ${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]} from the current music database.`
       );
     }
+    const engineState =
+      format === "double_elimination"
+        ? await createHololiveDoubleEliminationState(entries.map((entry) => entry.id))
+        : null;
+    const engineMatches = engineState ? listHololiveDoubleEliminationMatches(engineState) : [];
+    const firstMatchId =
+      format === "double_elimination"
+        ? `${id}:de:${engineMatches.find((match) => match.ready)?.engineMatchId ?? 0}`
+        : `${id}:r0:m0`;
 
     this.transaction(() => {
       this.run(
         `INSERT INTO hololive_brackets
-           (id, name, size, generation_style, generation_filters_json, seed, status, current_match_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
-        [id, name.slice(0, 120), size, generationStyle, generationFiltersJson, seed, `${id}:r0:m0`, now, now]
+           (id, name, size, bracket_format, generation_style, generation_filters_json, seed, status,
+            current_match_id, engine_state_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+        [
+          id,
+          name.slice(0, 120),
+          size,
+          format,
+          generationStyle,
+          generationFiltersJson,
+          seed,
+          firstMatchId,
+          engineState ? JSON.stringify(engineState) : null,
+          now,
+          now
+        ]
       );
 
       for (const entry of entries) {
@@ -5704,23 +5899,63 @@ export class DatabaseService {
         );
       }
 
-      const roundCount = Math.log2(sizeCount);
-      for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
-        const matchesInRound = sizeCount / 2 ** (roundIndex + 1);
-        for (let matchIndex = 0; matchIndex < matchesInRound; matchIndex += 1) {
-          const entryAId = roundIndex === 0 ? entries[matchIndex * 2]?.id ?? null : null;
-          const entryBId = roundIndex === 0 ? entries[matchIndex * 2 + 1]?.id ?? null : null;
+      if (engineState) {
+        for (const match of engineMatches) {
           this.run(
             `INSERT INTO hololive_bracket_matches
-               (id, bracket_id, round_index, match_index, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
-            [`${id}:r${roundIndex}:m${matchIndex}`, id, roundIndex, matchIndex, entryAId, entryBId, now]
+               (id, bracket_id, round_index, match_index, bracket_stage, stage_round_index, play_order,
+                engine_match_id, late_round_weight, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+            [
+              `${id}:de:${match.engineMatchId}`,
+              id,
+              match.globalRoundIndex,
+              match.matchIndex,
+              match.stage,
+              match.stageRoundIndex,
+              match.playOrder,
+              match.engineMatchId,
+              match.lateRoundWeight,
+              match.entryAId,
+              match.entryBId,
+              now
+            ]
           );
+        }
+      } else {
+        const roundCount = Math.log2(sizeCount);
+        let playOrder = 0;
+        for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
+          const matchesInRound = sizeCount / 2 ** (roundIndex + 1);
+          for (let matchIndex = 0; matchIndex < matchesInRound; matchIndex += 1) {
+            const entryAId = roundIndex === 0 ? entries[matchIndex * 2]?.id ?? null : null;
+            const entryBId = roundIndex === 0 ? entries[matchIndex * 2 + 1]?.id ?? null : null;
+            this.run(
+              `INSERT INTO hololive_bracket_matches
+                 (id, bracket_id, round_index, match_index, bracket_stage, stage_round_index, play_order,
+                  late_round_weight, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
+               VALUES (?, ?, ?, ?, 'single', ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+              [
+                `${id}:r${roundIndex}:m${matchIndex}`,
+                id,
+                roundIndex,
+                matchIndex,
+                roundIndex,
+                playOrder++,
+                this.getSingleEliminationLateRoundWeight(roundIndex, roundCount),
+                entryAId,
+                entryBId,
+                now
+              ]
+            );
+          }
         }
       }
     });
 
-    this.recomputeHololiveBracketProgress(id);
+    if (format === "single_elimination") {
+      this.recomputeHololiveBracketProgress(id);
+    }
     return {
       bracket: this.getHololiveBracket(id),
       warnings: generated.warnings
@@ -5737,6 +5972,7 @@ export class DatabaseService {
       id: string;
       name: string;
       size: HololiveBracketSize;
+      bracket_format: HololiveBracketFormat;
       generation_style: HololiveBracketGenerationStyle;
       generation_filters_json: string | null;
       seed: string;
@@ -5745,7 +5981,7 @@ export class DatabaseService {
       created_at: string;
       updated_at: string;
     }>(
-      `SELECT id, name, size, generation_style, generation_filters_json, seed, status, current_match_id, created_at, updated_at
+      `SELECT id, name, size, bracket_format, generation_style, generation_filters_json, seed, status, current_match_id, created_at, updated_at
        FROM hololive_brackets
        WHERE id = ?`,
       [id]
@@ -5761,13 +5997,20 @@ export class DatabaseService {
       bracket_id: string;
       round_index: number;
       match_index: number;
+      bracket_stage: HololiveBracketStage;
+      stage_round_index: number;
+      play_order: number;
+      late_round_weight: number;
+      engine_match_id: number | null;
       entry_a_id: string | null;
       entry_b_id: string | null;
       winner_entry_id: string | null;
       completed_at: string | null;
       updated_at: string;
     }>(
-      `SELECT id, bracket_id, round_index, match_index, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at
+      `SELECT id, bracket_id, round_index, match_index, bracket_stage, stage_round_index, play_order, late_round_weight,
+              engine_match_id,
+              entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at
        FROM hololive_bracket_matches
        WHERE bracket_id = ?
        ORDER BY round_index ASC, match_index ASC`,
@@ -5778,6 +6021,11 @@ export class DatabaseService {
       bracketId: row.bracket_id,
       roundIndex: Number(row.round_index),
       matchIndex: Number(row.match_index),
+      stage: this.normalizeHololiveBracketStage(row.bracket_stage),
+      stageRoundIndex: Number(row.stage_round_index),
+      playOrder: Number(row.play_order),
+      lateRoundWeight: Number(row.late_round_weight ?? 0),
+      engineMatchId: row.engine_match_id == null ? null : Number(row.engine_match_id),
       entryA: row.entry_a_id ? entriesById.get(row.entry_a_id) ?? null : null,
       entryB: row.entry_b_id ? entriesById.get(row.entry_b_id) ?? null : null,
       winnerEntryId: row.winner_entry_id,
@@ -5786,18 +6034,23 @@ export class DatabaseService {
       updatedAt: row.updated_at
     }));
     const sizeCount = HOLOLIVE_BRACKET_SIZE_COUNTS[this.normalizeHololiveBracketSize(bracket.size)];
-    const rounds = this.groupHololiveBracketMatchesIntoRounds(matches, sizeCount);
+    const format = this.normalizeHololiveBracketFormat(bracket.bracket_format);
+    const rounds = this.groupHololiveBracketMatchesIntoRounds(matches, sizeCount, format);
     let currentMatch: HololiveBracketMatch | null = null;
     if (bracket.current_match_id) {
       currentMatch = matches.find((match) => match.id === bracket.current_match_id) ?? null;
     }
     currentMatch ??= this.findNextHololiveBracketMatch(matches);
-    const finalMatch = matches.find((match) => match.roundIndex === rounds.length - 1 && match.matchIndex === 0);
+    const finalMatch =
+      format === "double_elimination"
+        ? matches.find((match) => match.stage === "grand_final" && match.matchIndex === 0)
+        : matches.find((match) => match.roundIndex === rounds.length - 1 && match.matchIndex === 0);
 
     return {
       id: bracket.id,
       name: bracket.name,
       size: this.normalizeHololiveBracketSize(bracket.size),
+      format,
       generationStyle: this.normalizeHololiveBracketGenerationStyle(bracket.generation_style),
       generationFilters: this.normalizeHololiveBracketGenerationFilters(bracket.generation_filters_json),
       seed: bracket.seed,
@@ -5812,12 +6065,38 @@ export class DatabaseService {
     };
   }
 
-  pickHololiveBracketWinner(input: { bracketId: string; matchId: string; winnerEntryId: string }): HololiveBracket {
+  async pickHololiveBracketWinner(input: {
+    bracketId: string;
+    matchId: string;
+    winnerEntryId: string;
+  }): Promise<HololiveBracket> {
     const bracketId = input.bracketId.trim();
     const matchId = input.matchId.trim();
     const winnerEntryId = input.winnerEntryId.trim();
     if (!bracketId || !matchId || !winnerEntryId) {
       throw new Error("A bracket, match, and winner are required");
+    }
+
+    const engineRecord = this.getHololiveBracketEngineRecord(bracketId);
+    if (engineRecord.format === "double_elimination") {
+      const match = this.getHololiveBracketMatchRow(bracketId, matchId);
+      if (match.engine_match_id == null) {
+        throw new Error("This double-elimination matchup is missing its engine identity");
+      }
+      const now = new Date().toISOString();
+      const state = this.parseHololiveDoubleEliminationState(engineRecord.engineStateJson);
+      const nextState = await pickHololiveDoubleEliminationWinner(
+        state,
+        Number(match.engine_match_id),
+        winnerEntryId,
+        now
+      );
+      this.persistHololiveDoubleEliminationState(bracketId, nextState, now);
+      const bracket = this.getHololiveBracket(bracketId);
+      if (bracket.status === "complete") {
+        this.archiveCompletedHololiveBracket(bracketId);
+      }
+      return this.getHololiveBracket(bracketId);
     }
 
     const match = this.getHololiveBracketMatchRow(bracketId, matchId);
@@ -5854,10 +6133,31 @@ export class DatabaseService {
     return this.getHololiveBracket(bracketId);
   }
 
-  undoHololiveBracket(bracketId: string): HololiveBracket {
+  async undoHololiveBracket(bracketId: string): Promise<HololiveBracket> {
     const id = bracketId.trim();
     if (!id) {
       throw new Error("A bracket id is required");
+    }
+
+    const engineRecord = this.getHololiveBracketEngineRecord(id);
+    if (engineRecord.format === "double_elimination") {
+      const latest = this.select<{ engine_match_id: number | null }>(
+        `SELECT engine_match_id
+         FROM hololive_bracket_matches
+         WHERE bracket_id = ? AND winner_entry_id IS NOT NULL AND engine_match_id IS NOT NULL
+         ORDER BY COALESCE(completed_at, updated_at) DESC, play_order DESC
+         LIMIT 1`,
+        [id]
+      )[0];
+      if (latest?.engine_match_id == null) {
+        return this.getHololiveBracket(id);
+      }
+      const now = new Date().toISOString();
+      const state = this.parseHololiveDoubleEliminationState(engineRecord.engineStateJson);
+      const nextState = await undoHololiveDoubleEliminationMatch(state, Number(latest.engine_match_id));
+      this.persistHololiveDoubleEliminationState(id, nextState, now);
+      this.deleteHololiveBracketArchiveRows(id);
+      return this.getHololiveBracket(id);
     }
 
     const latest = this.select<{
@@ -5896,12 +6196,22 @@ export class DatabaseService {
     return this.getHololiveBracket(id);
   }
 
-  resetHololiveBracket(bracketId: string): HololiveBracket {
+  async resetHololiveBracket(bracketId: string): Promise<HololiveBracket> {
     const id = bracketId.trim();
     if (!id) {
       throw new Error("A bracket id is required");
     }
     this.assertHololiveBracket(id);
+
+    const engineRecord = this.getHololiveBracketEngineRecord(id);
+    if (engineRecord.format === "double_elimination") {
+      const now = new Date().toISOString();
+      const entries = this.listHololiveBracketEntries(id);
+      const state = await createHololiveDoubleEliminationState(entries.map((entry) => entry.id));
+      this.persistHololiveDoubleEliminationState(id, state, now);
+      this.deleteHololiveBracketArchiveRows(id);
+      return this.getHololiveBracket(id);
+    }
 
     const now = new Date().toISOString();
     this.transaction(() => {
@@ -5928,7 +6238,7 @@ export class DatabaseService {
     return this.getHololiveBracket(id);
   }
 
-  duplicateHololiveBracket(bracketId: string): HololiveBracket {
+  async duplicateHololiveBracket(bracketId: string): Promise<HololiveBracket> {
     const id = bracketId.trim();
     if (!id) {
       throw new Error("A bracket id is required");
@@ -5940,6 +6250,21 @@ export class DatabaseService {
     const duplicateName = `Copy of ${source.name}`.slice(0, 120);
     const generationFiltersJson = this.stringifyHololiveBracketGenerationFilters(source.generationFilters);
     const entryIdBySourceId = new Map<string, string>();
+    for (const entry of source.entries) {
+      entryIdBySourceId.set(entry.id, `${duplicateId}:entry:${entry.slotIndex}`);
+    }
+    const duplicateEngineState =
+      source.format === "double_elimination"
+        ? await createHololiveDoubleEliminationState(
+            source.entries.map((entry) => entryIdBySourceId.get(entry.id) ?? "")
+          )
+        : null;
+    const duplicateEngineMatches = duplicateEngineState
+      ? listHololiveDoubleEliminationMatches(duplicateEngineState)
+      : [];
+    const currentMatchId = duplicateEngineState
+      ? `${duplicateId}:de:${duplicateEngineMatches.find((match) => match.ready)?.engineMatchId ?? 0}`
+      : `${duplicateId}:r0:m0`;
     const sourceMatches = this.select<{
       round_index: number;
       match_index: number;
@@ -5956,24 +6281,26 @@ export class DatabaseService {
     this.transaction(() => {
       this.run(
         `INSERT INTO hololive_brackets
-           (id, name, size, generation_style, generation_filters_json, seed, status, current_match_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+           (id, name, size, bracket_format, generation_style, generation_filters_json, seed, status,
+            current_match_id, engine_state_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
         [
           duplicateId,
           duplicateName,
           source.size,
+          source.format,
           source.generationStyle,
           generationFiltersJson,
           randomUUID(),
-          `${duplicateId}:r0:m0`,
+          currentMatchId,
+          duplicateEngineState ? JSON.stringify(duplicateEngineState) : null,
           now,
           now
         ]
       );
 
       for (const entry of source.entries) {
-        const duplicateEntryId = `${duplicateId}:entry:${entry.slotIndex}`;
-        entryIdBySourceId.set(entry.id, duplicateEntryId);
+        const duplicateEntryId = entryIdBySourceId.get(entry.id) ?? `${duplicateId}:entry:${entry.slotIndex}`;
         this.run(
           `INSERT INTO hololive_bracket_entries
              (id, bracket_id, slot_index, youtube_video_id, title, song_name, topic_id, youtube_url, channel_name,
@@ -5999,23 +6326,56 @@ export class DatabaseService {
         );
       }
 
-      for (const match of sourceMatches) {
-        const roundIndex = Number(match.round_index);
-        const matchIndex = Number(match.match_index);
-        this.run(
-          `INSERT INTO hololive_bracket_matches
-             (id, bracket_id, round_index, match_index, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
-          [
-            `${duplicateId}:r${roundIndex}:m${matchIndex}`,
-            duplicateId,
-            roundIndex,
-            matchIndex,
-            roundIndex === 0 && match.entry_a_id ? entryIdBySourceId.get(match.entry_a_id) ?? null : null,
-            roundIndex === 0 && match.entry_b_id ? entryIdBySourceId.get(match.entry_b_id) ?? null : null,
-            now
-          ]
-        );
+      if (duplicateEngineState) {
+        for (const match of duplicateEngineMatches) {
+          this.run(
+            `INSERT INTO hololive_bracket_matches
+               (id, bracket_id, round_index, match_index, bracket_stage, stage_round_index, play_order,
+                engine_match_id, late_round_weight, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+            [
+              `${duplicateId}:de:${match.engineMatchId}`,
+              duplicateId,
+              match.globalRoundIndex,
+              match.matchIndex,
+              match.stage,
+              match.stageRoundIndex,
+              match.playOrder,
+              match.engineMatchId,
+              match.lateRoundWeight,
+              match.entryAId,
+              match.entryBId,
+              now
+            ]
+          );
+        }
+      } else {
+        let playOrder = 0;
+        for (const match of sourceMatches) {
+          const roundIndex = Number(match.round_index);
+          const matchIndex = Number(match.match_index);
+          this.run(
+            `INSERT INTO hololive_bracket_matches
+               (id, bracket_id, round_index, match_index, bracket_stage, stage_round_index, play_order,
+                late_round_weight, entry_a_id, entry_b_id, winner_entry_id, completed_at, updated_at)
+             VALUES (?, ?, ?, ?, 'single', ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+            [
+              `${duplicateId}:r${roundIndex}:m${matchIndex}`,
+              duplicateId,
+              roundIndex,
+              matchIndex,
+              roundIndex,
+              playOrder++,
+              this.getSingleEliminationLateRoundWeight(
+                roundIndex,
+                Math.log2(HOLOLIVE_BRACKET_SIZE_COUNTS[source.size])
+              ),
+              roundIndex === 0 && match.entry_a_id ? entryIdBySourceId.get(match.entry_a_id) ?? null : null,
+              roundIndex === 0 && match.entry_b_id ? entryIdBySourceId.get(match.entry_b_id) ?? null : null,
+              now
+            ]
+          );
+        }
       }
     });
 
@@ -6044,6 +6404,7 @@ export class DatabaseService {
       source_bracket_id: string;
       name: string;
       size: HololiveBracketSize;
+      bracket_format: HololiveBracketFormat;
       generation_style: HololiveBracketGenerationStyle;
       generation_filters_json: string | null;
       total_entries: number;
@@ -6057,7 +6418,7 @@ export class DatabaseService {
       completed_at: string;
       archived_at: string;
     }>(
-      `SELECT id, source_bracket_id, name, size, generation_style, generation_filters_json,
+      `SELECT id, source_bracket_id, name, size, bracket_format, generation_style, generation_filters_json,
               total_entries, total_matches, completed_matches,
               champion_youtube_video_id, champion_title, champion_idol_id, champion_idol_name,
               created_at, completed_at, archived_at
@@ -6072,6 +6433,7 @@ export class DatabaseService {
         sourceBracketId: row.source_bracket_id,
         name: row.name,
         size: this.normalizeHololiveBracketSize(row.size),
+        format: this.normalizeHololiveBracketFormat(row.bracket_format),
         generationStyle: this.normalizeHololiveBracketGenerationStyle(row.generation_style),
         generationFilters: this.normalizeHololiveBracketGenerationFilters(row.generation_filters_json),
         totalEntries: Number(row.total_entries ?? 0),
@@ -6121,8 +6483,14 @@ export class DatabaseService {
     return this.listHololiveBracketArchives();
   }
 
-  getHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
-    const archives = this.listHololiveBracketArchives();
+  getHololiveBracketStatsOverview(format: HololiveBracketStatsFormat = "all"): HololiveBracketStatsOverview {
+    const normalizedFormat: HololiveBracketStatsFormat =
+      format === "single_elimination" || format === "double_elimination" ? format : "all";
+    const archiveFormatWhere = normalizedFormat === "all" ? "" : "WHERE a.bracket_format = ?";
+    const archiveFormatParams = normalizedFormat === "all" ? [] : [normalizedFormat];
+    const archives = this.listHololiveBracketArchives().filter(
+      (archive) => normalizedFormat === "all" || archive.format === normalizedFormat
+    );
     type CurrentBracketSongRow = {
       youtube_video_id: string;
       title: string;
@@ -6209,7 +6577,9 @@ export class DatabaseService {
               a.archived_at
        FROM hololive_bracket_archive_entries e
        INNER JOIN hololive_bracket_archives a ON a.id = e.archive_id
-       ORDER BY a.archived_at DESC, e.slot_index ASC`
+       ${archiveFormatWhere}
+       ORDER BY a.archived_at DESC, e.slot_index ASC`,
+      archiveFormatParams
     );
 
     const songStats = new Map<string, HololiveBracketSongStats>();
@@ -6234,7 +6604,7 @@ export class DatabaseService {
       const championCount = Number(row.is_champion ?? 0);
       const finalistCount = Number(row.is_finalist ?? 0);
       const runnerUpCount = finalistCount > 0 && championCount === 0 ? 1 : 0;
-      const earlyExitCount = eliminatedRoundIndex !== null && Number.isFinite(eliminatedRoundIndex) && eliminatedRoundIndex === 0 ? 1 : 0;
+      const earlyExitCount = firstRoundEliminated > 0 ? 1 : 0;
       const top4Count = Number(row.is_top4 ?? 0);
       const top8Count = Number(row.is_top8 ?? 0);
       const top16Count = Number(row.is_top16 ?? 0);
@@ -6412,9 +6782,13 @@ export class DatabaseService {
     const matchRows = this.select<{
       archive_id: string;
       archive_size: string;
+      archive_format: HololiveBracketFormat;
       archived_at: string;
       round_index: number;
       match_index: number;
+      bracket_stage: HololiveBracketStage;
+      stage_round_index: number;
+      late_round_weight: number;
       winner_youtube_video_id: string;
       loser_youtube_video_id: string | null;
       winner_title: string | null;
@@ -6428,7 +6802,8 @@ export class DatabaseService {
       loser_canonical_performance_key: string | null;
       loser_view_count: number | null;
     }>(
-      `SELECT m.archive_id, a.size AS archive_size, a.archived_at, m.round_index, m.match_index,
+      `SELECT m.archive_id, a.size AS archive_size, a.bracket_format AS archive_format, a.archived_at,
+              m.round_index, m.match_index, m.bracket_stage, m.stage_round_index, m.late_round_weight,
               m.winner_youtube_video_id, m.loser_youtube_video_id,
               winner.title_snapshot AS winner_title,
               loser.title_snapshot AS loser_title,
@@ -6453,7 +6828,9 @@ export class DatabaseService {
        LEFT JOIN hololive_music_video_stats loser_current_stats
          ON loser_current_stats.youtube_video_id = m.loser_youtube_video_id
        WHERE m.loser_youtube_video_id IS NOT NULL
-       ORDER BY a.archived_at ASC, a.completed_at ASC, m.archive_id ASC, m.round_index ASC, m.match_index ASC`
+         ${normalizedFormat === "all" ? "" : "AND a.bracket_format = ?"}
+       ORDER BY a.archived_at ASC, a.completed_at ASC, m.archive_id ASC, m.play_order ASC, m.match_index ASC`,
+      archiveFormatParams
     );
 
     const previousSongResults = new Set<string>();
@@ -6573,7 +6950,15 @@ export class DatabaseService {
       const isDistinctSongResult = winnerSongKey !== loserSongKey;
       const archiveSize = this.normalizeHololiveBracketSize(row.archive_size);
       const finalRoundIndex = Math.log2(HOLOLIVE_BRACKET_SIZE_COUNTS[archiveSize]) - 1;
-      const isClutchRound = row.round_index >= Math.max(0, finalRoundIndex - 2);
+      const archiveFormat = this.normalizeHololiveBracketFormat(row.archive_format);
+      const storedLateRoundWeight = Number(row.late_round_weight ?? 0);
+      const lateRoundWeight =
+        storedLateRoundWeight > 0
+          ? storedLateRoundWeight
+          : archiveFormat === "single_elimination" && row.round_index >= Math.max(0, finalRoundIndex - 2)
+            ? clutchRoundWeight(row.round_index, finalRoundIndex)
+            : 0;
+      const isClutchRound = lateRoundWeight > 0;
       if (isDistinctSongResult) {
         const winnerSongRating = ensureRatingRow(
           songRatingRows,
@@ -6659,7 +7044,7 @@ export class DatabaseService {
         isDistinctSongResult &&
         isClutchRound
       ) {
-        const roundWeight = clutchRoundWeight(row.round_index, finalRoundIndex);
+        const roundWeight = lateRoundWeight;
         const winnerSamples = clutchSamplesBySong.get(winnerSongKey) ?? [];
         winnerSamples.push({ value: 1, weight: roundWeight });
         clutchSamplesBySong.set(winnerSongKey, winnerSamples);
@@ -6677,7 +7062,7 @@ export class DatabaseService {
         loserTalentIdentity.id &&
         winnerTalentIdentity.id !== loserTalentIdentity.id
       ) {
-        const roundWeight = clutchRoundWeight(row.round_index, finalRoundIndex);
+        const roundWeight = lateRoundWeight;
         if (winnerTalentIdentity.id) {
           const samples = clutchSamplesByTalent.get(winnerTalentIdentity.id) ?? [];
           samples.push({ value: 1, weight: roundWeight });
@@ -6826,7 +7211,10 @@ export class DatabaseService {
         rivalry.lastArchivedAt = row.archived_at;
       }
       rivalryStats.set(key, rivalry);
-      if (row.round_index === finalRoundIndex) {
+      if (
+        (archiveFormat === "double_elimination" && row.bracket_stage === "grand_final") ||
+        (archiveFormat === "single_elimination" && row.round_index === finalRoundIndex)
+      ) {
         addRivalryResult(finalsRivalryStats);
       }
     }
@@ -8194,24 +8582,128 @@ export class DatabaseService {
     });
   }
 
+  private getHololiveBracketEngineRecord(bracketId: string): {
+    format: HololiveBracketFormat;
+    engineStateJson: string | null;
+  } {
+    const row = this.select<{ bracket_format: string; engine_state_json: string | null }>(
+      `SELECT bracket_format, engine_state_json FROM hololive_brackets WHERE id = ?`,
+      [bracketId]
+    )[0];
+    if (!row) {
+      throw new Error(`Unknown Hololive bracket: ${bracketId}`);
+    }
+    return {
+      format: this.normalizeHololiveBracketFormat(row.bracket_format),
+      engineStateJson: row.engine_state_json
+    };
+  }
+
+  private parseHololiveDoubleEliminationState(value: string | null): HololiveDoubleEliminationEngineState {
+    if (!value) {
+      throw new Error("This double-elimination bracket is missing its saved engine state");
+    }
+    try {
+      return JSON.parse(value) as HololiveDoubleEliminationEngineState;
+    } catch {
+      throw new Error("This double-elimination bracket has invalid saved engine state");
+    }
+  }
+
+  private persistHololiveDoubleEliminationState(
+    bracketId: string,
+    state: HololiveDoubleEliminationEngineState,
+    timestamp: string
+  ): void {
+    const matches = listHololiveDoubleEliminationMatches(state);
+    const nextMatch = matches.find((match) => match.ready && !match.complete) ?? null;
+    const finalMatch = matches.find((match) => match.stage === "grand_final" && match.matchIndex === 0) ?? null;
+    const complete = Boolean(finalMatch?.complete && finalMatch.winnerEntryId);
+
+    this.transaction(() => {
+      for (const match of matches) {
+        this.run(
+          `UPDATE hololive_bracket_matches
+           SET entry_a_id = ?, entry_b_id = ?, winner_entry_id = ?, completed_at = ?, updated_at = ?
+           WHERE bracket_id = ? AND engine_match_id = ?`,
+          [
+            match.entryAId,
+            match.entryBId,
+            match.winnerEntryId,
+            match.complete ? match.completedAt ?? timestamp : null,
+            timestamp,
+            bracketId,
+            match.engineMatchId
+          ]
+        );
+      }
+      this.run(
+        `UPDATE hololive_brackets
+         SET engine_state_json = ?, status = ?, current_match_id = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          JSON.stringify(state),
+          complete ? "complete" : "active",
+          complete || !nextMatch ? null : `${bracketId}:de:${nextMatch.engineMatchId}`,
+          timestamp,
+          bracketId
+        ]
+      );
+    });
+  }
+
+  private deleteHololiveBracketArchiveRows(bracketId: string): void {
+    const archiveId = `archive:${bracketId}`;
+    this.transaction(() => {
+      this.run("DELETE FROM hololive_bracket_archive_matches WHERE archive_id = ?", [archiveId]);
+      this.run("DELETE FROM hololive_bracket_archive_entries WHERE archive_id = ?", [archiveId]);
+      this.run("DELETE FROM hololive_bracket_archives WHERE source_bracket_id = ?", [bracketId]);
+    });
+  }
+
+  private getSingleEliminationLateRoundWeight(roundIndex: number, roundCount: number): number {
+    const roundsFromFinal = roundCount - roundIndex - 1;
+    if (roundsFromFinal === 0) return 1.5;
+    if (roundsFromFinal === 1) return 1.25;
+    if (roundsFromFinal === 2) return 1;
+    return 0;
+  }
+
   private groupHololiveBracketMatchesIntoRounds(
     matches: HololiveBracketMatch[],
-    sizeCount: number
+    sizeCount: number,
+    format: HololiveBracketFormat
   ): HololiveBracketRound[] {
-    const byRound = new Map<number, HololiveBracketMatch[]>();
+    const byRound = new Map<string, HololiveBracketMatch[]>();
     for (const match of matches) {
-      const round = byRound.get(match.roundIndex) ?? [];
+      const key = `${match.stage}:${match.stageRoundIndex}`;
+      const round = byRound.get(key) ?? [];
       round.push(match);
-      byRound.set(match.roundIndex, round);
+      byRound.set(key, round);
     }
 
-    return [...byRound.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([roundIndex, roundMatches]) => ({
-        roundIndex,
-        label: this.getHololiveBracketRoundLabel(sizeCount, roundIndex),
-        matches: roundMatches.sort((left, right) => left.matchIndex - right.matchIndex)
-      }));
+    return [...byRound.values()]
+      .map((roundMatches) => {
+        const first = roundMatches[0];
+        const stage = first?.stage ?? "single";
+        const stageRoundIndex = first?.stageRoundIndex ?? 0;
+        const label =
+          format === "single_elimination" || stage === "single"
+            ? this.getHololiveBracketRoundLabel(sizeCount, stageRoundIndex)
+            : stage === "winners"
+              ? this.getHololiveBracketRoundLabel(sizeCount, stageRoundIndex)
+              : stage === "losers"
+                ? `Losers Round ${stageRoundIndex + 1}`
+                : "Grand Final";
+        return {
+          roundIndex: first?.roundIndex ?? stageRoundIndex,
+          stage,
+          stageRoundIndex,
+          label,
+          matches: roundMatches.sort((left, right) => left.matchIndex - right.matchIndex)
+        };
+      })
+      .sort((left, right) => left.roundIndex - right.roundIndex);
   }
 
   private getHololiveBracketRoundLabel(sizeCount: number, roundIndex: number): string {
@@ -8221,7 +8713,7 @@ export class DatabaseService {
   private findNextHololiveBracketMatch(matches: HololiveBracketMatch[]): HololiveBracketMatch | null {
     return (
       [...matches]
-        .sort((left, right) => left.roundIndex - right.roundIndex || left.matchIndex - right.matchIndex)
+        .sort((left, right) => left.playOrder - right.playOrder)
         .find((match) => Boolean(match.entryA && match.entryB && !match.winnerEntryId)) ?? null
     );
   }
@@ -8234,6 +8726,7 @@ export class DatabaseService {
     entry_a_id: string | null;
     entry_b_id: string | null;
     winner_entry_id: string | null;
+    engine_match_id: number | null;
   } {
     const row = this.select<{
       id: string;
@@ -8243,8 +8736,9 @@ export class DatabaseService {
       entry_a_id: string | null;
       entry_b_id: string | null;
       winner_entry_id: string | null;
+      engine_match_id: number | null;
     }>(
-      `SELECT id, bracket_id, round_index, match_index, entry_a_id, entry_b_id, winner_entry_id
+      `SELECT id, bracket_id, round_index, match_index, entry_a_id, entry_b_id, winner_entry_id, engine_match_id
        FROM hololive_bracket_matches
        WHERE id = ? AND bracket_id = ?`,
       [matchId, bracketId]
@@ -8337,7 +8831,10 @@ export class DatabaseService {
     const matches = bracket.rounds.flatMap((round) => round.matches);
     const completedMatches = matches.filter((match) => match.winnerEntryId);
     const finalRoundIndex = Math.max(0, ...matches.map((match) => match.roundIndex));
-    const finalMatch = matches.find((match) => match.roundIndex === finalRoundIndex && match.matchIndex === 0);
+    const finalMatch =
+      bracket.format === "double_elimination"
+        ? matches.find((match) => match.stage === "grand_final" && match.matchIndex === 0)
+        : matches.find((match) => match.roundIndex === finalRoundIndex && match.matchIndex === 0);
     const completedAt = finalMatch?.completedAt ?? new Date().toISOString();
     const archivedAt = new Date().toISOString();
     const entryStats = new Map<
@@ -8346,6 +8843,8 @@ export class DatabaseService {
         wins: number;
         losses: number;
         eliminatedRoundIndex: number | null;
+        eliminatedStage: HololiveBracketStage | null;
+        eliminatedStageRoundIndex: number | null;
         eliminatedByYoutubeVideoId: string | null;
       }
     >();
@@ -8355,6 +8854,8 @@ export class DatabaseService {
         wins: 0,
         losses: 0,
         eliminatedRoundIndex: null,
+        eliminatedStage: null,
+        eliminatedStageRoundIndex: null,
         eliminatedByYoutubeVideoId: null
       });
     }
@@ -8374,6 +8875,8 @@ export class DatabaseService {
         if (loserStats) {
           loserStats.losses += 1;
           loserStats.eliminatedRoundIndex = match.roundIndex;
+          loserStats.eliminatedStage = match.stage;
+          loserStats.eliminatedStageRoundIndex = match.stageRoundIndex;
           loserStats.eliminatedByYoutubeVideoId = match.winner?.youtubeVideoId ?? null;
         }
       }
@@ -8403,6 +8906,15 @@ export class DatabaseService {
 
     const finalistIds = new Set([finalMatch?.entryA?.id, finalMatch?.entryB?.id].filter((id): id is string => Boolean(id)));
     const champion = bracket.champion;
+    const doubleStandings =
+      bracket.format === "double_elimination"
+        ? new Map(
+            (this.parseHololiveDoubleEliminationState(
+              this.getHololiveBracketEngineRecord(bracket.id).engineStateJson
+            ).standings ?? []).map((standing) => [standing.entryId, standing.rank])
+          )
+        : null;
+    const lowestDoublePlacement = doubleStandings ? Math.max(...doubleStandings.values()) : null;
 
     this.createBackup("hololive-bracket-archive-upsert");
 
@@ -8412,16 +8924,17 @@ export class DatabaseService {
       this.run("DELETE FROM hololive_bracket_archives WHERE source_bracket_id = ?", [bracket.id]);
       this.run(
         `INSERT INTO hololive_bracket_archives
-           (id, source_bracket_id, name, size, generation_style, generation_filters_json, seed,
+           (id, source_bracket_id, name, size, bracket_format, generation_style, generation_filters_json, seed,
             total_entries, total_matches, completed_matches,
             champion_youtube_video_id, champion_title, champion_idol_id, champion_idol_name,
             created_at, completed_at, archived_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           archiveId,
           bracket.id,
           bracket.name,
           bracket.size,
+          bracket.format,
           bracket.generationStyle,
           this.stringifyHololiveBracketGenerationFilters(bracket.generationFilters),
           bracket.seed,
@@ -8444,17 +8957,32 @@ export class DatabaseService {
           wins: 0,
           losses: 0,
           eliminatedRoundIndex: null,
+          eliminatedStage: null,
+          eliminatedStageRoundIndex: null,
           eliminatedByYoutubeVideoId: null
         };
-        const finalRank = entry.id === champion.id ? 1 : stats.eliminatedRoundIndex === null ? null : 2 ** (finalRoundIndex - stats.eliminatedRoundIndex + 1);
+        const finalRank =
+          bracket.format === "double_elimination"
+            ? doubleStandings?.get(entry.id) ?? null
+            : entry.id === champion.id
+              ? 1
+              : stats.eliminatedRoundIndex === null
+                ? null
+                : 2 ** (finalRoundIndex - stats.eliminatedRoundIndex + 1);
+        const firstRoundEliminated =
+          bracket.format === "double_elimination"
+            ? finalRank !== null && finalRank === lowestDoublePlacement
+            : stats.eliminatedRoundIndex === 0;
+        const isTop = (placement: number) => finalRank !== null && finalRank <= placement;
         this.run(
           `INSERT INTO hololive_bracket_archive_entries
              (id, archive_id, source_entry_id, slot_index, youtube_video_id, title_snapshot, song_name_snapshot,
               topic_id, youtube_url_snapshot, channel_name_snapshot, idol_id_snapshot, idol_name_snapshot,
               canonical_performance_key, view_count_snapshot, published_at_snapshot, duration_seconds_snapshot,
               wins, losses, final_rank, eliminated_round_index, eliminated_by_youtube_video_id,
+              eliminated_stage, eliminated_stage_round_index,
               first_round_eliminated, is_champion, is_finalist, is_top4, is_top8, is_top16)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             `${archiveId}:entry:${entry.slotIndex}`,
             archiveId,
@@ -8477,12 +9005,14 @@ export class DatabaseService {
             finalRank,
             stats.eliminatedRoundIndex,
             stats.eliminatedByYoutubeVideoId,
-            stats.eliminatedRoundIndex === 0 ? 1 : 0,
+            entry.id === champion.id ? null : stats.eliminatedStage,
+            entry.id === champion.id ? null : stats.eliminatedStageRoundIndex,
+            firstRoundEliminated ? 1 : 0,
             entry.id === champion.id ? 1 : 0,
             finalistIds.has(entry.id) ? 1 : 0,
-            reachedRound(entry.id, 4) ? 1 : 0,
-            reachedRound(entry.id, 8) ? 1 : 0,
-            reachedRound(entry.id, 16) ? 1 : 0
+            bracket.format === "double_elimination" ? (isTop(4) ? 1 : 0) : reachedRound(entry.id, 4) ? 1 : 0,
+            bracket.format === "double_elimination" ? (isTop(8) ? 1 : 0) : reachedRound(entry.id, 8) ? 1 : 0,
+            bracket.format === "double_elimination" ? (isTop(16) ? 1 : 0) : reachedRound(entry.id, 16) ? 1 : 0
           ]
         );
       }
@@ -8494,16 +9024,22 @@ export class DatabaseService {
         const loser = [match.entryA, match.entryB].find((entry) => entry && entry.id !== match.winnerEntryId) ?? null;
         this.run(
           `INSERT INTO hololive_bracket_archive_matches
-             (id, archive_id, source_match_id, round_index, match_index,
+             (id, archive_id, source_match_id, round_index, match_index, bracket_stage, stage_round_index,
+              play_order, engine_match_id, late_round_weight,
               entry_a_youtube_video_id, entry_b_youtube_video_id, winner_youtube_video_id, loser_youtube_video_id,
               completed_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             `${archiveId}:r${match.roundIndex}:m${match.matchIndex}`,
             archiveId,
             match.id,
             match.roundIndex,
             match.matchIndex,
+            match.stage,
+            match.stageRoundIndex,
+            match.playOrder,
+            match.engineMatchId ?? null,
+            match.lateRoundWeight,
             match.entryA?.youtubeVideoId ?? null,
             match.entryB?.youtubeVideoId ?? null,
             match.winner.youtubeVideoId,
@@ -8970,6 +9506,11 @@ export class DatabaseService {
   }
 
   flush(): void {
+    if (this.options.persistWrites === false) {
+      this.dirty = false;
+      return;
+    }
+
     const db = this.requireDb();
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
     const tempPath = `${this.databasePath}.tmp-${process.pid}-${Date.now()}`;
@@ -9048,11 +9589,35 @@ export class DatabaseService {
   }
 
   private createBackup(reason: string): void {
-    if (!this.SQL) {
+    if (!this.SQL || this.options.createBackups === false) {
       return;
     }
 
     createRollingDatabaseBackup(this.databasePath, this.backupDirectory, this.SQL, reason);
+  }
+
+  private getStartupMaintenanceFingerprint(): string {
+    return String(
+      this.select<{ fingerprint: string }>(
+        `SELECT printf('%d:%d:%s:%d:%d:%s:%d:%d:%d',
+           (SELECT COUNT(*) FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+           (SELECT COALESCE(SUM(
+              length(COALESCE(title, '')) + length(COALESCE(song_name, '')) +
+              length(COALESCE(participants_json, '')) + length(COALESCE(canonical_song_key, '')) +
+              length(COALESCE(canonical_performance_key, '')) + length(COALESCE(owned_idol_ids_json, '')) +
+              length(COALESCE(featured_idol_ids_json, '')) + COALESCE(duration_seconds, 0) +
+              COALESCE(official_catalog_active, 1)
+            ), 0) FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+           (SELECT COALESCE(MAX(updated_at), '') FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
+           (SELECT COUNT(*) FROM hololive_music_detail_cache),
+           (SELECT COALESCE(SUM(length(COALESCE(song_names_json, '')) + length(COALESCE(mentions_json, '')) + length(COALESCE(collab_channel_ids_json, ''))), 0) FROM hololive_music_detail_cache),
+           (SELECT COALESCE(MAX(updated_at), '') FROM hololive_music_detail_cache),
+           (SELECT COUNT(*) FROM hololive_music_duplicate_removals),
+           (SELECT COALESCE(SUM(length(COALESCE(removed_youtube_video_id, '')) + length(COALESCE(kept_youtube_video_id, ''))), 0) FROM hololive_music_duplicate_removals),
+           (SELECT COUNT(*) FROM hololive_music_video_stats s WHERE NOT EXISTS (SELECT 1 FROM hololive_music_videos v WHERE v.youtube_video_id = s.youtube_video_id))
+         ) AS fingerprint`
+      )[0]?.fingerprint ?? ""
+    );
   }
 
   private getSettingValue(key: string): string | null {
@@ -9694,6 +10259,17 @@ export class DatabaseService {
         [row.item_id]
       ) > 0 || count("SELECT COUNT(*) AS count FROM list_items WHERE item_id = ?", [row.item_id]) > 0
     );
+  }
+
+  private normalizeHololiveBracketFormat(format: unknown): HololiveBracketFormat {
+    return format === "double_elimination" ? "double_elimination" : "single_elimination";
+  }
+
+  private normalizeHololiveBracketStage(stage: unknown): HololiveBracketStage {
+    if (stage === "winners" || stage === "losers" || stage === "grand_final") {
+      return stage;
+    }
+    return "single";
   }
 
   private purgeRejectedHolodexMusicRows(): void {

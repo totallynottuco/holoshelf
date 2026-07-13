@@ -702,7 +702,12 @@ function buildChampionStory(bracket: HololiveBracket): ChampionStory {
     championMatchIds: new Set(
       bracket.rounds
         .flatMap((round) => round.matches)
-        .filter((match) => championId && match.winnerEntryId === championId)
+        .filter((match) =>
+          championId &&
+          (bracket.format === "double_elimination"
+            ? match.entryA?.id === championId || match.entryB?.id === championId
+            : match.winnerEntryId === championId)
+        )
         .map((match) => match.id)
     )
   };
@@ -807,10 +812,176 @@ function drawChampionHero(
   ctx.restore();
 }
 
+function drawDoubleEliminationBandTitle(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  top: number,
+  width: number,
+  fontSize: number
+): void {
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#e7fbff";
+  ctx.font = `900 ${fontSize}px Segoe UI, Arial, sans-serif`;
+  ctx.fillText(label, 16, top + fontSize);
+  ctx.fillStyle = "rgba(70, 213, 255, 0.42)";
+  ctx.fillRect(16, top + fontSize + 7, width - 32, 1);
+  ctx.restore();
+}
+
+async function renderHololiveDoubleEliminationExportPng(bracket: HololiveBracket): Promise<string> {
+  if (!bracket.champion) {
+    throw new Error("Only completed brackets can be exported.");
+  }
+
+  const stageDefinitions: Array<{ stage: HololiveBracketRound["stage"]; label: string }> = [
+    { stage: "winners", label: "Winners Bracket" },
+    { stage: "losers", label: "Losers Bracket" },
+    { stage: "grand_final", label: "Grand Final" }
+  ];
+  const stageRounds = stageDefinitions.map((definition) => ({
+    ...definition,
+    rounds: bracket.rounds
+      .filter((round) => round.stage === definition.stage)
+      .sort((left, right) => left.stageRoundIndex - right.stageRoundIndex)
+  }));
+  const maxMatches = Math.max(
+    1,
+    ...stageRounds.flatMap((band) => band.rounds.map((round) => round.matches.length))
+  );
+  const maxRoundCount = Math.max(1, ...stageRounds.map((band) => band.rounds.length));
+  const base = calculateHololiveBracketExportLayout(1, maxMatches);
+  const layout: HololiveBracketExportLayout = {
+    ...base,
+    championPlaqueTop: base.padding,
+    championImageTop: base.padding + base.championPlaqueHeight + 12,
+    championImageHeight: Math.round((base.championImageWidth * 9) / 16)
+  };
+  const columnWidth = layout.columnWidth;
+  const gap = layout.columnGap;
+  const width = Math.max(
+    layout.championPlaqueWidth + layout.padding * 2,
+    layout.padding * 2 + maxRoundCount * columnWidth + Math.max(0, maxRoundCount - 1) * gap
+  );
+  const heroBottom = Math.max(
+    layout.championPlaqueTop + layout.championPlaqueHeight,
+    layout.championImageTop + layout.championImageHeight
+  );
+  const bandTitleHeight = Math.max(28, layout.roundHeaderFontSize + 20);
+  const bandGap = Math.max(22, layout.padding * 1.5);
+  const bandMetrics = stageRounds.map((band) => {
+    const matchCount = Math.max(1, ...band.rounds.map((round) => round.matches.length), 1);
+    return {
+      ...band,
+      matchCount,
+      height: bandTitleHeight + layout.roundHeaderHeight + 8 + matchCount * layout.rowHeight
+    };
+  });
+  const height = Math.ceil(
+    heroBottom + bandGap + bandMetrics.reduce((sum, band) => sum + band.height, 0) + bandGap * bandMetrics.length
+  );
+  const scale = Math.min(EXPORT_PIXEL_SCALE, EXPORT_MAX_CANVAS_DIMENSION / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(width * scale);
+  canvas.height = Math.ceil(height * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Could not create double-elimination export canvas.");
+  }
+
+  ctx.scale(scale, scale);
+  ctx.textBaseline = "alphabetic";
+  drawBackground(ctx, width, height);
+  const images = await loadThumbnails(bracket);
+  const story = buildChampionStory(bracket);
+  drawChampionHero(ctx, bracket.champion, images.get(bracket.champion.youtubeVideoId), width / 2, layout);
+
+  let bandTop = heroBottom + bandGap;
+  for (const band of bandMetrics) {
+    drawDoubleEliminationBandTitle(ctx, band.label, bandTop, width, Math.max(12, layout.roundHeaderFontSize + 2));
+    const headerTop = bandTop + bandTitleHeight;
+    const matchesTop = headerTop + layout.roundHeaderHeight + 8;
+    const matchAreaHeight = band.matchCount * layout.rowHeight;
+    const rects = new Map<string, MatchRect>();
+
+    band.rounds.forEach((round, roundIndex) => {
+      const x = layout.padding + roundIndex * (columnWidth + gap);
+      drawRoundHeader(
+        ctx,
+        {
+          label: displayHololiveBracketRoundLabel(round.label),
+          x,
+          width: columnWidth,
+          state: roundState(round, bracket)
+        },
+        headerTop,
+        layout
+      );
+      round.matches.forEach((match, matchIndex) => {
+        const centerY = matchesTop + ((matchIndex + 0.5) * matchAreaHeight) / Math.max(round.matches.length, 1);
+        rects.set(match.id, {
+          left: x,
+          right: x + columnWidth,
+          top: centerY - layout.matchHeight / 2,
+          bottom: centerY + layout.matchHeight / 2,
+          centerY
+        });
+      });
+    });
+
+    for (let roundIndex = 1; roundIndex < band.rounds.length; roundIndex += 1) {
+      const previousRounds = band.rounds.slice(0, roundIndex).reverse();
+      for (const parent of band.rounds[roundIndex].matches) {
+        const parentRect = rects.get(parent.id);
+        if (!parentRect) continue;
+        const participantIds = new Set(
+          [parent.entryA?.id, parent.entryB?.id].filter((entryId): entryId is string => Boolean(entryId))
+        );
+        const nearestChildren = previousRounds
+          .flatMap((round) => round.matches)
+          .filter(
+            (match) =>
+              participantIds.has(match.winnerEntryId ?? "") ||
+              participantIds.has(match.entryA?.id ?? "") ||
+              participantIds.has(match.entryB?.id ?? "")
+          )
+          .map((match) => rects.get(match.id) ?? null)
+          .filter((rect): rect is MatchRect => Boolean(rect))
+          .slice(0, 2);
+        drawConnector(ctx, nearestChildren, parentRect);
+        const championChild = previousRounds
+          .flatMap((round) => round.matches)
+          .find((match) => story.championMatchIds.has(match.id));
+        const championChildRect = championChild ? rects.get(championChild.id) : null;
+        if (story.championMatchIds.has(parent.id) && championChildRect) {
+          drawChampionPathConnector(ctx, championChildRect, parentRect);
+        }
+      }
+    }
+
+    for (const round of band.rounds) {
+      for (const match of round.matches) {
+        const rect = rects.get(match.id);
+        if (rect) drawMatch(ctx, match, rect, images, story, layout);
+      }
+    }
+    bandTop += band.height + bandGap;
+  }
+
+  try {
+    return canvas.toDataURL("image/png");
+  } catch {
+    throw new Error("Could not export bracket image. Some thumbnail images could not be safely rendered.");
+  }
+}
+
 
 export async function renderHololiveBracketExportPng(bracket: HololiveBracket): Promise<string> {
   if (!bracket.champion) {
     throw new Error("Only completed brackets can be exported.");
+  }
+  if (bracket.format === "double_elimination") {
+    return renderHololiveDoubleEliminationExportPng(bracket);
   }
 
   const nonFinalRounds = bracket.rounds.slice(0, -1);

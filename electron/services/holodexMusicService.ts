@@ -104,6 +104,7 @@ export class HolodexMusicService {
       officialUrl: youtubeChannelUrl,
       iconUrl: channel.photoUrl || "",
       profileImageUrl: channel.photoUrl || "",
+      cardImageUrl: input.cardImageUrl?.trim() || null,
       youtubeChannelUrl,
       xHandle: twitter ? `@${twitter.replace(/^@/, "")}` : null,
       xUrl: twitter ? `https://x.com/${twitter.replace(/^@/, "")}` : null,

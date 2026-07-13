@@ -1165,6 +1165,7 @@ function HololivePersistentPlayerSurface({
 
 export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { showToast, showUndoToast } = useHololiveActionToast();
   const [data, setData] = useState<HololiveMusicPlayerData | null>(null);
   const [playSignal, setPlaySignal] = useState(0);
@@ -1182,6 +1183,8 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   const profileContextSeqRef = useRef(0);
   const handledEndedPlaybackTokenRef = useRef<string | null>(null);
   const unavailableVideoHandlingRef = useRef<Set<string>>(new Set());
+  const initialPlayerLoadStartedRef = useRef(false);
+  const playerProviderMountedRef = useRef(true);
 
   const queue = data?.queue ?? [];
   const state = data?.state ?? null;
@@ -1738,28 +1741,42 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    let cancelled = false;
-
     async function loadInitialData() {
+      if (initialPlayerLoadStartedRef.current) {
+        return;
+      }
+      initialPlayerLoadStartedRef.current = true;
       try {
         const next = await api.invoke("hololive:player:data", null);
-        if (!cancelled) {
+        if (playerProviderMountedRef.current) {
           setData(next);
         }
       } catch (error) {
         console.error(error);
-        if (!cancelled) {
+        if (playerProviderMountedRef.current) {
           notifyPlayer("Could not load Hololive player", "error", error instanceof Error ? error.message : "Try again.");
         }
       }
     }
 
-    void loadInitialData();
+    if (location.pathname === "/module/hololive/player") {
+      void loadInitialData();
+      return;
+    }
+
+    const idleHandle = window.requestIdleCallback(() => void loadInitialData(), { timeout: 750 });
 
     return () => {
-      cancelled = true;
+      window.cancelIdleCallback(idleHandle);
     };
-  }, []);
+  }, [location.pathname]);
+
+  useEffect(
+    () => () => {
+      playerProviderMountedRef.current = false;
+    },
+    []
+  );
 
   useEffect(() => {
     let cancelled = false;

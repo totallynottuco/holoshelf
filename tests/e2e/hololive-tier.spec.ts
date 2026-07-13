@@ -18,18 +18,74 @@ async function dragCenterTo(
   await page.mouse.up();
 }
 
-async function createBracket(page: Page, size: string, name: string): Promise<void> {
+async function createBracket(
+  page: Page,
+  size: string,
+  name: string,
+  format: "Single" | "Double" = "Single"
+): Promise<void> {
   await page.getByRole("button", { name: "Create" }).click();
   const popover = page.locator(".hololive-bracket-create-popover");
   await expect(popover).toBeVisible();
   await popover.getByRole("radio", { name: size }).click();
+  await popover.getByRole("radio", { name: format, exact: true }).click();
   await popover.getByRole("radio", { name: "Random Songs" }).click();
   await popover.getByLabel("Name").fill(name);
   await popover.getByRole("button", { name: "Create Bracket" }).click();
   await expect(popover).toHaveCount(0);
 }
 
+async function bracketVerticalFitGap(viewport: Locator): Promise<number> {
+  return viewport.evaluate((element) => {
+    const viewportRect = element.getBoundingClientRect();
+    const paddingBottom = Number.parseFloat(window.getComputedStyle(element).paddingBottom || "0");
+    const matchBottom = Math.max(
+      ...Array.from(element.querySelectorAll<HTMLElement>(".hololive-bracket-match-body")).map(
+        (match) => match.getBoundingClientRect().bottom
+      )
+    );
+    return viewportRect.bottom - paddingBottom - matchBottom;
+  });
+}
+
+async function bracketHorizontalFitGap(viewport: Locator): Promise<number> {
+  return viewport.evaluate((element) => {
+    const viewportRect = element.getBoundingClientRect();
+    const paddingRight = Number.parseFloat(window.getComputedStyle(element).paddingRight || "0");
+    const contentRight = Math.max(
+      ...Array.from(
+        element.querySelectorAll<HTMLElement>(
+          ".hololive-bracket-round > header, .hololive-bracket-match-body, .hololive-bracket-champion-strip"
+        )
+      ).map((content) => content.getBoundingClientRect().right)
+    );
+    return viewportRect.right - paddingRight - contentRight;
+  });
+}
+
+async function bracketPanPoint(viewport: Locator): Promise<{ x: number; y: number }> {
+  return viewport.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    for (let y = rect.top + 30; y < rect.bottom - 30; y += 24) {
+      for (let x = rect.left + 30; x < rect.right - 30; x += 24) {
+        const target = document.elementFromPoint(x, y);
+        if (
+          target &&
+          element.contains(target) &&
+          !target.closest("button, input, select, a, [data-bracket-selectable-text]")
+        ) {
+          return { x, y };
+        }
+      }
+    }
+    throw new Error("Could not find a bracket pan surface.");
+  });
+}
+
 test.beforeEach(async ({ page }) => {
+  await page.route(/https:\/\/(?:www\.)?youtube(?:-nocookie)?\.com\/.*/, async (route) => {
+    await route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Mock YouTube</title>" });
+  });
   await page.addInitScript(() => {
     const targetWindow = window as typeof window & {
       __holoshelfYoutubePlayCount?: number;
@@ -138,7 +194,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/#/module/hololive");
 });
 
-test("renders the Hololive tier list route", async ({ page }) => {
+test("@smoke renders the Hololive tier list route", async ({ page }) => {
   await expect(page.locator(".topbar")).toHaveCount(0);
   await expect(page.locator(".search-box")).toHaveCount(0);
   await expect(page.locator(".path-chip")).toHaveCount(0);
@@ -183,7 +239,7 @@ test("renders the Hololive tier list route", async ({ page }) => {
   expect(poolBox?.height).toBeGreaterThan(100);
 });
 
-test("shows installed update notes and acknowledges them", async ({ page }) => {
+test("@smoke shows installed update notes and acknowledges them", async ({ page }) => {
   await page.goto("/?updatePreview=1#/module/hololive");
 
   const dialog = page.getByRole("dialog", { name: "What's new in Holoshelf 1.1.7" });
@@ -306,6 +362,76 @@ test("renders bracket result exports with bounded layouts for every bracket size
       };
     }
 
+    function makeDoubleBracket(size: number) {
+      const entries = Array.from({ length: size }, (_, index) => makeEntry(index, size));
+      let globalRoundIndex = 0;
+      let playOrder = 0;
+      const makeStageRound = (
+        stage: "winners" | "losers" | "grand_final",
+        stageRoundIndex: number,
+        matchCount: number
+      ) => {
+        const matches = Array.from({ length: matchCount }, (_, matchIndex) => {
+          const entryA = entries[0];
+          const entryB = entries[(matchIndex + stageRoundIndex + 1) % entries.length];
+          return {
+            id: `${stage}-${stageRoundIndex}-${matchIndex}`,
+            bracketId: `export-double-${size}`,
+            roundIndex: globalRoundIndex,
+            matchIndex,
+            stage,
+            stageRoundIndex,
+            playOrder: playOrder++,
+            lateRoundWeight: stage === "grand_final" ? 1.5 : 0,
+            engineMatchId: playOrder,
+            entryA,
+            entryB,
+            winnerEntryId: entryA.id,
+            winner: entryA,
+            completedAt: "2026-01-02T00:00:00.000Z",
+            updatedAt: "2026-01-02T00:00:00.000Z"
+          };
+        });
+        const label =
+          stage === "winners"
+            ? roundLabel(size, stageRoundIndex)
+            : stage === "losers"
+              ? `Losers Round ${stageRoundIndex + 1}`
+              : "Grand Final";
+        const round = { roundIndex: globalRoundIndex, stage, stageRoundIndex, label, matches };
+        globalRoundIndex += 1;
+        return round;
+      };
+      const rounds = [];
+      const winnerRoundCount = Math.log2(size);
+      for (let index = 0; index < winnerRoundCount; index += 1) {
+        rounds.push(makeStageRound("winners", index, size / 2 ** (index + 1)));
+      }
+      const loserCounts = [];
+      for (let count = size / 4; count >= 1; count /= 2) {
+        loserCounts.push(count, count);
+      }
+      loserCounts.forEach((count, index) => rounds.push(makeStageRound("losers", index, count)));
+      rounds.push(makeStageRound("grand_final", 0, 1));
+      return {
+        id: `export-double-${size}`,
+        name: `Export Double RO${size}`,
+        size: `RO${size}`,
+        format: "double_elimination",
+        generationStyle: "random_songs",
+        generationFilters: {},
+        seed: "export-double-test",
+        status: "complete",
+        currentMatchId: null,
+        currentMatch: null,
+        champion: entries[0],
+        entries,
+        rounds,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z"
+      };
+    }
+
     function measureDataUrl(dataUrl: string) {
       return new Promise<{ width: number; height: number }>((resolve, reject) => {
         const image = new Image();
@@ -329,17 +455,28 @@ test("renders bracket result exports with bounded layouts for every bracket size
         image: await measureDataUrl(dataUrl)
       });
     }
-    return rendered;
+    const doubleRendered = [];
+    for (const size of sizes) {
+      const dataUrl = await renderHololiveBracketExportPng(makeDoubleBracket(size) as never);
+      doubleRendered.push({ size, image: await measureDataUrl(dataUrl) });
+    }
+    return { single: rendered, double: doubleRendered };
   });
 
-  for (const result of results) {
+  for (const result of results.single) {
     expect(result.image.width).toBe(Math.ceil(result.layoutWidth * 1.25));
     expect(result.image.height).toBe(Math.ceil(result.layoutHeight * 1.25));
     expect(result.image.width).toBeLessThanOrEqual(8192);
     expect(result.image.height).toBeLessThanOrEqual(8192);
   }
-  expect(results[0].image.width).toBeLessThan(results[1].image.width);
-  expect(results.at(-1)?.image.width).toBeLessThan(3000);
+  expect(results.single[0].image.width).toBeLessThan(results.single[1].image.width);
+  expect(results.single.at(-1)?.image.width).toBeLessThan(3000);
+  for (const result of results.double) {
+    expect(result.image.width).toBeGreaterThan(0);
+    expect(result.image.height).toBeGreaterThan(0);
+    expect(result.image.width).toBeLessThanOrEqual(8192);
+    expect(result.image.height).toBeLessThanOrEqual(8192);
+  }
 });
 
 test("adds a custom talent from a channel handle", async ({ page }) => {
@@ -351,6 +488,9 @@ test("adds a custom talent from a channel handle", async ({ page }) => {
   await expect(page.locator(".hololive-custom-talent-row")).toHaveCount(0);
 
   await page.getByLabel("Channel").fill("@SoradukiTyra");
+  await page.getByLabel("Overview image").fill(
+    "https://static.wikia.nocookie.net/virtualyoutuber/images/c/cc/ReawakeR_Tyra.jpg/revision/latest?cb=20260516193557"
+  );
   await page.getByRole("button", { name: "Resolve" }).click();
   await expect(page.locator(".hololive-talent-preview")).toContainText("Soraduki Tyra");
   await expect(page.locator(".hololive-talent-preview")).toContainText("UCdQYcUyffHZoz0KOwuiG0lQ");
@@ -370,7 +510,7 @@ test("adds a custom talent from a channel handle", async ({ page }) => {
   await expect(page.locator('.hololive-pool .hololive-idol-tile[data-idol-id="custom-soraduki-tyra"]')).toBeVisible();
 });
 
-test("requires complete custom song metadata before import save", async ({ page }) => {
+test("@smoke requires complete custom song metadata before import save", async ({ page }) => {
   await page.getByRole("link", { name: "Custom Import" }).click();
   await page.getByRole("button", { name: "Import Song" }).click();
   const sheet = page.locator(".hololive-custom-song-sheet");
@@ -420,7 +560,7 @@ test("requires complete custom song metadata before import save", async ({ page 
   await expect(page.locator(".hololive-custom-song-sheet")).toContainText("Edit Song");
 });
 
-test("creates and plays through a Hololive bracket matchup", async ({ page }) => {
+test("@smoke creates and plays through a Hololive bracket matchup", async ({ page }) => {
   await page.route("https://i.ytimg.com/vi/**/maxresdefault.jpg", async (route) => {
     await route.fulfill({
       contentType: "image/svg+xml",
@@ -457,7 +597,16 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await page.getByRole("radio", { name: "Random Songs" }).click();
   await expect(page.getByRole("radio", { name: "Random Songs" })).toBeChecked();
   const createPopover = page.locator(".hololive-bracket-create-popover");
+  const collapsedPopoverBox = await createPopover.boundingBox();
+  const collapsedNameBox = await createPopover.getByLabel("Name").boundingBox();
+  const collapsedPoolBox = await createPopover.locator(".hololive-bracket-filter-row").boundingBox();
+  expect(collapsedPopoverBox?.width).toBeLessThanOrEqual(461);
   await createPopover.getByRole("button", { name: /Edit Filters/ }).click();
+  const expandedNameBox = await createPopover.getByLabel("Name").boundingBox();
+  const expandedPoolBox = await createPopover.locator(".hololive-bracket-filter-row").boundingBox();
+  expect(Math.abs((expandedNameBox?.y ?? 0) - (collapsedNameBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((expandedPoolBox?.y ?? 0) - (collapsedPoolBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect((expandedPoolBox?.y ?? 0) - ((expandedNameBox?.y ?? 0) + (expandedNameBox?.height ?? 0))).toBeGreaterThanOrEqual(8);
   await expect(createPopover.getByRole("checkbox", { name: "Active", exact: true })).toBeChecked();
   await expect(createPopover.getByRole("checkbox", { name: "Alumni", exact: true })).toBeChecked();
   await expect(createPopover.getByRole("checkbox", { name: "Custom", exact: true })).toBeChecked();
@@ -714,6 +863,434 @@ test("creates and plays through a Hololive bracket matchup", async ({ page }) =>
   await expect(page.locator(".hololive-bracket-stats-totals")).toHaveCount(0);
 });
 
+test("creates, navigates, and completes a double-elimination bracket", async ({ page }) => {
+  await page.getByRole("link", { name: "Bracket" }).click();
+  await page.getByRole("button", { name: "Create" }).click();
+  const popover = page.locator(".hololive-bracket-create-popover");
+  await popover.getByRole("radio", { name: "RO16" }).click();
+  await popover.getByRole("radio", { name: "Double", exact: true }).click();
+  await expect(popover.locator(".hololive-bracket-match-count")).toHaveCount(0);
+  await popover.getByRole("radio", { name: "Random Songs" }).click();
+  await popover.getByLabel("Name").fill("Double Elimination Probe");
+  await popover.getByRole("button", { name: "Create Bracket" }).click();
+
+  await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("Winners");
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveCount(2);
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveText(["0-0 W-L", "0-0 W-L"]);
+
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(page.getByRole("tab", { name: "Winners Bracket" })).toHaveAttribute("aria-selected", "true");
+  const grandFinalTab = page.getByRole("tab", { name: "Grand Finals" });
+  await expect(grandFinalTab).toBeVisible();
+  await grandFinalTab.click();
+  await expect(grandFinalTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".hololive-bracket-grand-final-view")).toContainText("Pending");
+  await page.getByRole("tab", { name: "Winners Bracket" }).click();
+  const doubleRoundView = page.getByRole("combobox", { name: "View bracket from round" });
+  await expect(doubleRoundView).toContainText("Full bracket");
+  await doubleRoundView.click();
+  await page.getByRole("option", { name: "Semi Final" }).click();
+  await expect(doubleRoundView).toContainText("Semi Final");
+  await expect(page.getByRole("button", { name: "Reset zoom" })).toHaveText("100%");
+  await expect(page.locator(".hololive-bracket-side.left .hololive-bracket-round")).toHaveCount(1);
+  await expect(page.locator(".hololive-bracket-side.right .hololive-bracket-round")).toHaveCount(1);
+  await page.getByRole("tab", { name: "Losers Bracket" }).click();
+  await expect(doubleRoundView).toContainText("Full bracket");
+  await doubleRoundView.click();
+  await page.getByRole("option", { name: "Losers Round 3" }).click();
+  await expect(doubleRoundView).toContainText("Losers Round 3");
+  await page.getByRole("tab", { name: "Winners Bracket" }).click();
+  await expect(doubleRoundView).toContainText("Semi Final");
+  await doubleRoundView.click();
+  await page.getByRole("option", { name: "Full bracket" }).click();
+  await expect(page.locator(".hololive-bracket-side.left .hololive-bracket-round")).toHaveCount(3);
+  await expect(page.locator(".hololive-bracket-side.right .hololive-bracket-round")).toHaveCount(3);
+  await expect(page.locator(".hololive-bracket-final-round")).toHaveCount(1);
+  const resetZoom = page.getByRole("button", { name: "Reset zoom" });
+  await expect(resetZoom).toHaveText("100%");
+  await expect(page.locator(".hololive-bracket-tree")).not.toHaveAttribute("data-bracket-fit-width", "true");
+  await expect(page.locator(".hololive-bracket-tree")).not.toHaveAttribute("data-bracket-fit-height", "true");
+  const baselineScale = await page.locator(".hololive-bracket-zoom-content").evaluate((canvas) =>
+    Number.parseFloat((canvas as HTMLElement).style.getPropertyValue("--bracket-zoom"))
+  );
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(resetZoom).toHaveText("110%");
+  await expect.poll(() => page.locator(".hololive-bracket-zoom-content").evaluate((canvas) =>
+    Number.parseFloat((canvas as HTMLElement).style.getPropertyValue("--bracket-zoom"))
+  )).toBeGreaterThan(baselineScale);
+  await resetZoom.click();
+  await page.getByRole("button", { name: "Zoom out" }).click();
+  await expect(resetZoom).toHaveText("90%");
+  await resetZoom.click();
+  await expect(resetZoom).toHaveText("100%");
+  const bracketViewport = page.locator(".hololive-bracket-tree");
+  await bracketViewport.hover();
+  const scrollBeforeWheel = await bracketViewport.evaluate((viewport) => ({
+    left: viewport.scrollLeft,
+    top: viewport.scrollTop
+  }));
+  await page.mouse.wheel(0, 100);
+  await expect(resetZoom).toHaveText("100%");
+  await expect.poll(() => bracketViewport.evaluate(
+    (viewport, before) => Math.abs(viewport.scrollLeft - before.left) + Math.abs(viewport.scrollTop - before.top),
+    scrollBeforeWheel
+  )).toBeGreaterThan(0);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, 100);
+  await page.keyboard.up("Control");
+  await expect(resetZoom).toHaveText("90%");
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -100);
+  await page.keyboard.up("Control");
+  await expect(resetZoom).toHaveText("100%");
+  await page.getByRole("button", { name: "Fit width" }).click();
+  await expect.poll(async () => Number.parseInt((await resetZoom.innerText()).replace("%", ""), 10)).toBeLessThan(100);
+  await expect
+    .poll(() => bracketViewport.evaluate((viewport) => viewport.scrollWidth - viewport.clientWidth))
+    .toBeLessThanOrEqual(2);
+  const fittedZoom = await page.locator(".hololive-bracket-zoom-content").evaluate((canvas) =>
+    Number.parseFloat((canvas as HTMLElement).style.getPropertyValue("--bracket-zoom"))
+  );
+  expect(Math.abs(fittedZoom * 20 - Math.round(fittedZoom * 20))).toBeGreaterThan(0.01);
+  const losersTab = page.getByRole("tab", { name: "Losers Bracket" });
+  await losersTab.hover();
+  await expect(losersTab).toHaveCSS("color", "rgb(255, 255, 255)");
+  await losersTab.click();
+  await expect(page.getByRole("tab", { name: "Losers Bracket" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".hololive-double-bracket-canvas.stage-losers")).toBeVisible();
+  await expect(resetZoom).toHaveText("100%");
+  await expect(page.locator(".hololive-double-bracket-canvas.stage-losers")).not.toHaveAttribute("data-bracket-fit-width", "true");
+  await expect(page.locator(".hololive-double-bracket-canvas.stage-losers")).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await resetZoom.click();
+  const losersCanvas = page.locator(".hololive-double-bracket-content");
+  const readLosersGeometry = () =>
+    losersCanvas.evaluate((canvas) => {
+      const zoom = Number.parseFloat((canvas as HTMLElement).style.getPropertyValue("--bracket-zoom")) || 1;
+      const canvasRect = canvas.getBoundingClientRect();
+      return {
+        rounds: Array.from(canvas.querySelectorAll<HTMLElement>(".hololive-double-bracket-round")).map((round) => {
+          const rect = round.getBoundingClientRect();
+          return {
+            x: Math.round(((rect.left - canvasRect.left) / zoom) * 10) / 10,
+            y: Math.round(((rect.top - canvasRect.top) / zoom) * 10) / 10,
+            width: Math.round((rect.width / zoom) * 10) / 10,
+            height: Math.round((rect.height / zoom) * 10) / 10
+          };
+        }),
+        paths: Array.from(canvas.querySelectorAll<SVGPathElement>(".hololive-bracket-lines path")).map((path) =>
+          path.getAttribute("d")?.replace(/-?\d+(?:\.\d+)?/g, (value) => String(Math.round(Number(value))))
+        )
+      };
+    });
+  const baseLosersGeometry = await readLosersGeometry();
+  await page.getByRole("button", { name: "Zoom out" }).click();
+  await expect(resetZoom).toHaveText("90%");
+  await expect.poll(async () => {
+    const zoomedRounds = (await readLosersGeometry()).rounds;
+    return zoomedRounds.every((round, index) => {
+      const baseline = baseLosersGeometry.rounds[index];
+      return baseline && ["x", "y", "width", "height"].every(
+        (key) => Math.abs(round[key as keyof typeof round] - baseline[key as keyof typeof baseline]) <= 0.2
+      );
+    });
+  }).toBe(true);
+  await expect.poll(async () => JSON.stringify((await readLosersGeometry()).paths)).toBe(JSON.stringify(baseLosersGeometry.paths));
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(resetZoom).toHaveText("90%");
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await page.locator(".hololive-bracket-pick-button").first().click();
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await page.getByRole("menuitem", { name: "Undo pick" }).click();
+  await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("1/8");
+
+  await page.locator(".hololive-bracket-pick-button").first().click();
+  await page.locator(".hololive-bracket-pick-button").first().click();
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await page.getByRole("menuitem", { name: "Reset bracket" }).click();
+  await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("1/8");
+
+  for (let index = 0; index < 8; index += 1) {
+    await page.locator(".hololive-bracket-pick-button").first().click();
+  }
+  await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("Losers");
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveText(["0-0 W-L", "0-0 W-L"]);
+
+  for (let index = 8; index < 29; index += 1) {
+    await page.locator(".hololive-bracket-pick-button").first().click();
+  }
+  await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("Grand Final");
+
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(grandFinalTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".hololive-bracket-grand-final-view .hololive-bracket-entry:not(.empty)")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await page.locator(".hololive-bracket-toolbar").getByRole("button", { name: /More/ }).click();
+  await page.getByRole("menuitem", { name: "Undo pick" }).click();
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(page.getByRole("tab", { name: "Losers Bracket" })).toHaveAttribute("aria-selected", "true");
+  await grandFinalTab.click();
+  await expect(page.locator(".hololive-bracket-grand-final-view")).toContainText("Pending");
+  await page.getByRole("tab", { name: "Losers Bracket" }).click();
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await page.locator(".hololive-bracket-pick-button").first().click();
+  await page.getByRole("button", { name: "Bracket" }).click();
+  await expect(grandFinalTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".hololive-bracket-grand-final-view .hololive-bracket-entry:not(.empty)")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await page.locator(".hololive-bracket-pick-button").first().click();
+  await expect(page.locator(".hololive-bracket-champion")).toContainText("Champion");
+
+  await page.getByRole("button", { name: "Stats" }).click();
+  const formatSelect = page.getByRole("combobox", { name: "Bracket format history" });
+  await formatSelect.click();
+  await page.getByRole("option", { name: "Double", exact: true }).click();
+  await expect(formatSelect).toContainText("Double");
+  await expect(page.locator(".hololive-bracket-award-grid .hololive-bracket-award-card")).toHaveCount(12);
+});
+
+test("defaults every bracket stage and round view to 100 percent without automatic fitting", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.getByRole("link", { name: "Bracket" }).click();
+  await page.getByRole("button", { name: "Create" }).click();
+  const popover = page.locator(".hololive-bracket-create-popover");
+  await popover.getByRole("radio", { name: "RO32" }).click();
+  await popover.getByRole("radio", { name: "Double", exact: true }).click();
+  await popover.getByRole("radio", { name: "Random Songs" }).click();
+  await popover.getByLabel("Name").fill("Fixed Zoom Policy Probe");
+  await popover.getByRole("button", { name: "Create Bracket" }).click();
+  await page.getByRole("button", { name: "Bracket" }).click();
+
+  const winnersViewport = page.locator(".hololive-bracket-tree");
+  const resetZoom = page.getByRole("button", { name: "Reset zoom" });
+  await expect(resetZoom).toHaveText("100%");
+  await expect(winnersViewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(winnersViewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+
+  await page.getByRole("tab", { name: "Losers Bracket" }).click();
+  const losersViewport = page.locator(".hololive-double-bracket-canvas.stage-losers");
+  await expect(resetZoom).toHaveText("100%");
+  await expect(losersViewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(losersViewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+
+  await page.getByRole("tab", { name: "Grand Finals" }).click();
+  const grandFinalViewport = page.locator(".hololive-bracket-grand-final-view");
+  await expect(resetZoom).toHaveText("100%");
+  await expect(grandFinalViewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(grandFinalViewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+
+  await page.getByRole("tab", { name: "Winners Bracket" }).click();
+  await page.getByRole("button", { name: "Fit height" }).click();
+  await expect.poll(async () => Math.abs(await bracketVerticalFitGap(winnersViewport))).toBeLessThanOrEqual(3);
+  const rememberedFullViewZoom = (await resetZoom.innerText()).trim();
+  const roundView = page.getByRole("combobox", { name: "View bracket from round" });
+  await roundView.click();
+  await page.getByRole("option", { name: "Quarter Final" }).click();
+  await expect(resetZoom).toHaveText("100%");
+  await expect(winnersViewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(winnersViewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+
+  await roundView.click();
+  await page.getByRole("option", { name: "Full bracket" }).click();
+  await expect(resetZoom).toHaveText(rememberedFullViewZoom);
+  await expect(winnersViewport).toHaveAttribute("data-bracket-fit-height", "true");
+});
+
+test("keeps wheel scrolling and Ctrl-wheel zoom consistent on large bracket formats", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.getByRole("link", { name: "Bracket" }).click();
+
+  const verifyWheelPolicy = async (viewport: Locator) => {
+    const zoomButton = page.getByRole("button", { name: "Reset zoom" });
+    await expect(viewport).toBeVisible();
+
+    for (let index = 0; index < 6; index += 1) {
+      await page.getByRole("button", { name: "Zoom in" }).click();
+    }
+    await expect.poll(() => viewport.evaluate((element) =>
+      element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1
+    )).toBe(true);
+
+    const zoomBeforeScroll = (await zoomButton.innerText()).trim();
+    await viewport.evaluate((element) => {
+      element.scrollLeft = 0;
+      element.scrollTop = 0;
+    });
+    await viewport.hover();
+    await page.mouse.wheel(0, 160);
+    await expect(zoomButton).toHaveText(zoomBeforeScroll);
+    await expect.poll(() => viewport.evaluate((element) => element.scrollLeft + element.scrollTop)).toBeGreaterThan(0);
+
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, 160);
+    await page.keyboard.up("Control");
+    await expect(zoomButton).not.toHaveText(zoomBeforeScroll);
+  };
+
+  for (const format of ["Single", "Double"] as const) {
+    await createBracket(page, "RO128", `RO128 ${format} Wheel Probe`, format);
+    await page.getByRole("button", { name: "Bracket" }).click();
+    await verifyWheelPolicy(page.locator(".hololive-bracket-tree"));
+    if (format === "Double") {
+      await page.getByRole("tab", { name: "Losers Bracket" }).click();
+      await verifyWheelPolicy(page.locator(".hololive-double-bracket-canvas.stage-losers"));
+    }
+  }
+});
+
+test("filters bracket rounds, preserves text selection, and finds rendered text", async ({ page }) => {
+  await page.getByRole("link", { name: "Bracket" }).click();
+  await createBracket(page, "RO64", "Round View Search Probe");
+  await page.getByRole("button", { name: "Bracket" }).click();
+
+  const viewport = page.locator(".hololive-bracket-tree");
+  const resetZoom = page.getByRole("button", { name: "Reset zoom" });
+  await expect(resetZoom).toHaveText("100%");
+  await expect(viewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(viewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+  const initialZoomLabel = (await resetZoom.innerText()).trim();
+  const roundView = page.getByRole("combobox", { name: "View bracket from round" });
+  await expect(roundView).toContainText("Full bracket");
+  await expect(page.locator(".hololive-bracket-side.left .hololive-bracket-round")).toHaveCount(5);
+  await expect(page.locator(".hololive-bracket-side.right .hololive-bracket-round")).toHaveCount(5);
+  const firstSongTitle = page.locator(".hololive-bracket-entry strong").first();
+  const searchableSongTitle = (await firstSongTitle.innerText()).trim();
+  expect(searchableSongTitle).not.toBe("");
+
+  await page.keyboard.press("Control+f");
+  const findInput = page.getByRole("textbox", { name: "Find text" });
+  await expect(findInput).toBeVisible();
+  await findInput.fill(searchableSongTitle);
+  await expect(page.locator(".app-find-count")).toHaveText("1/1");
+  await expect.poll(() => page.evaluate(() => {
+    const highlights = (CSS as unknown as { highlights?: { has(name: string): boolean } }).highlights;
+    return Boolean(highlights?.has("holoshelf-find-match") && highlights.has("holoshelf-find-active"));
+  })).toBe(true);
+
+  await roundView.click();
+  await page.getByRole("option", { name: "Quarter Final" }).click();
+  await expect(roundView).toContainText("Quarter Final");
+  await expect(page.locator(".hololive-bracket-side.left .hololive-bracket-round")).toHaveCount(2);
+  await expect(page.locator(".hololive-bracket-side.right .hololive-bracket-round")).toHaveCount(2);
+  await expect(page.locator(".hololive-bracket-final-round")).toHaveCount(1);
+  await expect(page.locator(".app-find-count")).toHaveText("0/0");
+  await expect(resetZoom).toHaveText("100%");
+  await expect(viewport).not.toHaveAttribute("data-bracket-fit-height", "true");
+  await expect(viewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+  await resetZoom.click();
+  await page.getByRole("button", { name: "Zoom out" }).click();
+  await page.getByRole("button", { name: "Zoom out" }).click();
+  await page.getByRole("button", { name: "Fit height" }).click();
+  await expect(viewport).toHaveCSS("overflow-y", "hidden");
+  await expect.poll(async () => Number.parseInt((await resetZoom.innerText()).replace("%", ""), 10)).toBeGreaterThan(100);
+  await expect.poll(async () => Math.abs(await bracketVerticalFitGap(viewport))).toBeLessThanOrEqual(3);
+  const fitHeightPanPoint = await bracketPanPoint(viewport);
+  await page.mouse.move(fitHeightPanPoint.x, fitHeightPanPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(fitHeightPanPoint.x, fitHeightPanPoint.y - 80, { steps: 5 });
+  await page.mouse.up();
+  await expect(viewport).toHaveJSProperty("scrollTop", 0);
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.getByRole("button", { name: "Fit width" }).click();
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(2);
+  await expect.poll(async () => Math.abs(await bracketHorizontalFitGap(viewport))).toBeLessThanOrEqual(3);
+  await expect(viewport).toHaveAttribute("data-bracket-fit-width", "true");
+  await expect(viewport).toHaveCSS("overflow-x", "hidden");
+  const fitWidthPanPoint = await bracketPanPoint(viewport);
+  await page.mouse.move(fitWidthPanPoint.x, fitWidthPanPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(fitWidthPanPoint.x - 80, fitWidthPanPoint.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(viewport).toHaveJSProperty("scrollLeft", 0);
+  await page.getByRole("button", { name: "Zoom out" }).click();
+  await expect(viewport).not.toHaveAttribute("data-bracket-fit-width", "true");
+  const rememberedQuarterZoomLabel = (await resetZoom.innerText()).trim();
+
+  await roundView.click();
+  await page.getByRole("option", { name: "Full bracket" }).click();
+  await expect(page.locator(".app-find-count")).toHaveText("1/1");
+  await expect(resetZoom).toHaveText(initialZoomLabel);
+  await roundView.click();
+  await page.getByRole("option", { name: "Quarter Final" }).click();
+  await expect(resetZoom).toHaveText(rememberedQuarterZoomLabel);
+  await roundView.click();
+  await page.getByRole("option", { name: "Full bracket" }).click();
+  await expect(resetZoom).toHaveText(initialZoomLabel);
+  await findInput.fill("Original");
+  await expect.poll(async () => Number((await page.locator(".app-find-count").innerText()).split("/")[1])).toBeGreaterThan(1);
+  const totalOriginalMatches = Number((await page.locator(".app-find-count").innerText()).split("/")[1]);
+  await page.getByRole("button", { name: "Next match" }).click();
+  await expect(page.locator(".app-find-count")).toHaveText(`2/${totalOriginalMatches}`);
+  await page.getByRole("button", { name: "Previous match" }).click();
+  await expect(page.locator(".app-find-count")).toHaveText(`1/${totalOriginalMatches}`);
+  await findInput.press("Shift+Enter");
+  await expect(page.locator(".app-find-count")).toHaveText(`${totalOriginalMatches}/${totalOriginalMatches}`);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".app-find-bar")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const highlights = (CSS as unknown as { highlights?: { has(name: string): boolean } }).highlights;
+    return Boolean(highlights?.has("holoshelf-find-match") || highlights?.has("holoshelf-find-active"));
+  })).toBe(false);
+
+  await resetZoom.click();
+  const scrollBeforeWheelZoom = await viewport.evaluate((element) => {
+    element.scrollLeft = Math.min(80, Math.max(0, element.scrollWidth - element.clientWidth));
+    element.scrollTop = Math.min(80, Math.max(0, element.scrollHeight - element.clientHeight));
+    return { left: element.scrollLeft, top: element.scrollTop };
+  });
+  await viewport.hover();
+  await page.mouse.wheel(0, 100);
+  await expect(resetZoom).toHaveText("100%");
+  await expect.poll(() => viewport.evaluate((element) => ({ left: element.scrollLeft, top: element.scrollTop })))
+    .not.toEqual(scrollBeforeWheelZoom);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, 100);
+  await page.keyboard.up("Control");
+  await expect(resetZoom).toHaveText("90%");
+  await resetZoom.click();
+  const songTitle = page.getByText(searchableSongTitle, { exact: true });
+  await songTitle.scrollIntoViewIfNeeded();
+  const titleBox = await songTitle.boundingBox();
+  expect(titleBox).not.toBeNull();
+  const scrollBeforeSelection = await viewport.evaluate((element) => ({ left: element.scrollLeft, top: element.scrollTop }));
+  await page.mouse.move((titleBox?.x ?? 0) + 2, (titleBox?.y ?? 0) + (titleBox?.height ?? 0) / 2);
+  await page.mouse.down();
+  await expect(viewport).toHaveAttribute("data-bracket-selecting-text", "true");
+  await page.mouse.move((titleBox?.x ?? 0) + (titleBox?.width ?? 0) + 90, (titleBox?.y ?? 0) + (titleBox?.height ?? 0) + 40, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? "")).toBe(searchableSongTitle);
+  await expect(viewport).toHaveJSProperty("scrollLeft", scrollBeforeSelection.left);
+  await expect(viewport).toHaveJSProperty("scrollTop", scrollBeforeSelection.top);
+
+  const entry = songTitle.locator("xpath=ancestor::div[contains(@class, 'hololive-bracket-entry')][1]");
+  const entryBox = await entry.boundingBox();
+  expect(entryBox).not.toBeNull();
+  const cellPanPoint = {
+    x: (entryBox?.x ?? 0) + (entryBox?.width ?? 0) - 4,
+    y: (entryBox?.y ?? 0) + (entryBox?.height ?? 0) / 2
+  };
+  await expect.poll(() => page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return Boolean(target?.closest("[data-bracket-selectable-text]"));
+  }, cellPanPoint)).toBe(false);
+  await page.mouse.click(cellPanPoint.x, cellPanPoint.y);
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+  const scrollBeforeCellPan = await viewport.evaluate((element) => element.scrollLeft);
+  await page.mouse.move(cellPanPoint.x, cellPanPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(cellPanPoint.x - 120, cellPanPoint.y, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBeGreaterThan(scrollBeforeCellPan);
+});
+
 test("sizes bracket connector overlay to the active bracket", async ({ page }) => {
   await page.getByRole("link", { name: "Bracket" }).click();
 
@@ -738,7 +1315,7 @@ test("sizes bracket connector overlay to the active bracket", async ({ page }) =
       const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
       return {
         canvasWidth: Math.ceil(canvas.getBoundingClientRect().width),
-        svgWidth: Number(svg.getAttribute("width") ?? 0),
+        svgWidth: Math.ceil(svg.getBoundingClientRect().width),
         treeScrollWidth: tree.scrollWidth,
         treeExpectedWidth: Math.ceil(canvas.getBoundingClientRect().width + horizontalPadding)
       };
@@ -848,7 +1425,7 @@ test("opens a Hololive idol profile shelf from clicking an idol tile", async ({ 
   await expect(page.locator(".hololive-profile-shelf")).toHaveCount(0);
 });
 
-test("uses the Hololive player route with playlists and queue actions", async ({ page }) => {
+test("@smoke uses the Hololive player route with playlists and queue actions", async ({ page }) => {
   const switchBoxBefore = await page.locator(".hololive-view-switch").boundingBox();
   await page.getByRole("link", { name: "Player" }).click();
 
@@ -1444,7 +2021,7 @@ test("adds tier rows from the row options notch", async ({ page }) => {
   await expect(page.locator('.hololive-tier-label input[type="text"]').nth(1)).toHaveValue("Tier 7");
 });
 
-test("drags idols into a tier and clears the board", async ({ page }) => {
+test("@smoke drags idols into a tier and clears the board", async ({ page }) => {
   const firstTier = page.locator(".hololive-tier-row").first();
   const firstTierDropzone = firstTier.locator(".hololive-tier-dropzone");
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");

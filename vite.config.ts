@@ -5,6 +5,11 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      events: "events/"
+    }
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

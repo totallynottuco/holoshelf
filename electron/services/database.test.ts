@@ -16,9 +16,26 @@ import type {
 } from "../../src/shared/contracts";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
 
+let initializedTestDatabaseBytes: Promise<Uint8Array> | null = null;
+
+function getInitializedTestDatabaseBytes(): Promise<Uint8Array> {
+  initializedTestDatabaseBytes ??= (async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-template-"));
+    const databasePath = path.join(dir, "template.sqlite");
+    const database = new DatabaseService(databasePath, undefined, { createBackups: false });
+    await database.init();
+    return fs.readFileSync(databasePath);
+  })();
+  return initializedTestDatabaseBytes;
+}
+
 async function createTempDatabase(): Promise<DatabaseService> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-db-"));
-  const database = new DatabaseService(path.join(dir, "test.sqlite"));
+  const database = new DatabaseService(path.join(dir, "test.sqlite"), undefined, {
+    persistWrites: false,
+    createBackups: false,
+    initializedDatabaseBytes: await getInitializedTestDatabaseBytes()
+  });
   await database.init();
   return database;
 }
@@ -238,10 +255,10 @@ function expectDuplicateTalentsSpreadAcrossQuadrants(bracket: HololiveBracket): 
   }
 }
 
-function completeBracket(database: DatabaseService, bracket: HololiveBracket): HololiveBracket {
+async function completeBracket(database: DatabaseService, bracket: HololiveBracket): Promise<HololiveBracket> {
   let next = bracket;
   while (next.currentMatch?.entryA) {
-    next = database.pickHololiveBracketWinner({
+    next = await database.pickHololiveBracketWinner({
       bracketId: next.id,
       matchId: next.currentMatch.id,
       winnerEntryId: next.currentMatch.entryA.id
@@ -303,7 +320,7 @@ describe("DatabaseService", () => {
     const database = await createTempDatabase();
     const seedSong = (suffix: string, publishedAt: string, viewCount: number) => {
       seedHololiveBracketSong(database, {
-        idolId: `sort-${suffix}`,
+        idolId: "tokino-sora",
         idolName: `Sort ${suffix}`,
         channelId: `sort-channel-${suffix}`,
         topicId: "Original_Song",
@@ -311,7 +328,7 @@ describe("DatabaseService", () => {
         viewCount,
         publishedAt
       });
-      return `sort-${suffix}-${suffix}`;
+      return `tokino-sora-${suffix}`;
     };
     const older = seedSong("older", "2024-01-01T00:00:00.000Z", 500);
     const newest = seedSong("newest", "2026-01-01T00:00:00.000Z", 100);
@@ -476,7 +493,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({ size: "RO16", name: "Test Bracket" });
+    const bracket = await database.createHololiveBracket({ size: "RO16", name: "Test Bracket" });
     const expectedIdolIds = officialIdols.map((idol) => idol.id);
 
     expect(bracket.name).toBe("Test Bracket");
@@ -501,7 +518,7 @@ describe("DatabaseService", () => {
     expect(firstMatch?.entryA).toBeTruthy();
     expect(firstMatch?.entryB).toBeTruthy();
 
-    const picked = database.pickHololiveBracketWinner({
+    const picked = await database.pickHololiveBracketWinner({
       bracketId: bracket.id,
       matchId: firstMatch?.id ?? "",
       winnerEntryId: firstMatch?.entryA?.id ?? ""
@@ -510,26 +527,26 @@ describe("DatabaseService", () => {
     expect(picked.currentMatchId).toBe(`${bracket.id}:r0:m1`);
     expect(database.listHololiveBrackets()[0].completedMatches).toBe(1);
 
-    const undone = database.undoHololiveBracket(bracket.id);
+    const undone = await database.undoHololiveBracket(bracket.id);
     expect(undone.currentMatchId).toBe(firstMatch?.id);
     expect(undone.rounds[1].matches[0].entryA).toBeNull();
     expect(undone.rounds[0].matches[0].winnerEntryId).toBeNull();
 
-    const pickedAgain = database.pickHololiveBracketWinner({
+    const pickedAgain = await database.pickHololiveBracketWinner({
       bracketId: bracket.id,
       matchId: firstMatch?.id ?? "",
       winnerEntryId: firstMatch?.entryB?.id ?? ""
     });
     expect(pickedAgain.rounds[1].matches[0].entryA?.id).toBe(firstMatch?.entryB?.id);
 
-    const reset = database.resetHololiveBracket(bracket.id);
+    const reset = await database.resetHololiveBracket(bracket.id);
     expect(reset.currentMatchId).toBe(firstMatch?.id);
     expect(reset.rounds[0].matches.every((match) => match.winnerEntryId === null)).toBe(true);
     expect(reset.rounds.slice(1).flatMap((round) => round.matches).every((match) => !match.entryA && !match.entryB)).toBe(
       true
     );
 
-    const duplicate = database.duplicateHololiveBracket(bracket.id);
+    const duplicate = await database.duplicateHololiveBracket(bracket.id);
     expect(duplicate.id).not.toBe(bracket.id);
     expect(duplicate.name).toBe("Copy of Test Bracket");
     expect(duplicate.status).toBe("active");
@@ -571,8 +588,8 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({ size: "RO16", name: "Archive Bracket" });
-    const completed = completeBracket(database, bracket);
+    const bracket = await database.createHololiveBracket({ size: "RO16", name: "Archive Bracket" });
+    const completed = await completeBracket(database, bracket);
     expect(completed.status).toBe("complete");
     expect(completed.champion).toBeTruthy();
 
@@ -642,8 +659,8 @@ describe("DatabaseService", () => {
     expect(stats.topTalentRatings.length).toBeGreaterThan(0);
     expect(stats.topTalentRatings[0]?.matches).toBeGreaterThan(0);
 
-    const reset = database.resetHololiveBracket(bracket.id);
-    const recompleted = completeBracket(database, reset);
+    const reset = await database.resetHololiveBracket(bracket.id);
+    const recompleted = await completeBracket(database, reset);
     expect(recompleted.status).toBe("complete");
     expect(database.listHololiveBracketArchives()).toHaveLength(1);
     expect(database.listHololiveBracketArchives()[0].championYoutubeVideoId).toBe(recompleted.champion?.youtubeVideoId);
@@ -679,6 +696,103 @@ describe("DatabaseService", () => {
     expect(database.listHololiveBracketArchives()).toHaveLength(1);
     expect(database.getHololiveBracketStatsOverview().totals.completedBrackets).toBe(1);
     expect(database.getHololiveBracketStatsOverview().topSongRatings.length).toBeGreaterThan(0);
+  });
+
+  it("persists and archives a complete double-elimination bracket", async () => {
+    const database = await createTempDatabase();
+    const officialIdols = database.listHololiveIdols().filter((idol) => idol.source === "official").slice(0, 8);
+    officialIdols.forEach((idol, index) => {
+      for (const topicId of ["Original_Song", "Music_Cover"] as const) {
+        seedHololiveBracketSong(database, {
+          idolId: idol.id,
+          idolName: idol.displayName,
+          channelId: idol.youtubeChannelId ?? `channel-${idol.id}`,
+          topicId,
+          suffix: `double-${topicId}-${index}`,
+          viewCount: 2_000_000 - index * 1000
+        });
+      }
+    });
+
+    const bracket = await database.createHololiveBracket({
+      size: "RO16",
+      format: "double_elimination",
+      name: "Double Test"
+    });
+    expect(bracket.format).toBe("double_elimination");
+    expect(bracket.rounds.flatMap((round) => round.matches)).toHaveLength(30);
+    expect(bracket.rounds.some((round) => round.stage === "losers")).toBe(true);
+
+    const completed = await completeBracket(database, bracket);
+    expect(completed.status).toBe("complete");
+    expect(completed.champion).toBeTruthy();
+    expect(completed.rounds.find((round) => round.stage === "grand_final")?.matches[0]?.winnerEntryId).toBe(
+      completed.champion?.id
+    );
+
+    const archive = database.listHololiveBracketArchives()[0];
+    expect(archive).toMatchObject({
+      sourceBracketId: bracket.id,
+      format: "double_elimination",
+      totalMatches: 30,
+      completedMatches: 30
+    });
+    const archivedEntries = database.select<{
+      final_rank: number | null;
+      losses: number;
+      first_round_eliminated: number;
+    }>(
+      `SELECT final_rank, losses, first_round_eliminated
+       FROM hololive_bracket_archive_entries
+       WHERE archive_id = ?`,
+      [archive.id]
+    );
+    expect(archivedEntries.filter((entry) => entry.final_rank === 1)).toHaveLength(1);
+    expect(archivedEntries.filter((entry) => entry.final_rank === 2)).toHaveLength(1);
+    expect(archivedEntries.filter((entry) => entry.final_rank === 3)).toHaveLength(1);
+    expect(archivedEntries.some((entry) => entry.first_round_eliminated === 1)).toBe(true);
+
+    const allStats = database.getHololiveBracketStatsOverview("all");
+    const doubleStats = database.getHololiveBracketStatsOverview("double_elimination");
+    const singleStats = database.getHololiveBracketStatsOverview("single_elimination");
+    expect(allStats.totals.completedBrackets).toBe(1);
+    expect(doubleStats.totals.completedBrackets).toBe(1);
+    expect(doubleStats.topSongsByFirstRoundEliminations[0]?.firstRoundEliminations).toBeGreaterThan(0);
+    expect(doubleStats.topTalentsByEarlyExits[0]?.earlyExitCount).toBeGreaterThan(0);
+    expect(singleStats.totals).toEqual({
+      completedBrackets: 0,
+      totalMatches: 0,
+      uniqueSongs: 0,
+      uniqueTalents: 0
+    });
+
+    const duplicate = await database.duplicateHololiveBracket(bracket.id);
+    expect(duplicate).toMatchObject({
+      format: "double_elimination",
+      status: "active"
+    });
+    expect(duplicate.rounds.flatMap((round) => round.matches)).toHaveLength(30);
+    expect(duplicate.rounds.flatMap((round) => round.matches).every((match) => !match.winnerEntryId)).toBe(true);
+    const firstMatch = duplicate.currentMatch;
+    expect(firstMatch?.entryA).toBeTruthy();
+    const afterPick = await database.pickHololiveBracketWinner({
+      bracketId: duplicate.id,
+      matchId: firstMatch?.id ?? "",
+      winnerEntryId: firstMatch?.entryA?.id ?? ""
+    });
+    expect(afterPick.rounds.flatMap((round) => round.matches).filter((match) => match.winnerEntryId)).toHaveLength(1);
+    const afterUndo = await database.undoHololiveBracket(duplicate.id);
+    expect(afterUndo.currentMatchId).toBe(firstMatch?.id);
+    expect(afterUndo.rounds.flatMap((round) => round.matches).every((match) => !match.winnerEntryId)).toBe(true);
+    const afterSecondPick = await database.pickHololiveBracketWinner({
+      bracketId: duplicate.id,
+      matchId: afterUndo.currentMatch?.id ?? "",
+      winnerEntryId: afterUndo.currentMatch?.entryA?.id ?? ""
+    });
+    expect(afterSecondPick.currentMatchId).not.toBe(firstMatch?.id);
+    const reset = await database.resetHololiveBracket(duplicate.id);
+    expect(reset.currentMatchId).toBe(firstMatch?.id);
+    expect(reset.rounds.flatMap((round) => round.matches).every((match) => !match.winnerEntryId)).toBe(true);
   });
 
   it("tracks bracket upset, big game, punching up, giant killer, and rivalry stats", async () => {
@@ -775,7 +889,7 @@ describe("DatabaseService", () => {
             entry.isChampion ? 1 : 2,
             entry.isChampion ? null : (input.loserEliminatedRoundIndex ?? 0),
             entry.isChampion ? null : input.winnerVideoId,
-            entry.isChampion ? 0 : 1,
+            entry.isChampion ? 0 : (input.loserEliminatedRoundIndex ?? 0) === 0 ? 1 : 0,
             entry.isChampion
           ]
         );
@@ -1465,7 +1579,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       generationStyle: "random_songs",
       name: "Random Bracket"
@@ -1510,7 +1624,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({ size: "RO16", generationStyle: "random_songs" });
+    const bracket = await database.createHololiveBracket({ size: "RO16", generationStyle: "random_songs" });
     const entriesByIdol = new Map<string, typeof bracket.entries>();
     for (const entry of bracket.entries) {
       entriesByIdol.set(entry.idolId, [...(entriesByIdol.get(entry.idolId) ?? []), entry]);
@@ -1549,7 +1663,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({ size: "RO32", generationStyle: "random_songs" });
+    const bracket = await database.createHololiveBracket({ size: "RO32", generationStyle: "random_songs" });
     const entriesByIdol = new Map<string, typeof bracket.entries>();
     for (const entry of bracket.entries) {
       entriesByIdol.set(entry.idolId, [...(entriesByIdol.get(entry.idolId) ?? []), entry]);
@@ -1584,7 +1698,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({ size: "RO16", generationStyle: "random_songs" });
+    const bracket = await database.createHololiveBracket({ size: "RO16", generationStyle: "random_songs" });
     const entriesByIdol = new Map<string, typeof bracket.entries>();
     for (const entry of bracket.entries) {
       entriesByIdol.set(entry.idolId, [...(entriesByIdol.get(entry.idolId) ?? []), entry]);
@@ -1621,7 +1735,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const cappedResult = database.createHololiveBracketResult({
+    const cappedResult = await database.createHololiveBracketResult({
       size: "RO16",
       filters: {
         includedTalentIds: capIdols.map((idol) => idol.id),
@@ -1634,7 +1748,7 @@ describe("DatabaseService", () => {
     expectNoFirstRoundSameTalent(cappedResult.bracket);
 
     const relaxedIdols = capIdols.slice(0, 8);
-    const relaxedResult = database.createHololiveBracketResult({
+    const relaxedResult = await database.createHololiveBracketResult({
       size: "RO16",
       filters: {
         includedTalentIds: relaxedIdols.map((idol) => idol.id),
@@ -1687,7 +1801,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const splitPreferred = database.createHololiveBracket({
+    const splitPreferred = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         includedTalentIds: splitIdols.map((idol) => idol.id),
@@ -1701,7 +1815,7 @@ describe("DatabaseService", () => {
     expect([...preferredEntriesByIdol.values()].every((entries) => new Set(entries.map((entry) => entry.topicId)).size === 2)).toBe(true);
     expectNoFirstRoundSameTalent(splitPreferred);
 
-    const splitDisabled = database.createHololiveBracket({
+    const splitDisabled = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         includedTalentIds: splitIdols.map((idol) => idol.id),
@@ -1753,7 +1867,7 @@ describe("DatabaseService", () => {
       preferTopicSplitPerTalent: false
     };
 
-    const cappedAtTwo = database.createHololiveBracket({
+    const cappedAtTwo = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         ...baseFilters,
@@ -1763,7 +1877,7 @@ describe("DatabaseService", () => {
     expect(countDominantSongs(cappedAtTwo)).toBe(2);
     expectNoFirstRoundSameTalent(cappedAtTwo);
 
-    const cappedAtFour = database.createHololiveBracket({
+    const cappedAtFour = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         ...baseFilters,
@@ -1773,7 +1887,7 @@ describe("DatabaseService", () => {
     expect(countDominantSongs(cappedAtFour)).toBe(4);
     expectNoFirstRoundSameTalent(cappedAtFour);
 
-    const zeroMeansNoCap = database.createHololiveBracket({
+    const zeroMeansNoCap = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         ...baseFilters,
@@ -1783,7 +1897,7 @@ describe("DatabaseService", () => {
     expect(countDominantSongs(zeroMeansNoCap)).toBeGreaterThan(4);
     expectNoFirstRoundSameTalent(zeroMeansNoCap);
 
-    const nullMeansNoCap = database.createHololiveBracket({
+    const nullMeansNoCap = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         ...baseFilters,
@@ -1822,7 +1936,7 @@ describe("DatabaseService", () => {
     database.setHololiveMusicMarker({ youtubeVideoId: `${officialIdols[4].id}-date-original`, marker: "favorite" });
     database.setHololiveMusicMarker({ youtubeVideoId: `${officialIdols[5].id}-date-original`, marker: "dislike" });
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         excludeRated: true,
@@ -1899,7 +2013,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         includedTalentIds: includedIdols.map((idol) => idol.id)
@@ -1972,7 +2086,7 @@ describe("DatabaseService", () => {
     seedStatusSongs(alumniIdols, "status-alumni", 2_000_000);
     seedStatusSongs(customIdols, "status-custom", 1_000_000, "user");
 
-    const activeBracket = database.createHololiveBracket({
+    const activeBracket = await database.createHololiveBracket({
       size: "RO16",
       filters: { talentStatuses: ["active"] }
     });
@@ -1980,7 +2094,7 @@ describe("DatabaseService", () => {
     expect(new Set(activeBracket.entries.map((entry) => entry.idolId))).toEqual(new Set(activeIdols.map((idol) => idol.id)));
     expectNoFirstRoundSameTalent(activeBracket);
 
-    const alumniBracket = database.createHololiveBracket({
+    const alumniBracket = await database.createHololiveBracket({
       size: "RO16",
       filters: { talentStatuses: ["alumni"] }
     });
@@ -1988,7 +2102,7 @@ describe("DatabaseService", () => {
     expect(new Set(alumniBracket.entries.map((entry) => entry.idolId))).toEqual(new Set(alumniIdols.map((idol) => idol.id)));
     expectNoFirstRoundSameTalent(alumniBracket);
 
-    const customBracket = database.createHololiveBracket({
+    const customBracket = await database.createHololiveBracket({
       size: "RO16",
       filters: { talentStatuses: ["custom"] }
     });
@@ -2035,7 +2149,7 @@ describe("DatabaseService", () => {
       );
     });
 
-    const soloBracket = database.createHololiveBracket({
+    const soloBracket = await database.createHololiveBracket({
       size: "RO16",
       filters: { vocalScopes: ["solo"] }
     });
@@ -2044,7 +2158,7 @@ describe("DatabaseService", () => {
     expect(soloBracket.entries.every((entry) => entry.youtubeVideoId.endsWith("-vocal-solo"))).toBe(true);
     expectNoFirstRoundSameTalent(soloBracket);
 
-    const groupBracket = database.createHololiveBracket({
+    const groupBracket = await database.createHololiveBracket({
       size: "RO16",
       filters: { vocalScopes: ["group"] }
     });
@@ -2077,14 +2191,14 @@ describe("DatabaseService", () => {
       });
     });
 
-    expect(() =>
+    await expect(
       database.createHololiveBracket({
         size: "RO16",
         filters: {
           includedTalentIds: []
         }
       })
-    ).toThrow(/Only 0 eligible official Hololive songs/);
+    ).rejects.toThrow(/Only 0 eligible official Hololive songs/);
   });
 
   it("supports rating buckets while preserving legacy bracket rating filters", async () => {
@@ -2134,7 +2248,7 @@ describe("DatabaseService", () => {
       database.setHololiveMusicMarker({ youtubeVideoId: `${idol.id}-rating-neutral`, marker: "neutral" });
     });
 
-    const legacyUnratedOnly = database.createHololiveBracket({
+    const legacyUnratedOnly = await database.createHololiveBracket({
       size: "RO16",
       filters: { excludeRated: true }
     });
@@ -2142,7 +2256,7 @@ describe("DatabaseService", () => {
     expect(legacyUnratedOnly.entries.every((entry) => entry.youtubeVideoId.endsWith("-rating-unrated"))).toBe(true);
     expectNoFirstRoundSameTalent(legacyUnratedOnly);
 
-    const legacyWithoutDisliked = database.createHololiveBracket({
+    const legacyWithoutDisliked = await database.createHololiveBracket({
       size: "RO16",
       filters: { excludeDisliked: true }
     });
@@ -2150,7 +2264,7 @@ describe("DatabaseService", () => {
     expect(legacyWithoutDisliked.entries.some((entry) => entry.youtubeVideoId.endsWith("-rating-disliked"))).toBe(false);
     expectNoFirstRoundSameTalent(legacyWithoutDisliked);
 
-    const bucketFiltered = database.createHololiveBracket({
+    const bucketFiltered = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         ratingBuckets: ["favorite", "like"],
@@ -2195,7 +2309,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         excludeTopViewedPerTalent: true
@@ -2230,7 +2344,7 @@ describe("DatabaseService", () => {
       });
     });
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         excludeBelowViews: 1_000_010,
@@ -2282,7 +2396,10 @@ describe("DatabaseService", () => {
       });
     });
 
-    const completed = completeBracket(database, database.createHololiveBracket({ size: "RO16", name: "History Source" }));
+    const completed = await completeBracket(
+      database,
+      await database.createHololiveBracket({ size: "RO16", name: "History Source" })
+    );
     expect(completed.status).toBe("complete");
     const archivedTop8Keys = new Set(
       database
@@ -2293,7 +2410,7 @@ describe("DatabaseService", () => {
     );
     expect(archivedTop8Keys.size).toBe(8);
 
-    const bracket = database.createHololiveBracket({
+    const bracket = await database.createHololiveBracket({
       size: "RO16",
       filters: {
         excludePreviousChampions: true,
@@ -2341,8 +2458,8 @@ describe("DatabaseService", () => {
       ...officialIdols.map((idol) => ({ youtubeVideoId: `${idol.id}-history-winner`, isChampion: true }))
     ]);
 
-    const expectSuffix = (mode: HololiveBracketHistoryParticipation, allowed: string[]) => {
-      const bracket = database.createHololiveBracket({
+    const expectSuffix = async (mode: HololiveBracketHistoryParticipation, allowed: string[]) => {
+      const bracket = await database.createHololiveBracket({
         size: "RO16",
         filters: { historyParticipation: mode }
       });
@@ -2352,12 +2469,12 @@ describe("DatabaseService", () => {
       expectNoFirstRoundSameTalent(bracket);
     };
 
-    expectSuffix("never", ["history-never"]);
-    expectSuffix("appeared", ["history-appeared", "history-top8", "history-top4", "history-finalist", "history-winner"]);
-    expectSuffix("top8", ["history-top8", "history-top4", "history-finalist", "history-winner"]);
-    expectSuffix("top4", ["history-top4", "history-finalist", "history-winner"]);
-    expectSuffix("finalist", ["history-finalist", "history-winner"]);
-    expectSuffix("winner", ["history-winner"]);
+    await expectSuffix("never", ["history-never"]);
+    await expectSuffix("appeared", ["history-appeared", "history-top8", "history-top4", "history-finalist", "history-winner"]);
+    await expectSuffix("top8", ["history-top8", "history-top4", "history-finalist", "history-winner"]);
+    await expectSuffix("top4", ["history-top4", "history-finalist", "history-winner"]);
+    await expectSuffix("finalist", ["history-finalist", "history-winner"]);
+    await expectSuffix("winner", ["history-winner"]);
   });
 
   it("refuses to create a bracket when first-round same-talent matchups are unavoidable", async () => {
@@ -2376,7 +2493,7 @@ describe("DatabaseService", () => {
       });
     }
 
-    expect(() => database.createHololiveBracket({ size: "RO16" })).toThrow(
+    await expect(database.createHololiveBracket({ size: "RO16" })).rejects.toThrow(
       /without same-talent first-round matchups/
     );
   });
@@ -2453,7 +2570,8 @@ describe("DatabaseService", () => {
       source: "custom",
       displayName: "Soraduki Tyra",
       branch: "Independents",
-      youtubeChannelId: "UCdQYcUyffHZoz0KOwuiG0lQ"
+      youtubeChannelId: "UCdQYcUyffHZoz0KOwuiG0lQ",
+      cardImageUrl: null
     });
     expect(record.channel).toMatchObject({
       id: "UCdQYcUyffHZoz0KOwuiG0lQ",
@@ -2476,6 +2594,13 @@ describe("DatabaseService", () => {
 
     database.seedHololiveTierData();
     expect(database.getHololiveTierListData().idols.find((idol) => idol.id === "custom-soraduki-tyra")?.source).toBe("custom");
+
+    const cardImageUrl = "https://example.com/soraduki-tyra-card.webp";
+    database.upsertHololiveCustomTalent({ ...preview, cardImageUrl });
+    expect(database.listHololiveIdols().find((idol) => idol.id === "custom-soraduki-tyra")?.cardImageUrl).toBe(cardImageUrl);
+
+    database.upsertHololiveCustomTalent(preview);
+    expect(database.listHololiveIdols().find((idol) => idol.id === "custom-soraduki-tyra")?.cardImageUrl).toBe(cardImageUrl);
   });
 
   it("does not allow custom talents to replace official Hololive channels", async () => {
@@ -2753,6 +2878,32 @@ describe("DatabaseService", () => {
         .getHololiveTierListData()
         .idols.find((idol) => idol.id === "mori-calliope")?.cachedCardImageUrl
     ).toBe("mori-calliope-card-v2.png");
+  });
+
+  it("does not update unchanged Hololive image cache rows", async () => {
+    const database = await createTempDatabase();
+    const input = {
+      idolId: "tokino-sora",
+      kind: "profile" as const,
+      sourceUrl: "https://example.com/tokino-sora.webp",
+      localFilename: "tokino-sora-profile-v9.webp",
+      mimeType: "image/webp",
+      sizeBytes: 2048
+    };
+
+    database.upsertHololiveImageCache(input);
+    database.run(
+      "UPDATE hololive_image_cache SET updated_at = ? WHERE idol_id = ? AND kind = ?",
+      ["2000-01-01T00:00:00.000Z", input.idolId, input.kind]
+    );
+    database.upsertHololiveImageCache(input);
+
+    expect(
+      database.select<{ updated_at: string }>(
+        "SELECT updated_at FROM hololive_image_cache WHERE idol_id = ? AND kind = ?",
+        [input.idolId, input.kind]
+      )[0]?.updated_at
+    ).toBe("2000-01-01T00:00:00.000Z");
   });
 
   it("creates separate Hololive boards with independent placements", async () => {
@@ -6709,7 +6860,7 @@ describe("DatabaseService", () => {
       });
     }
 
-    const bracket = database.createHololiveBracket({ size: "RO16", generationStyle: "top_songs" });
+    const bracket = await database.createHololiveBracket({ size: "RO16", generationStyle: "top_songs" });
     expect(bracket.entries.map((entry) => entry.youtubeVideoId)).toContain(custom.youtubeVideoId);
   });
 });

@@ -5,6 +5,7 @@ import { api } from "../api";
 import { HololiveActionToastProvider } from "./HololiveActionToast";
 import { InstalledUpdateDialog } from "./InstalledUpdateDialog";
 import { HololivePlayerProvider } from "../player/HololivePlayerContext";
+import { FindInPageBar } from "./FindInPageBar";
 
 export function Shell() {
   const [installedRelease, setInstalledRelease] = useState<InstalledUpdateRelease | null>(null);
@@ -33,6 +34,7 @@ export function Shell() {
         <span>Holoshelf</span>
       </div>
       <HololiveActionToastProvider>
+        <FindInPageBar />
         <HololivePlayerProvider>
           <Outlet />
         </HololivePlayerProvider>

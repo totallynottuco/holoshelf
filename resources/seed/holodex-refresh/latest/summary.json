@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-07-12T05:41:59.485Z",
-  "completedAt": "2026-07-12T05:52:00.238Z",
+  "startedAt": "2026-07-13T00:23:32.907Z",
+  "completedAt": "2026-07-13T00:32:37.087Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-07-12T054159Z",
+  "officialDataVersion": "2026-07-13T002332Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -13,23 +13,23 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-07-12T05:42:06.562Z"
+    "updatedAt": "2026-07-13T00:23:34.196Z"
   },
   "musicRefresh": {
-    "sourceRows": 3017,
+    "sourceRows": 3016,
     "importedRows": 2931,
-    "filteredRows": 86,
-    "duplicateRows": 1154,
+    "filteredRows": 85,
+    "duplicateRows": 1153,
     "run": {
-      "id": "1d5b9efe-b4d9-418e-986a-358eefec79da",
+      "id": "3371fe28-bddf-47e5-81df-1a9af4ecac77",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-07-12T05:51:47.027Z",
-      "completedAt": "2026-07-12T05:51:53.575Z",
-      "fetchedRows": 3017,
+      "startedAt": "2026-07-13T00:32:23.338Z",
+      "completedAt": "2026-07-13T00:32:30.571Z",
+      "fetchedRows": 3016,
       "keptRows": 2931,
-      "filteredRows": 86,
-      "duplicateRows": 1154,
+      "filteredRows": 85,
+      "duplicateRows": 1153,
       "error": null
     }
   },
@@ -40,7 +40,7 @@
     "unavailableVideos": 0,
     "failedBatches": 0,
     "batches": 59,
-    "fetchedAt": "2026-07-12T05:51:53.906Z"
+    "fetchedAt": "2026-07-13T00:32:30.945Z"
   },
   "imageRefresh": {
     "cached": 0,
@@ -55,6 +55,6 @@
     "customIdols": 0,
     "statsRows": 2907,
     "detailCacheRows": 2914,
-    "duplicateRemovalRows": 1146
+    "duplicateRemovalRows": 1145
   }
 }

@@ -16,6 +16,7 @@ import type {
   HololiveBracketMatch,
   HololiveBracketRound,
   HololiveBracketSize,
+  HololiveBracketStatsFormat,
   HololiveBracketStatsOverview,
   HololiveBracketSummary,
   HololiveCustomTalentPreview,
@@ -48,6 +49,13 @@ import {
   type Glicko2Rating
 } from "../shared/glicko2";
 import { hololiveBracketRoundLabel } from "../shared/hololiveBracketLabels";
+import {
+  createHololiveDoubleEliminationState,
+  listHololiveDoubleEliminationMatches,
+  pickHololiveDoubleEliminationWinner,
+  undoHololiveDoubleEliminationMatch,
+  type HololiveDoubleEliminationEngineState
+} from "../../electron/services/hololiveBracketEngine";
 import type {
   HololiveUndoKind,
   HoloshelfBridge,
@@ -274,6 +282,7 @@ const MOCK_BRACKET_SIZE_COUNTS: Record<HololiveBracketSize, number> = {
 };
 const mockHololiveBrackets = new Map<string, HololiveBracket>();
 const mockHololiveBracketArchives = new Map<string, HololiveBracket>();
+const mockHololiveDoubleEngineStates = new Map<string, HololiveDoubleEliminationEngineState>();
 
 const mockBootstrap: AppBootstrap = {
   appName: "Holoshelf",
@@ -392,6 +401,7 @@ function resolveMockCustomTalentPreview(input: IpcChannelMap["hololive:custom-ta
     officialUrl: `https://www.youtube.com/channel/${channelId}`,
     iconUrl: "https://yt3.googleusercontent.com/ytc/AIdro_mock_custom_talent=s176-c-k-c0x00ffffff-no-rj",
     profileImageUrl: "https://yt3.googleusercontent.com/ytc/AIdro_mock_custom_talent=s512-c-k-c0x00ffffff-no-rj",
+    cardImageUrl: input.cardImageUrl ?? null,
     youtubeChannelUrl: `https://www.youtube.com/channel/${channelId}`,
     xHandle: isTyra ? "@SoradukiTyra" : null,
     xUrl: isTyra ? "https://twitter.com/SoradukiTyra" : null,
@@ -421,6 +431,7 @@ function upsertMockCustomTalent(input: IpcChannelMap["hololive:custom-talents:up
     officialUrl: preview.officialUrl,
     iconUrl: preview.iconUrl,
     profileImageUrl: preview.profileImageUrl,
+    cardImageUrl: preview.cardImageUrl ?? null,
     youtubeChannelUrl: preview.youtubeChannelUrl,
     youtubeChannelId: preview.channelId,
     xHandle: preview.xHandle ?? null,
@@ -1386,6 +1397,7 @@ function listMockHololiveBracketSummaries(): HololiveBracketSummary[] {
         id: bracket.id,
         name: bracket.name,
         size: bracket.size,
+        format: bracket.format,
         generationStyle: bracket.generationStyle,
         generationFilters: bracket.generationFilters,
         status: bracket.status,
@@ -1418,6 +1430,7 @@ function listMockHololiveBracketArchiveSummaries(): HololiveBracketArchiveSummar
         sourceBracketId: bracket.id,
         name: bracket.name,
         size: bracket.size,
+        format: bracket.format,
         generationStyle: bracket.generationStyle,
         generationFilters: bracket.generationFilters,
         totalEntries: bracket.entries.length,
@@ -1434,9 +1447,14 @@ function listMockHololiveBracketArchiveSummaries(): HololiveBracketArchiveSummar
     });
 }
 
-function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
-  const archives = listMockHololiveBracketArchiveSummaries();
-  const archivedBrackets = [...mockHololiveBracketArchives.values()].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+function getMockHololiveBracketStatsOverview(
+  format: HololiveBracketStatsFormat = "all"
+): HololiveBracketStatsOverview {
+  const archivedBrackets = [...mockHololiveBracketArchives.values()]
+    .filter((bracket) => !format || format === "all" || bracket.format === format)
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  const archiveIds = new Set(archivedBrackets.map((bracket) => `archive:${bracket.id}`));
+  const archives = listMockHololiveBracketArchiveSummaries().filter((archive) => archiveIds.has(archive.id));
   const currentViewCountsByVideoId = new Map(mockHololiveMusicRows.map((row) => [row.youtubeVideoId, row.viewCount ?? null]));
   const currentRowsByCanonicalKey = new Map(
     mockHololiveMusicRows.map((row) => [row.canonicalPerformanceKey?.trim() || row.youtubeVideoId, row])
@@ -2425,8 +2443,71 @@ function getMockHololiveBracketStatsOverview(): HololiveBracketStatsOverview {
   };
 }
 
-function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:create"]["request"]): HololiveBracket {
+function updateMockDoubleEliminationBracket(
+  bracket: HololiveBracket,
+  state: HololiveDoubleEliminationEngineState
+): HololiveBracket {
+  const entriesById = new Map(bracket.entries.map((entry) => [entry.id, entry]));
+  const matches = listHololiveDoubleEliminationMatches(state);
+  const roundsByKey = new Map<string, HololiveBracketRound>();
+  for (const match of matches) {
+    const key = `${match.stage}:${match.stageRoundIndex}`;
+    const round =
+      roundsByKey.get(key) ??
+      ({
+        roundIndex: match.globalRoundIndex,
+        stage: match.stage,
+        stageRoundIndex: match.stageRoundIndex,
+        label:
+          match.stage === "winners"
+            ? getMockHololiveBracketRoundLabel(bracket.entries.length, match.stageRoundIndex)
+            : match.stage === "losers"
+              ? `Losers Round ${match.stageRoundIndex + 1}`
+              : "Grand Final",
+        matches: []
+      } satisfies HololiveBracketRound);
+    round.matches.push({
+      id: `${bracket.id}:de:${match.engineMatchId}`,
+      bracketId: bracket.id,
+      roundIndex: match.globalRoundIndex,
+      matchIndex: match.matchIndex,
+      stage: match.stage,
+      stageRoundIndex: match.stageRoundIndex,
+      playOrder: match.playOrder,
+      lateRoundWeight: match.lateRoundWeight,
+      engineMatchId: match.engineMatchId,
+      entryA: match.entryAId ? entriesById.get(match.entryAId) ?? null : null,
+      entryB: match.entryBId ? entriesById.get(match.entryBId) ?? null : null,
+      winnerEntryId: match.winnerEntryId,
+      winner: match.winnerEntryId ? entriesById.get(match.winnerEntryId) ?? null : null,
+      completedAt: match.completedAt,
+      updatedAt: bracket.updatedAt
+    });
+    roundsByKey.set(key, round);
+  }
+  const rounds = [...roundsByKey.values()].sort((left, right) => left.roundIndex - right.roundIndex);
+  const current = matches.find((match) => match.ready && !match.complete) ?? null;
+  const championStanding = state.standings?.find((standing) => standing.rank === 1) ?? null;
+  const champion = championStanding ? entriesById.get(championStanding.entryId) ?? null : null;
+  mockHololiveDoubleEngineStates.set(bracket.id, state);
+  return {
+    ...bracket,
+    rounds,
+    status: champion ? "complete" : "active",
+    currentMatchId: current ? `${bracket.id}:de:${current.engineMatchId}` : null,
+    currentMatch: current
+      ? rounds.flatMap((round) => round.matches).find((match) => match.engineMatchId === current.engineMatchId) ?? null
+      : null,
+    champion,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function createMockHololiveBracket(
+  payload: IpcChannelMap["hololive:brackets:create"]["request"]
+): Promise<HololiveBracket> {
   const size = payload.size;
+  const format = payload.format ?? "single_elimination";
   const generationStyle: HololiveBracketGenerationStyle = payload.generationStyle ?? "top_songs";
   const sizeCount = MOCK_BRACKET_SIZE_COUNTS[size];
   const id = `mock-bracket-${crypto.randomUUID()}`;
@@ -2456,6 +2537,32 @@ function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:cre
     });
   }
 
+  if (format === "double_elimination") {
+    const shell: HololiveBracket = {
+      id,
+      name: payload.name?.trim() || `${size} Double Elimination Bracket`,
+      size,
+      format,
+      generationStyle,
+      generationFilters: payload.filters ?? {},
+      seed: id,
+      status: "active",
+      currentMatchId: null,
+      currentMatch: null,
+      champion: null,
+      entries,
+      rounds: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    const bracket = updateMockDoubleEliminationBracket(
+      shell,
+      await createHololiveDoubleEliminationState(entries.map((entry) => entry.id))
+    );
+    mockHololiveBrackets.set(id, bracket);
+    return bracket;
+  }
+
   const rounds: HololiveBracketRound[] = [];
   for (let roundIndex = 0; roundIndex < Math.log2(sizeCount); roundIndex += 1) {
     const matchesInRound = sizeCount / 2 ** (roundIndex + 1);
@@ -2466,6 +2573,17 @@ function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:cre
         bracketId: id,
         roundIndex,
         matchIndex,
+        stage: "single",
+        stageRoundIndex: roundIndex,
+        playOrder: roundIndex * sizeCount + matchIndex,
+        lateRoundWeight:
+          roundIndex === Math.log2(sizeCount) - 1
+            ? 1.5
+            : roundIndex === Math.log2(sizeCount) - 2
+              ? 1.25
+              : roundIndex === Math.log2(sizeCount) - 3
+                ? 1
+                : 0,
         entryA: roundIndex === 0 ? entries[matchIndex * 2] ?? null : null,
         entryB: roundIndex === 0 ? entries[matchIndex * 2 + 1] ?? null : null,
         winnerEntryId: null,
@@ -2476,6 +2594,8 @@ function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:cre
     }
     rounds.push({
       roundIndex,
+      stage: "single",
+      stageRoundIndex: roundIndex,
       label: getMockHololiveBracketRoundLabel(sizeCount, roundIndex),
       matches
     });
@@ -2485,6 +2605,7 @@ function createMockHololiveBracket(payload: IpcChannelMap["hololive:brackets:cre
     id,
     name: payload.name?.trim() || `${size} Bracket`,
     size,
+    format,
     generationStyle,
     generationFilters: payload.filters ?? {},
     seed: id,
@@ -2559,9 +2680,9 @@ function clearMockHololiveBracketDownstream(
   clearMockHololiveBracketDownstream(bracket, roundIndex + 1, Math.floor(matchIndex / 2));
 }
 
-function pickMockHololiveBracketWinner(
+async function pickMockHololiveBracketWinner(
   payload: IpcChannelMap["hololive:brackets:pick-winner"]["request"]
-): HololiveBracket {
+): Promise<HololiveBracket> {
   const bracket = structuredClone(getMockHololiveBracket(payload.bracketId)) as HololiveBracket;
   const match = bracket.rounds
     .flatMap((round) => round.matches)
@@ -2571,6 +2692,25 @@ function pickMockHololiveBracketWinner(
   }
   if (payload.winnerEntryId !== match.entryA.id && payload.winnerEntryId !== match.entryB.id) {
     throw new Error("The mock winner is not in this matchup");
+  }
+
+  if (bracket.format === "double_elimination") {
+    const state = mockHololiveDoubleEngineStates.get(bracket.id);
+    if (!state || match.engineMatchId == null) {
+      throw new Error("The mock double-elimination engine state is unavailable");
+    }
+    const updated = updateMockDoubleEliminationBracket(
+      bracket,
+      await pickHololiveDoubleEliminationWinner(
+        state,
+        Number(match.engineMatchId),
+        payload.winnerEntryId,
+        new Date().toISOString()
+      )
+    );
+    mockHololiveBrackets.set(updated.id, updated);
+    archiveMockHololiveBracket(updated);
+    return updated;
   }
 
   clearMockHololiveBracketDownstream(bracket, match.roundIndex, match.matchIndex);
@@ -2593,7 +2733,7 @@ function pickMockHololiveBracketWinner(
   return updated;
 }
 
-function undoMockHololiveBracket(bracketId: string): HololiveBracket {
+async function undoMockHololiveBracket(bracketId: string): Promise<HololiveBracket> {
   const bracket = structuredClone(getMockHololiveBracket(bracketId)) as HololiveBracket;
   const completed = bracket.rounds
     .flatMap((round) => round.matches)
@@ -2608,6 +2748,20 @@ function undoMockHololiveBracket(bracketId: string): HololiveBracket {
     return bracket;
   }
 
+  if (bracket.format === "double_elimination") {
+    const state = mockHololiveDoubleEngineStates.get(bracket.id);
+    if (!state || completed.engineMatchId == null) {
+      throw new Error("The mock double-elimination engine state is unavailable");
+    }
+    const updated = updateMockDoubleEliminationBracket(
+      bracket,
+      await undoHololiveDoubleEliminationMatch(state, Number(completed.engineMatchId))
+    );
+    mockHololiveBrackets.set(updated.id, updated);
+    mockHololiveBracketArchives.delete(updated.id);
+    return updated;
+  }
+
   clearMockHololiveBracketDownstream(bracket, completed.roundIndex, completed.matchIndex);
   completed.winnerEntryId = null;
   completed.winner = null;
@@ -2618,8 +2772,17 @@ function undoMockHololiveBracket(bracketId: string): HololiveBracket {
   return updated;
 }
 
-function resetMockHololiveBracket(bracketId: string): HololiveBracket {
+async function resetMockHololiveBracket(bracketId: string): Promise<HololiveBracket> {
   const bracket = structuredClone(getMockHololiveBracket(bracketId)) as HololiveBracket;
+  if (bracket.format === "double_elimination") {
+    const updated = updateMockDoubleEliminationBracket(
+      bracket,
+      await createHololiveDoubleEliminationState(bracket.entries.map((entry) => entry.id))
+    );
+    mockHololiveBrackets.set(updated.id, updated);
+    mockHololiveBracketArchives.delete(updated.id);
+    return updated;
+  }
   for (const round of bracket.rounds) {
     for (const match of round.matches) {
       if (round.roundIndex > 0) {
@@ -2637,7 +2800,7 @@ function resetMockHololiveBracket(bracketId: string): HololiveBracket {
   return updated;
 }
 
-function duplicateMockHololiveBracket(bracketId: string): HololiveBracket {
+async function duplicateMockHololiveBracket(bracketId: string): Promise<HololiveBracket> {
   const source = getMockHololiveBracket(bracketId);
   const id = `mock-bracket-${crypto.randomUUID()}`;
   const entryIdBySourceId = new Map<string, string>();
@@ -2650,6 +2813,28 @@ function duplicateMockHololiveBracket(bracketId: string): HololiveBracket {
       bracketId: id
     };
   });
+  if (source.format === "double_elimination") {
+    const shell: HololiveBracket = {
+      ...source,
+      id,
+      name: `Copy of ${source.name}`.slice(0, 120),
+      seed: id,
+      status: "active",
+      currentMatchId: null,
+      currentMatch: null,
+      champion: null,
+      entries,
+      rounds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const duplicate = updateMockDoubleEliminationBracket(
+      shell,
+      await createHololiveDoubleEliminationState(entries.map((entry) => entry.id))
+    );
+    mockHololiveBrackets.set(id, duplicate);
+    return duplicate;
+  }
   const rounds = source.rounds.map((round) => ({
     ...round,
     matches: round.matches.map((match) => ({
@@ -2657,6 +2842,11 @@ function duplicateMockHololiveBracket(bracketId: string): HololiveBracket {
       bracketId: id,
       roundIndex: match.roundIndex,
       matchIndex: match.matchIndex,
+      stage: match.stage,
+      stageRoundIndex: match.stageRoundIndex,
+      playOrder: match.playOrder,
+      lateRoundWeight: match.lateRoundWeight,
+      engineMatchId: match.engineMatchId ?? null,
       entryA: match.roundIndex === 0 && match.entryA ? entries.find((entry) => entry.id === entryIdBySourceId.get(match.entryA?.id ?? "")) ?? null : null,
       entryB: match.roundIndex === 0 && match.entryB ? entries.find((entry) => entry.id === entryIdBySourceId.get(match.entryB?.id ?? "")) ?? null : null,
       winnerEntryId: null,
@@ -2688,6 +2878,9 @@ const mockBridge: HoloshelfBridge = {
     return () => undefined;
   },
   onUpdateStatus() {
+    return () => undefined;
+  },
+  onFindInPageResult() {
     return () => undefined;
   },
   async invoke<C extends IpcChannel>(
@@ -2726,6 +2919,10 @@ const mockBridge: HoloshelfBridge = {
         return { filePath: "mock-bracket-export.png" } as IpcChannelMap[C]["response"];
       case "app:open-path":
         return { opened: true } as IpcChannelMap[C]["response"];
+      case "app:find-in-page":
+        return { requestId: 0 } as IpcChannelMap[C]["response"];
+      case "app:find-in-page:stop":
+        return { stopped: true } as IpcChannelMap[C]["response"];
       case "app:data-backup:export":
         return {
           exported: true,
@@ -3576,7 +3773,7 @@ const mockBridge: HoloshelfBridge = {
           const maxEntriesPerTalent = payload.filters?.maxEntriesPerTalent;
           const shouldWarnAboutRelaxedCap = typeof maxEntriesPerTalent === "number" && maxEntriesPerTalent <= 1;
           return {
-            bracket: createMockHololiveBracket(payload),
+            bracket: await createMockHololiveBracket(payload),
             warnings: shouldWarnAboutRelaxedCap
               ? [
                   {
@@ -3593,21 +3790,21 @@ const mockBridge: HoloshelfBridge = {
           (_payload as IpcChannelMap["hololive:brackets:get"]["request"]).bracketId
         ) as IpcChannelMap[C]["response"];
       case "hololive:brackets:pick-winner":
-        return pickMockHololiveBracketWinner(
+        return (await pickMockHololiveBracketWinner(
           _payload as IpcChannelMap["hololive:brackets:pick-winner"]["request"]
-        ) as IpcChannelMap[C]["response"];
+        )) as IpcChannelMap[C]["response"];
       case "hololive:brackets:undo":
-        return undoMockHololiveBracket(
+        return (await undoMockHololiveBracket(
           (_payload as IpcChannelMap["hololive:brackets:undo"]["request"]).bracketId
-        ) as IpcChannelMap[C]["response"];
+        )) as IpcChannelMap[C]["response"];
       case "hololive:brackets:reset":
-        return resetMockHololiveBracket(
+        return (await resetMockHololiveBracket(
           (_payload as IpcChannelMap["hololive:brackets:reset"]["request"]).bracketId
-        ) as IpcChannelMap[C]["response"];
+        )) as IpcChannelMap[C]["response"];
       case "hololive:brackets:duplicate":
-        return duplicateMockHololiveBracket(
+        return (await duplicateMockHololiveBracket(
           (_payload as IpcChannelMap["hololive:brackets:duplicate"]["request"]).bracketId
-        ) as IpcChannelMap[C]["response"];
+        )) as IpcChannelMap[C]["response"];
       case "hololive:brackets:delete":
         {
           const bracketId = (_payload as IpcChannelMap["hololive:brackets:delete"]["request"]).bracketId;
@@ -3616,6 +3813,7 @@ const mockBridge: HoloshelfBridge = {
             archiveMockHololiveBracket(bracket);
           }
           mockHololiveBrackets.delete(bracketId);
+          mockHololiveDoubleEngineStates.delete(bracketId);
         }
         return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
       case "hololive:brackets:archives:list":
@@ -3636,7 +3834,9 @@ const mockBridge: HoloshelfBridge = {
           } as IpcChannelMap[C]["response"];
         }
       case "hololive:brackets:stats":
-        return getMockHololiveBracketStatsOverview() as IpcChannelMap[C]["response"];
+        return getMockHololiveBracketStatsOverview(
+          (_payload as IpcChannelMap["hololive:brackets:stats"]["request"] | null)?.format ?? "all"
+        ) as IpcChannelMap[C]["response"];
       case "hololive:undo:apply":
         {
           const token = (_payload as IpcChannelMap["hololive:undo:apply"]["request"]).token;

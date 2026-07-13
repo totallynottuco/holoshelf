@@ -19,6 +19,13 @@ const bridge: HoloshelfBridge = {
     };
     ipcRenderer.on("updates:status", handler);
     return () => ipcRenderer.removeListener("updates:status", handler);
+  },
+  onFindInPageResult(listener) {
+    const handler = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]) => {
+      listener(payload);
+    };
+    ipcRenderer.on("app:find-in-page:result", handler);
+    return () => ipcRenderer.removeListener("app:find-in-page:result", handler);
   }
 };
 

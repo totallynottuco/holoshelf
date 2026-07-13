@@ -185,10 +185,12 @@ export async function repairBundledOfficialImageCache(
   let imageCacheRows = 0;
 
   try {
-    imageCacheRows = upsertRows(options.database, "hololive_image_cache", selectOfficialImageCacheRows(seedDatabase), [
-      "idol_id",
-      "kind"
-    ]);
+    options.database.transaction(() => {
+      imageCacheRows = upsertRows(options.database, "hololive_image_cache", selectOfficialImageCacheRows(seedDatabase), [
+        "idol_id",
+        "kind"
+      ]);
+    });
   } finally {
     seedDatabase.close();
   }
@@ -215,7 +217,10 @@ function upsertRows(
     effectiveUpdateColumns.length > 0
       ? `DO UPDATE SET ${effectiveUpdateColumns
           .map((column) => `${quoteIdentifier(column)} = excluded.${quoteIdentifier(column)}`)
-          .join(", ")}`
+          .join(", ")}
+         WHERE ${effectiveUpdateColumns
+           .map((column) => `${quoteIdentifier(tableName)}.${quoteIdentifier(column)} IS NOT excluded.${quoteIdentifier(column)}`)
+           .join(" OR ")}`
       : "DO NOTHING";
   const sql = `INSERT INTO ${quoteIdentifier(tableName)} (${columns.map(quoteIdentifier).join(", ")})
                VALUES (${placeholders(columns.length)})
@@ -628,6 +633,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
       options.database.setSetting(OFFICIAL_DATA_VERSION_SETTING, manifest.version);
       options.database.setSetting(OFFICIAL_DATA_MERGED_AT_SETTING, mergedAt);
       options.database.setSetting(OFFICIAL_DATA_MERGE_SUMMARY_SETTING, JSON.stringify(storedSummary));
+      options.database.markStartupMaintenanceCurrent();
     });
 
     const result: OfficialDataMergeResult = {

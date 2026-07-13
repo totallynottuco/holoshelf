@@ -9,6 +9,9 @@ const missingBridge: HoloshelfBridge = {
   onUpdateStatus() {
     return () => undefined;
   },
+  onFindInPageResult() {
+    return () => undefined;
+  },
   async invoke(channel) {
     throw new Error(`Holoshelf IPC bridge is unavailable for ${String(channel)}`);
   }
@@ -38,6 +41,13 @@ function createBrowserMockProxy(): HoloshelfBridge {
       let unsubscribe: () => void = () => undefined;
       void getBrowserMock().then((mock) => {
         unsubscribe = mock.onUpdateStatus(listener);
+      });
+      return () => unsubscribe();
+    },
+    onFindInPageResult(listener) {
+      let unsubscribe: () => void = () => undefined;
+      void getBrowserMock().then((mock) => {
+        unsubscribe = mock.onFindInPageResult(listener);
       });
       return () => unsubscribe();
     },

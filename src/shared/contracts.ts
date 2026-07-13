@@ -177,6 +177,7 @@ export interface HololiveChannelRefreshResult {
 export interface HololiveCustomTalentInput {
   channelInput: string;
   displayName?: string | null;
+  cardImageUrl?: string | null;
   originalSongsUrl?: string | null;
   coversUrl?: string | null;
 }
@@ -191,6 +192,7 @@ export interface HololiveCustomTalentPreview {
   officialUrl: string;
   iconUrl: string;
   profileImageUrl: string;
+  cardImageUrl?: string | null;
   youtubeChannelUrl: string;
   xHandle?: string | null;
   xUrl?: string | null;
@@ -321,6 +323,9 @@ export interface HololiveMusicPlayerData {
 
 export type HololiveBracketSize = "RO16" | "RO32" | "RO64" | "RO128" | "RO256";
 export type HololiveBracketStatus = "active" | "complete";
+export type HololiveBracketFormat = "single_elimination" | "double_elimination";
+export type HololiveBracketStage = "single" | "winners" | "losers" | "grand_final";
+export type HololiveBracketStatsFormat = "all" | HololiveBracketFormat;
 export type HololiveBracketGenerationStyle = "top_songs" | "random_songs";
 export type HololiveBracketRatingBucket = "unrated" | "favorite" | "like" | "neutral" | "dislike";
 export type HololiveBracketVocalScope = "solo" | "group";
@@ -378,6 +383,11 @@ export interface HololiveBracketMatch {
   bracketId: string;
   roundIndex: number;
   matchIndex: number;
+  stage: HololiveBracketStage;
+  stageRoundIndex: number;
+  playOrder: number;
+  lateRoundWeight: number;
+  engineMatchId?: number | null;
   entryA?: HololiveBracketEntry | null;
   entryB?: HololiveBracketEntry | null;
   winnerEntryId?: string | null;
@@ -388,6 +398,8 @@ export interface HololiveBracketMatch {
 
 export interface HololiveBracketRound {
   roundIndex: number;
+  stage: HololiveBracketStage;
+  stageRoundIndex: number;
   label: string;
   matches: HololiveBracketMatch[];
 }
@@ -396,6 +408,7 @@ export interface HololiveBracket {
   id: string;
   name: string;
   size: HololiveBracketSize;
+  format: HololiveBracketFormat;
   generationStyle: HololiveBracketGenerationStyle;
   generationFilters: HololiveBracketGenerationFilters;
   seed: string;
@@ -413,6 +426,7 @@ export interface HololiveBracketSummary {
   id: string;
   name: string;
   size: HololiveBracketSize;
+  format: HololiveBracketFormat;
   generationStyle: HololiveBracketGenerationStyle;
   generationFilters: HololiveBracketGenerationFilters;
   status: HololiveBracketStatus;
@@ -429,6 +443,7 @@ export interface HololiveBracketArchiveSummary {
   sourceBracketId: string;
   name: string;
   size: HololiveBracketSize;
+  format: HololiveBracketFormat;
   generationStyle: HololiveBracketGenerationStyle;
   generationFilters: HololiveBracketGenerationFilters;
   totalEntries: number;
