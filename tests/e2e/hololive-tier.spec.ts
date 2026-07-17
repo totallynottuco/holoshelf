@@ -1037,10 +1037,13 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   for (const heading of songHeadings) {
     const header = page.getByRole("columnheader", { name: heading, exact: true });
     await expect(header).toBeVisible();
-    await header.getByRole("button").click();
-    await expect(header).not.toHaveAttribute("aria-sort", "none");
+    await expect(header.getByRole("button")).toBeEnabled();
   }
+  await expect(detailedTable.locator("thead th button")).toHaveCount(songHeadings.length);
   const songRatingHeader = page.getByRole("columnheader", { name: "Elo Rating", exact: true });
+  await expect(songRatingHeader).toHaveAttribute("aria-sort", "descending");
+  await songRatingHeader.getByRole("button").click();
+  await expect(songRatingHeader).toHaveAttribute("aria-sort", "ascending");
   await songRatingHeader.getByRole("button").click();
   await expect(songRatingHeader).toHaveAttribute("aria-sort", "descending");
   const songRatings = await readFirstTwoSortValues(3);
