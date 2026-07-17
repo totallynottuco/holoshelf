@@ -630,8 +630,7 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await page.locator(".hololive-bracket-create-popover").getByLabel("Name").fill("Singer Showdown");
   await page.getByRole("button", { name: "Create Bracket" }).click();
   const relaxedCapToast = page.locator(".hololive-action-toast").filter({ hasText: "Max per talent was relaxed" });
-  await expect(relaxedCapToast).toBeVisible();
-  await relaxedCapToast.click();
+  await expect(relaxedCapToast).toHaveCount(0);
 
   const savedBracketSelect = page.getByRole("combobox", { name: "Saved bracket" });
   await expect(savedBracketSelect).toContainText("Random");
@@ -681,7 +680,12 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await expect(page.locator(".hololive-bracket-match.current .hololive-bracket-match-label")).toContainText("R1-1");
 
   await page.getByRole("button", { name: "Play" }).click();
-  for (let index = 0; index < 15; index += 1) {
+  for (let index = 0; index < 8; index += 1) {
+    await page.locator(".hololive-bracket-pick-button").first().click();
+  }
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveCount(2);
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record").first()).toContainText("1-0 W-L");
+  for (let index = 0; index < 7; index += 1) {
     await page.locator(".hololive-bracket-pick-button").first().click();
   }
   await expect(page.locator(".hololive-bracket-champion")).toContainText("Champion");
@@ -763,9 +767,22 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await expect(page.getByRole("button", { name: "Talent View" })).toHaveAttribute("aria-pressed", "true");
   await expect(overviewAwards).toContainText("Top Talent");
 
+  const statsTabs = page.locator(".hololive-bracket-stats-tabs");
+  const overviewTabsBounds = await statsTabs.evaluate((tabs) => {
+    const bounds = tabs.getBoundingClientRect();
+    return { top: bounds.top, height: bounds.height, gap: getComputedStyle(tabs).gap };
+  });
+  expect(overviewTabsBounds.gap).toBe("0px");
   await page.getByRole("tab", { name: "Detailed Stats" }).click();
   await expect(page.getByRole("tab", { name: "Detailed Stats" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("group", { name: "Stats subject" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Stats subject" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Talent View" })).toHaveAttribute("aria-pressed", "true");
+  const detailedTabsBounds = await statsTabs.evaluate((tabs) => {
+    const bounds = tabs.getBoundingClientRect();
+    return { top: bounds.top, height: bounds.height };
+  });
+  expect(Math.abs(detailedTabsBounds.top - overviewTabsBounds.top)).toBeLessThan(0.5);
+  expect(Math.abs(detailedTabsBounds.height - overviewTabsBounds.height)).toBeLessThan(0.5);
   const detailedTable = page.locator(".hololive-bracket-detailed-table");
   await expect(detailedTable).toBeVisible();
   await expect(detailedTable.locator("tbody tr")).not.toHaveCount(0);
@@ -789,17 +806,22 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   const detailedScroll = page.locator(".hololive-bracket-detailed-table-scroll");
   const detailedSizing = await detailedScroll.evaluate((scroll) => {
     const table = scroll.querySelector<HTMLElement>(".hololive-bracket-detailed-table");
+    const header = table?.querySelector<HTMLTableCellElement>("thead th");
     const row = table?.querySelector<HTMLTableRowElement>("tbody tr");
     const cell = row?.querySelector<HTMLTableCellElement>("td");
     return {
       fontSize: table ? getComputedStyle(table).fontSize : "",
+      headerHeight: header?.getBoundingClientRect().height ?? 0,
       rowHeight: row?.getBoundingClientRect().height ?? 0,
       cellPaddingLeft: cell ? getComputedStyle(cell).paddingLeft : "",
       hasHorizontalOverflow: scroll.scrollWidth > scroll.clientWidth + 1
     };
   });
   expect(detailedSizing.fontSize).toBe("12.5px");
-  expect(detailedSizing.rowHeight).toBeGreaterThanOrEqual(39);
+  expect(detailedSizing.headerHeight).toBeGreaterThanOrEqual(31);
+  expect(detailedSizing.headerHeight).toBeLessThanOrEqual(33);
+  expect(detailedSizing.rowHeight).toBeGreaterThanOrEqual(29);
+  expect(detailedSizing.rowHeight).toBeLessThanOrEqual(31);
   expect(detailedSizing.cellPaddingLeft).toBe("10px");
   expect(detailedSizing.hasHorizontalOverflow).toBe(true);
 
@@ -842,8 +864,220 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await expect(winsHeader).toHaveAttribute("aria-sort", "ascending");
   const ascendingWins = await readFirstTwoSortValues(3);
   expect(ascendingWins[0]).toBeLessThanOrEqual(ascendingWins[1]);
+
+  const historyShelf = page.locator(".hololive-bracket-history-shelf");
+  await expect(historyShelf).toHaveCount(0);
+  await detailedTable.locator("tbody td.column-wins").last().click();
+  await expect(historyShelf).toBeVisible();
+  await expect(historyShelf.getByText("Stat History", { exact: true })).toBeVisible();
+  const compactWinRow = historyShelf.locator(".hololive-bracket-history-row-layout").first();
+  await expect(compactWinRow.locator(".hololive-bracket-history-contribution")).toHaveCount(0);
+  await expect(compactWinRow.locator("strong")).toContainText(/^WIN vs /);
+  await expect(compactWinRow.locator("small")).toHaveCount(1);
+  await expect(historyShelf.locator(".hololive-bracket-history-result-toggle")).toHaveCount(0);
+  await expect(historyShelf.getByText(/Raw log sample|Adjusted sample|Volatility|Performance edge/)).toHaveCount(0);
+  const historyGrouping = historyShelf.getByRole("combobox", { name: "Group stat history" });
+  await expect(historyGrouping).toContainText("Bracket");
+  expect((await historyGrouping.boundingBox())?.width ?? 0).toBeLessThanOrEqual(96);
+  await historyGrouping.click();
+  const bracketGroupingOption = historyShelf.getByRole("option", { name: "Bracket", exact: true });
+  await expect(bracketGroupingOption).toBeVisible();
+  const groupingTypography = await Promise.all([
+    historyGrouping.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { fontSize: style.fontSize, fontWeight: style.fontWeight };
+    }),
+    bracketGroupingOption.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { fontSize: style.fontSize, fontWeight: style.fontWeight };
+    })
+  ]);
+  expect(groupingTypography[0]).toEqual(groupingTypography[1]);
+  await bracketGroupingOption.click();
+  const historyGroups = historyShelf.locator(".hololive-bracket-history-group-toggle");
+  await expect(historyGroups.first()).toBeVisible();
+  await expect(historyGroups.first()).toHaveAttribute("aria-expanded", "true");
+  const historyDates = await historyGroups.evaluateAll((toggles) =>
+    toggles.map((toggle) => Date.parse(toggle.getAttribute("data-latest-at") ?? ""))
+  );
+  expect(historyDates).toEqual([...historyDates].sort((left, right) => right - left));
+  await historyGroups.first().click();
+  await expect(historyGroups.first()).toHaveAttribute("aria-expanded", "false");
+  await historyGroups.first().click();
+  await expect(historyGroups.first()).toHaveAttribute("aria-expanded", "true");
+  await historyGrouping.click();
+  await historyShelf.getByRole("option", { name: "Date", exact: true }).click();
+  await expect(historyGroups.first()).toHaveAttribute("aria-expanded", "true");
+  await historyGrouping.click();
+  await historyShelf.getByRole("option", { name: "No grouping", exact: true }).click();
+  await expect(historyShelf.locator(".hololive-bracket-history-group-toggle")).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 360 });
+  const historyList = historyShelf.locator(".hololive-bracket-history-list");
+  await expect
+    .poll(() => historyList.evaluate((list) => list.scrollHeight > list.clientHeight))
+    .toBe(true);
+  await historyList.evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+  });
+  await expect.poll(() => historyList.evaluate((list) => list.scrollTop)).toBeGreaterThan(0);
+  await page.keyboard.press("Escape");
+  await expect(historyShelf).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 960 });
+
+  await detailedTable.locator("tbody td.column-rating").last().click();
+  await expect(historyShelf).toBeVisible();
+  const ratingSummary = historyShelf.locator(".hololive-bracket-history-row-layout").first();
+  await expect(ratingSummary.locator("strong")).toContainText(/^(WIN|LOSS) vs .+/);
+  await expect(ratingSummary.locator("small")).toContainText(/\d+% expected win \| [\d,]+ -> [\d,]+$/);
+  const ratingDeltaBadge = ratingSummary.locator(".hololive-bracket-history-contribution");
+  await expect(ratingDeltaBadge).toBeVisible();
+  const ratingAlignment = await ratingSummary.evaluate((summary) => {
+    const badge = summary.querySelector<HTMLElement>(".hololive-bracket-history-contribution");
+    const result = summary.querySelector<HTMLElement>("strong");
+    const detail = summary.querySelector<HTMLElement>("small");
+    const summaryRect = summary.getBoundingClientRect();
+    const badgeRect = badge?.getBoundingClientRect();
+    const resultRect = result?.getBoundingClientRect();
+    return {
+      badgeRight: badgeRect?.right ?? 0,
+      resultLeft: resultRect?.left ?? 0,
+      badgeCenterY: badgeRect ? badgeRect.top + badgeRect.height / 2 : 0,
+      resultCenterY: resultRect ? resultRect.top + resultRect.height / 2 : 0,
+      detailLeftOffset: (detail?.getBoundingClientRect().left ?? 0) - summaryRect.left
+    };
+  });
+  expect(ratingAlignment.badgeRight).toBeLessThan(ratingAlignment.resultLeft);
+  expect(Math.abs(ratingAlignment.badgeCenterY - ratingAlignment.resultCenterY)).toBeLessThanOrEqual(1);
+  expect(Math.abs(ratingAlignment.detailLeftOffset)).toBeLessThanOrEqual(1);
+  await expect(historyShelf.locator(".hololive-bracket-history-result-toggle")).toHaveCount(0);
+  await expect(historyShelf.getByText(/^RD /)).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(historyShelf).toHaveCount(0);
+
+  const derivedHistoryChecks = [
+    { column: "strengthWins", context: /opponent views$/, badgeTitle: "Effect on final Strength score" },
+    { column: "strengthLosses", context: /opponent views$/, badgeTitle: "Effect on final Strength score" },
+    { column: "clutch", context: /\d+\.\d{2}x impact$/ },
+    { column: "pressure", context: /\d+% expected win \| .+$/ },
+    { column: "overperformer", context: /\d+\.\d{2}x underdog \| \d+% expected win$/ },
+    { column: "reliable", context: /\d+\.\d{2}x favorite \| \d+% expected win$/ }
+  ];
+  for (const check of derivedHistoryChecks) {
+    const cells = detailedTable.locator(`tbody td.column-${check.column}`);
+    const sortValues = await cells.evaluateAll((items) =>
+      items.map((item) => Number(item.getAttribute("data-sort-value") ?? 0))
+    );
+    const evidenceIndex = sortValues.findIndex((value) => Math.abs(value) > 0.0001);
+    expect(evidenceIndex).toBeGreaterThanOrEqual(0);
+    await cells.nth(evidenceIndex).click();
+    await expect(historyShelf).toBeVisible();
+    const evidenceRow = historyShelf.locator(".hololive-bracket-history-row-layout").first();
+    const contributionBadge = evidenceRow.locator(".hololive-bracket-history-contribution");
+    await expect(contributionBadge).toBeVisible();
+    if ("badgeTitle" in check && check.badgeTitle) {
+      await expect(contributionBadge).toHaveAttribute("title", check.badgeTitle);
+    }
+    await expect(evidenceRow.locator("strong")).toContainText(/^(WIN|LOSS) vs /);
+    await expect(evidenceRow.locator("small")).toContainText(check.context);
+    await expect(historyShelf.getByText(/Raw log|Adjusted log|Volatility|RD |Actual \d+%|confidence/i)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(historyShelf).toHaveCount(0);
+  }
+
+  const titleCell = detailedTable.locator("tbody td.column-titles").filter({ hasText: /^[1-9]/ }).first();
+  await titleCell.click();
+  await expect(historyShelf).toBeVisible();
+  const placementGroup = historyShelf.locator(".hololive-bracket-history-group-toggle").first();
+  await expect(placementGroup).toHaveAttribute("aria-expanded", "true");
+  const placementEntry = historyShelf.locator(".hololive-bracket-history-entry").first();
+  await expect(placementEntry).toBeVisible();
+  await expect(placementEntry.locator(".hololive-bracket-history-contribution")).toHaveCount(0);
+  await expect(historyShelf.locator(".hololive-bracket-history-result-toggle")).toHaveCount(0);
+  await expect(historyShelf.locator(".hololive-bracket-history-run, .hololive-bracket-history-inline-run, .hololive-bracket-history-run-entries")).toHaveCount(0);
+  const placementBadges = await historyShelf.locator(".hololive-bracket-history-contribution").allTextContents();
+  expect(placementBadges.every((badge) => !["W", "L"].includes(badge.trim()))).toBe(true);
+  const placementGrouping = historyShelf.getByRole("combobox", { name: "Group stat history" });
+  await placementGrouping.click();
+  await historyShelf.getByRole("option", { name: "Date", exact: true }).click();
+  await expect(historyShelf.locator(".hololive-bracket-history-entry").first()).toBeVisible();
+  await expect(historyShelf.locator(".hololive-bracket-history-result-toggle")).toHaveCount(0);
+  await placementGrouping.click();
+  await historyShelf.getByRole("option", { name: "No grouping", exact: true }).click();
+  await expect(historyShelf.locator(".hololive-bracket-history-entry").first()).toBeVisible();
+  await expect(historyShelf.locator(".hololive-bracket-history-result-toggle")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(historyShelf).toHaveCount(0);
+
+  await detailedTable.locator("tbody tr").first().click({ position: { x: 2, y: 15 } });
+  await expect(historyShelf).toBeVisible();
+  await historyShelf.getByRole("button", { name: "Close stat history" }).click();
+  await expect(historyShelf).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Song View" }).click();
+  await expect(page.getByRole("button", { name: "Song View" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".hololive-bracket-detailed-stats")).toHaveAttribute("aria-label", "Detailed song stats");
+  await expect(detailedTable).toHaveClass(/song-view/);
+  await expect(detailedTable.locator("tbody tr")).not.toHaveCount(0);
+  const songHeadings = [
+    "Song",
+    "Talent",
+    "Elo Rating",
+    "Wins",
+    "Titles",
+    "2nd Places",
+    "Deep Runs",
+    "Early Exits",
+    "Strength of Wins",
+    "Strength of Losses",
+    "Most Clutch",
+    "Under Pressure",
+    "Overperformer",
+    "Most Reliable"
+  ];
+  for (const heading of songHeadings) {
+    const header = page.getByRole("columnheader", { name: heading, exact: true });
+    await expect(header).toBeVisible();
+    await header.getByRole("button").click();
+    await expect(header).not.toHaveAttribute("aria-sort", "none");
+  }
+  const songRatingHeader = page.getByRole("columnheader", { name: "Elo Rating", exact: true });
+  await songRatingHeader.getByRole("button").click();
+  await expect(songRatingHeader).toHaveAttribute("aria-sort", "descending");
+  const songRatings = await readFirstTwoSortValues(3);
+  expect(songRatings[0]).toBeGreaterThanOrEqual(songRatings[1]);
+  const firstSongCell = detailedTable.locator("tbody td.song").first();
+  await expect(firstSongCell).not.toHaveAttribute("title", "");
+  const songStickyPosition = await detailedScroll.evaluate((scroll) => {
+    scroll.scrollLeft = 360;
+    const row = scroll.querySelector<HTMLTableRowElement>("tbody tr");
+    const song = row?.querySelector<HTMLTableCellElement>("td.song");
+    const scrollRect = scroll.getBoundingClientRect();
+    return (song?.getBoundingClientRect().left ?? 0) - scrollRect.left;
+  });
+  expect(Math.abs(songStickyPosition - 46)).toBeLessThanOrEqual(2);
+  const songWinsHeader = page.getByRole("columnheader", { name: "Wins", exact: true });
+  await songWinsHeader.getByRole("button").click();
+  await expect(songWinsHeader).toHaveAttribute("aria-sort", "descending");
+  const ownerCell = detailedTable.locator("tbody td.column-owner").first();
+  const ownerName = (await ownerCell.textContent())?.trim() ?? "";
+  await ownerCell.click();
+  await expect(historyShelf).toBeVisible();
+  await expect(historyShelf.locator(":scope > header strong")).toHaveText(ownerName);
+  const statsTopbar = page.locator(".hololive-bracket-stats-topbar");
+  const topbarBox = await statsTopbar.boundingBox();
+  if (topbarBox) {
+    await page.mouse.click(topbarBox.x + topbarBox.width / 2, topbarBox.y + topbarBox.height / 2);
+  }
+  await expect(historyShelf).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Talent View" }).click();
+  await expect(page.getByRole("columnheader", { name: "Wins", exact: true })).toHaveAttribute("aria-sort", "ascending");
+  await page.getByRole("button", { name: "Song View" }).click();
+  await expect(page.getByRole("columnheader", { name: "Wins", exact: true })).toHaveAttribute("aria-sort", "descending");
   await page.getByRole("tab", { name: "Overview" }).click();
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Song View" })).toHaveAttribute("aria-pressed", "true");
+  await expect(overviewAwards).toContainText("Top Song");
 
   await expect(page.getByRole("tab", { name: "Songs" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Talents" })).toHaveCount(0);
@@ -1016,7 +1250,7 @@ test("creates, navigates, and completes a double-elimination bracket", async ({ 
     await page.locator(".hololive-bracket-pick-button").first().click();
   }
   await expect(page.locator(".hololive-bracket-arena-top span")).toContainText("Losers");
-  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveText(["0-0 W-L", "0-0 W-L"]);
+  await expect(page.locator(".hololive-bracket-arena-meta .song-record")).toHaveText(["0-1 W-L", "0-1 W-L"]);
 
   for (let index = 8; index < 29; index += 1) {
     await page.locator(".hololive-bracket-pick-button").first().click();

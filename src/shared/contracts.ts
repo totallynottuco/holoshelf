@@ -336,6 +336,7 @@ export interface HololiveBracketCreateWarning {
   code: "talent_cap_relaxed";
   message: string;
   requestedMaxEntriesPerTalent: number;
+  appliedMaxEntriesPerTalent: number;
 }
 
 export interface HololiveBracketGenerationFilters {
@@ -503,7 +504,7 @@ export interface HololiveBracketSongStats {
   upsetResilienceScore: number;
   upsetResilienceChecks: number;
   upsetResilienceUpsetLosses: number;
-  lastArchivedAt: string;
+  lastResultAt: string;
 }
 
 export interface HololiveBracketTalentStats {
@@ -542,7 +543,7 @@ export interface HololiveBracketTalentStats {
   upsetResilienceScore: number;
   upsetResilienceChecks: number;
   upsetResilienceUpsetLosses: number;
-  lastArchivedAt: string;
+  lastResultAt: string;
 }
 
 export interface HololiveBracketRivalryStats {
@@ -554,7 +555,7 @@ export interface HololiveBracketRivalryStats {
   matches: number;
   leftWins: number;
   rightWins: number;
-  lastArchivedAt: string;
+  lastResultAt: string;
 }
 
 export interface HololiveBracketRatingStatsRow {
@@ -568,7 +569,127 @@ export interface HololiveBracketRatingStatsRow {
   wins: number;
   losses: number;
   matches: number;
-  lastArchivedAt: string;
+  lastResultAt: string;
+}
+
+export type HololiveBracketStatHistorySubject = "song" | "talent";
+export type HololiveBracketStatHistoryMetric =
+  | "matches"
+  | "rating"
+  | "wins"
+  | "titles"
+  | "runnerUps"
+  | "deepRuns"
+  | "earlyExits"
+  | "strengthWins"
+  | "strengthLosses"
+  | "clutch"
+  | "pressure"
+  | "overperformer"
+  | "reliable";
+
+export interface HololiveBracketStatHistoryBaseEntry {
+  eventId: string;
+  bracketId: string;
+  bracketName: string;
+  archiveId?: string | null;
+  format: HololiveBracketFormat;
+  stage: HololiveBracketStage;
+  roundIndex: number;
+  stageRoundIndex: number;
+  roundLabel: string;
+  matchIndex: number;
+  playOrder: number;
+  completedAt: string;
+  source: "archive" | "active";
+}
+
+export type HololiveBracketStatHistoryMatchEvidence =
+  | { kind: "record" }
+  | { kind: "strength"; opponentViews: number; scoreDelta: number }
+  | { kind: "clutch"; roundWeight: number; signedResult: number }
+  | {
+      kind: "pressure";
+      expectedScore: number;
+      actualScore: number;
+      performanceDelta: number;
+      roundWeight: number;
+    }
+  | {
+      kind: "viewExpectation";
+      perspective: "underdog" | "favorite";
+      subjectViews: number;
+      opponentViews: number;
+      viewRatio: number;
+      rawLogRatio: number;
+      adjustedLogRatio: number;
+      expectedScore: number;
+      actualScore: number;
+      performanceDelta: number;
+    };
+
+export interface HololiveBracketStatHistoryMatchEntry extends HololiveBracketStatHistoryBaseEntry {
+  kind: "match";
+  result: "win" | "loss" | "internal";
+  subjectSongId: string;
+  subjectSongLabel: string;
+  opponentSongId: string;
+  opponentSongLabel: string;
+  opponentTalentLabel?: string | null;
+  subjectViews?: number | null;
+  opponentViews?: number | null;
+  evidence: HololiveBracketStatHistoryMatchEvidence;
+}
+
+export interface HololiveBracketStatHistoryRatingEntry extends HololiveBracketStatHistoryBaseEntry {
+  kind: "rating";
+  result: "win" | "loss";
+  opponentId: string;
+  opponentLabel: string;
+  opponentDetail?: string | null;
+  subjectSongLabel?: string | null;
+  expectedScore: number;
+  beforeRating: number;
+  afterRating: number;
+  ratingDelta: number;
+  beforeRatingDeviation: number;
+  afterRatingDeviation: number;
+  beforeVolatility: number;
+  afterVolatility: number;
+  beforeConservativeRating: number;
+  afterConservativeRating: number;
+  conservativeRatingDelta: number;
+}
+
+export interface HololiveBracketStatHistoryPlacementEntry extends HololiveBracketStatHistoryBaseEntry {
+  kind: "placement";
+  placement: "champion" | "runnerUp" | "top4" | "earlyExit";
+  subjectSongId: string;
+  subjectSongLabel: string;
+  opponentSongId?: string | null;
+  opponentSongLabel?: string | null;
+}
+
+export type HololiveBracketStatHistoryEntry =
+  | HololiveBracketStatHistoryMatchEntry
+  | HololiveBracketStatHistoryRatingEntry
+  | HololiveBracketStatHistoryPlacementEntry;
+
+export interface HololiveBracketStatHistoryResponse {
+  subject: HololiveBracketStatHistorySubject;
+  subjectId: string;
+  subjectLabel: string;
+  subjectDetail?: string | null;
+  metric: HololiveBracketStatHistoryMetric;
+  metricLabel: string;
+  currentValue: number | string | null;
+  summary: string;
+  qualifyingCount: number;
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  entries: HololiveBracketStatHistoryEntry[];
 }
 
 export interface HololiveBracketStatsOverview {

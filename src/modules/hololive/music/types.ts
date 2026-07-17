@@ -205,6 +205,7 @@ export interface HolodexVideoDetail {
   duration: number | null;
   originalChannelId: string;
   providedToYoutube: boolean;
+  description?: string;
   songNames: string[];
   channel?: HolodexChannelRecord | null;
   mentions: HolodexMentionedChannel[];

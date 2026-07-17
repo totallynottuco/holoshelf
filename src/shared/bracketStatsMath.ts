@@ -9,6 +9,10 @@ export interface RobustViewStrengthResult {
   count: number;
 }
 
+export interface RobustViewStrengthDiagnosticResult extends RobustViewStrengthResult {
+  samples: Array<{ rawViews: number; rawLogValue: number; adjustedViews: number }>;
+}
+
 export interface RobustRelativeUpsetInput {
   id: string;
   values: Array<number | null | undefined>;
@@ -81,6 +85,18 @@ export interface ConfidenceAdjustedExpectedPerformanceResult {
   count: number;
   successCount: number;
   failureCount: number;
+}
+
+export interface ConfidenceAdjustedExpectedPerformanceDiagnosticResult
+  extends ConfidenceAdjustedExpectedPerformanceResult {
+  samples: Array<{
+    success: boolean;
+    rawLogRatio: number;
+    adjustedLogRatio: number;
+    expectedScore: number;
+    actualScore: number;
+    performanceDelta: number;
+  }>;
 }
 
 export interface RobustPositiveOpportunityInput {
@@ -223,10 +239,17 @@ export function calculateRobustViewStrengthScores(
   inputs: RobustViewStrengthInput[],
   priorWeight = 3
 ): RobustViewStrengthResult[] {
+  return calculateRobustViewStrengthDiagnostics(inputs, priorWeight).map(({ samples: _samples, ...result }) => result);
+}
+
+export function calculateRobustViewStrengthDiagnostics(
+  inputs: RobustViewStrengthInput[],
+  priorWeight = 3
+): RobustViewStrengthDiagnosticResult[] {
   const logsById = new Map(inputs.map((input) => [input.id, positiveLogViewCounts(input.values)]));
   const allLogs = [...logsById.values()].flat().sort((left, right) => left - right);
   if (allLogs.length === 0) {
-    return inputs.map((input) => ({ id: input.id, score: 0, count: 0 }));
+    return inputs.map((input) => ({ id: input.id, score: 0, count: 0, samples: [] }));
   }
 
   const capStats = robustUpperStats(allLogs, Number.POSITIVE_INFINITY);
@@ -236,21 +259,52 @@ export function calculateRobustViewStrengthScores(
   return inputs.map((input) => {
     const logs = logsById.get(input.id) ?? [];
     if (logs.length === 0) {
-      return { id: input.id, score: 0, count: 0 };
+      return { id: input.id, score: 0, count: 0, samples: [] };
     }
 
-    const adjustedSum = logs.reduce(
-      (sum, value) => sum + softCompressAboveCap(value, capStats.cap, Number.POSITIVE_INFINITY, compressionScale),
-      0
+    const adjustedLogs = logs.map((value) =>
+      softCompressAboveCap(value, capStats.cap, Number.POSITIVE_INFINITY, compressionScale)
     );
+    const adjustedSum = adjustedLogs.reduce((sum, value) => sum + value, 0);
     const averageLog = adjustedSum / logs.length;
     const confidence = logs.length / (logs.length + safePriorWeight);
     const scoreLog = averageLog > capStats.median ? capStats.median + (averageLog - capStats.median) * confidence : averageLog;
     return {
       id: input.id,
       score: Math.max(0, Math.expm1(scoreLog)),
-      count: logs.length
+      count: logs.length,
+      samples: logs.map((value, index) => ({
+        rawViews: Math.max(0, Math.expm1(value)),
+        rawLogValue: value,
+        adjustedViews: Math.max(0, Math.expm1(adjustedLogs[index] ?? value))
+      }))
     };
+  });
+}
+
+export function calculateRobustViewStrengthMarginalDeltas(
+  inputs: RobustViewStrengthInput[],
+  subjectId: string,
+  priorWeight = 3
+): number[] {
+  const subjectInput = inputs.find((input) => input.id === subjectId);
+  if (!subjectInput) return [];
+
+  const fullScore = calculateRobustViewStrengthScores(inputs, priorWeight).find(
+    (result) => result.id === subjectId
+  )?.score ?? 0;
+
+  return subjectInput.values.map((value, sampleIndex) => {
+    if (value == null || !Number.isFinite(value) || value <= 0) return 0;
+    const withoutSample = inputs.map((input) =>
+      input.id === subjectId
+        ? { ...input, values: input.values.filter((_sample, index) => index !== sampleIndex) }
+        : input
+    );
+    const scoreWithoutSample = calculateRobustViewStrengthScores(withoutSample, priorWeight).find(
+      (result) => result.id === subjectId
+    )?.score ?? 0;
+    return fullScore - scoreWithoutSample;
   });
 }
 
@@ -480,6 +534,17 @@ export function calculateConfidenceAdjustedExpectedPerformanceScores(
   priorWeight = 3,
   domainMax = Number.POSITIVE_INFINITY
 ): ConfidenceAdjustedExpectedPerformanceResult[] {
+  return calculateConfidenceAdjustedExpectedPerformanceDiagnostics(inputs, perspective, priorWeight, domainMax).map(
+    ({ samples: _samples, ...result }) => result
+  );
+}
+
+export function calculateConfidenceAdjustedExpectedPerformanceDiagnostics(
+  inputs: RobustWeightedRateInput[],
+  perspective: ExpectedPerformancePerspective,
+  priorWeight = 3,
+  domainMax = Number.POSITIVE_INFINITY
+): ConfidenceAdjustedExpectedPerformanceDiagnosticResult[] {
   const safeDomainMax =
     domainMax === Number.POSITIVE_INFINITY
       ? Number.POSITIVE_INFINITY
@@ -494,7 +559,8 @@ export function calculateConfidenceAdjustedExpectedPerformanceScores(
       score: 0,
       count: 0,
       successCount: 0,
-      failureCount: 0
+      failureCount: 0,
+      samples: []
     }));
   }
 
@@ -510,17 +576,27 @@ export function calculateConfidenceAdjustedExpectedPerformanceScores(
         score: 0,
         count: 0,
         successCount: 0,
-        failureCount: 0
+        failureCount: 0,
+        samples: []
       };
     }
 
-    const performanceTotal = samples.reduce((sum, sample) => {
+    const adjustedSamples = samples.map((sample) => {
       const adjustedLogRatio = softCompressAboveCap(sample.weight, capStats.cap, safeDomainMax, compressionScale);
       const adjustedRatio = 2 ** adjustedLogRatio;
       const expectedWinProbability =
         perspective === "favorite" ? adjustedRatio / (1 + adjustedRatio) : 1 / (1 + adjustedRatio);
-      return sum + (sample.success ? 1 : 0) - expectedWinProbability;
-    }, 0);
+      const actualScore = sample.success ? 1 : 0;
+      return {
+        success: sample.success,
+        rawLogRatio: sample.weight,
+        adjustedLogRatio,
+        expectedScore: expectedWinProbability,
+        actualScore,
+        performanceDelta: actualScore - expectedWinProbability
+      };
+    });
+    const performanceTotal = adjustedSamples.reduce((sum, sample) => sum + sample.performanceDelta, 0);
     const successCount = samples.filter((sample) => sample.success).length;
 
     return {
@@ -528,7 +604,8 @@ export function calculateConfidenceAdjustedExpectedPerformanceScores(
       score: Math.max(-1, Math.min(1, performanceTotal / (samples.length + safePriorWeight))),
       count: samples.length,
       successCount,
-      failureCount: samples.length - successCount
+      failureCount: samples.length - successCount,
+      samples: adjustedSamples
     };
   });
 }

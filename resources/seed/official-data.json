@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "version": "2026-07-13T002332Z",
-  "generatedAt": "2026-07-13T00:32:37.087Z",
+  "version": "2026-07-16T160201Z",
+  "generatedAt": "2026-07-16T16:12:27.718Z",
   "seedDatabase": "holoshelf-template.sqlite",
-  "musicRows": 2914,
+  "musicRows": 2911,
   "idols": 74,
   "imageFiles": 296,
   "artifactFiles": 6

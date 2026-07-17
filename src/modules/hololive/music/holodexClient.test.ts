@@ -74,6 +74,7 @@ describe("Holodex client helpers", () => {
 
     expect(detail.channel?.subscriberCount).toBe(500);
     expect(detail.providedToYoutube).toBe(true);
+    expect(detail.description).toBe("Provided to YouTube by example");
     expect(detail.songNames).toEqual(["Song Name"]);
     expect(detail.mentions.map((mention) => mention.channelId)).toEqual(["mentioned"]);
     expect(detail.relationshipsLoaded).toBe(true);

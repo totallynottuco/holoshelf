@@ -16,6 +16,9 @@ import type {
   HololiveBracketStatsOverview,
   HololiveBracketStatsFormat,
   HololiveBracketSummary,
+  HololiveBracketStatHistoryMetric,
+  HololiveBracketStatHistoryResponse,
+  HololiveBracketStatHistorySubject,
   HololiveChannelRefreshResult,
   HololiveCustomSongPreview,
   HololiveCustomTalentInput,
@@ -496,6 +499,15 @@ export interface HololiveBracketStatsRequest {
   format?: HololiveBracketStatsFormat;
 }
 
+export interface HololiveBracketStatHistoryRequest {
+  subject: HololiveBracketStatHistorySubject;
+  subjectId: string;
+  metric: HololiveBracketStatHistoryMetric;
+  format?: HololiveBracketStatsFormat;
+  offset?: number;
+  limit?: number;
+}
+
 export interface HololiveBracketDuplicateRequest {
   bracketId: string;
 }
@@ -886,6 +898,10 @@ export interface IpcChannelMap {
   "hololive:brackets:stats": {
     request: HololiveBracketStatsRequest | null;
     response: HololiveBracketStatsOverview;
+  };
+  "hololive:brackets:stats:history": {
+    request: HololiveBracketStatHistoryRequest;
+    response: HololiveBracketStatHistoryResponse;
   };
 }
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createDefaultGlicko2Rating, getConservativeGlicko2Rating, updateGlicko2RatingPeriod } from "./glicko2";
+import {
+  createDefaultGlicko2Rating,
+  getConservativeGlicko2Rating,
+  replaySequentialGlicko2,
+  updateGlicko2RatingPeriod
+} from "./glicko2";
 
 describe("Glicko-2 rating helper", () => {
   it("matches the published Glicko-2 example within rounding tolerance", () => {
@@ -79,5 +84,73 @@ describe("Glicko-2 rating helper", () => {
     expect(Number.isFinite(row?.rating)).toBe(true);
     expect(Number.isFinite(row?.ratingDeviation)).toBe(true);
     expect(Number.isFinite(row?.volatility)).toBe(true);
+  });
+
+  it("uses each result as the starting point for the next sequential match", () => {
+    const replay = replaySequentialGlicko2(
+      [
+        { id: "match-1", winnerId: "song-a", loserId: "song-b", context: null },
+        { id: "match-2", winnerId: "song-a", loserId: "song-c", context: null }
+      ],
+      { captureTimeline: true }
+    );
+
+    expect(replay.timeline).toHaveLength(2);
+    expect(replay.timeline[1]?.winner.before.rating).toBeCloseTo(replay.timeline[0]?.winner.after.rating ?? 0, 8);
+    expect(replay.timeline[1]?.winner.before.ratingDeviation).toBeCloseTo(
+      replay.timeline[0]?.winner.after.ratingDeviation ?? 0,
+      8
+    );
+  });
+
+  it("captures exact pre-match expectations and raw and conservative deltas", () => {
+    const replay = replaySequentialGlicko2(
+      [{ id: "upset", winnerId: "underdog", loserId: "favorite", context: { round: 1 } }],
+      {
+        captureTimeline: true,
+        initialRatings: new Map([
+          ["underdog", { rating: 1300, ratingDeviation: 80, volatility: 0.06 }],
+          ["favorite", { rating: 1700, ratingDeviation: 80, volatility: 0.06 }]
+        ])
+      }
+    );
+    const event = replay.timeline[0];
+
+    expect(event?.winner.expectedScore).toBeLessThan(0.5);
+    expect(event?.winner.ratingDelta).toBeCloseTo(
+      (event?.winner.after.rating ?? 0) - (event?.winner.before.rating ?? 0),
+      8
+    );
+    expect(event?.winner.conservativeRatingDelta).toBeCloseTo(
+      (event?.winner.afterConservativeRating ?? 0) - (event?.winner.beforeConservativeRating ?? 0),
+      8
+    );
+    expect(event?.loser.expectedScore).toBeCloseTo(1 - (event?.winner.expectedScore ?? 0), 8);
+  });
+
+  it("ignores self-match events without changing ratings", () => {
+    const replay = replaySequentialGlicko2(
+      [{ id: "duplicate", winnerId: "same-song", loserId: "same-song", context: null }],
+      { captureTimeline: true }
+    );
+
+    expect(replay.ratings.size).toBe(0);
+    expect(replay.timeline).toEqual([]);
+  });
+
+  it("streams result details without retaining a timeline for overview calculations", () => {
+    let expectedScore = 0;
+    const replay = replaySequentialGlicko2(
+      [{ id: "streamed", winnerId: "song-a", loserId: "song-b", context: null }],
+      {
+        onResult: (event) => {
+          expectedScore = event.winner.expectedScore;
+        }
+      }
+    );
+
+    expect(expectedScore).toBeGreaterThan(0);
+    expect(replay.ratings.size).toBe(2);
+    expect(replay.timeline).toEqual([]);
   });
 });

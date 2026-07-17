@@ -266,6 +266,7 @@ function normalizeVideoDetailBody(videoId: string, body: {
     duration: parseDuration(body.duration),
     originalChannelId: body.original_channel_id ?? "",
     providedToYoutube: (body.description ?? "").startsWith(PROVIDED_TO_YOUTUBE_PREFIX),
+    description: body.description ?? "",
     songNames: songs
       .map((song) => song.name?.trim() ?? "")
       .filter(Boolean),

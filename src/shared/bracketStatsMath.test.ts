@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   ROBUST_RELATIVE_UPSET_DOMAIN_MAX,
+  calculateConfidenceAdjustedExpectedPerformanceDiagnostics,
   calculateConfidenceAdjustedExpectedPerformanceScores,
   calculateRobustPositiveOpportunityScores,
   calculateRobustRelativeUpsetScores,
+  calculateRobustViewStrengthDiagnostics,
+  calculateRobustViewStrengthMarginalDeltas,
   calculateRobustViewStrengthScores,
   calculateRobustWeightedSuccessRates,
   calculateShrunkBinaryRates,
@@ -26,6 +29,67 @@ describe("bracket stats math", () => {
 
     expect(hugeOutlier?.score ?? 0).toBeGreaterThan(nearestCapLevel?.score ?? 0);
     expect(hugeOutlier?.score ?? Number.POSITIVE_INFINITY).toBeLessThan(173_000_000);
+  });
+
+  it("returns the exact adjusted samples used by history without changing leaderboard scores", () => {
+    const strengthInputs = [
+      { id: "steady", values: [1_000_000, 5_000_000, 12_000_000] },
+      { id: "outlier", values: [250_000_000] }
+    ];
+    const strengthScores = calculateRobustViewStrengthScores(strengthInputs);
+    const strengthDiagnostics = calculateRobustViewStrengthDiagnostics(strengthInputs);
+    expect(strengthDiagnostics.map(({ samples: _samples, ...result }) => result)).toEqual(strengthScores);
+    expect(strengthDiagnostics[0]?.samples).toHaveLength(3);
+    expect(strengthDiagnostics[0]?.samples.every((sample) => sample.adjustedViews > 0)).toBe(true);
+
+    const opportunityInputs = [
+      {
+        id: "underdog",
+        samples: [
+          { weight: Math.log2(8), success: true },
+          { weight: Math.log2(3), success: false }
+        ]
+      }
+    ];
+    const opportunityScores = calculateConfidenceAdjustedExpectedPerformanceScores(opportunityInputs, "underdog");
+    const opportunityDiagnostics = calculateConfidenceAdjustedExpectedPerformanceDiagnostics(
+      opportunityInputs,
+      "underdog"
+    );
+    expect(opportunityDiagnostics.map(({ samples: _samples, ...result }) => result)).toEqual(opportunityScores);
+    expect(opportunityDiagnostics[0]?.samples).toEqual([
+      expect.objectContaining({ actualScore: 1 }),
+      expect.objectContaining({ actualScore: 0 })
+    ]);
+  });
+
+  it("returns each view-strength sample's exact effect on the final adjusted score", () => {
+    const strengthInputs = [
+      { id: "subject", values: [250_000, 5_000_000, 40_000_000] },
+      { id: "field-a", values: [1_000_000, 2_000_000, 3_000_000] },
+      { id: "field-b", values: [750_000, 4_000_000, 8_000_000] }
+    ];
+    const fullScore = calculateRobustViewStrengthScores(strengthInputs).find(
+      (result) => result.id === "subject"
+    )?.score ?? 0;
+    const deltas = calculateRobustViewStrengthMarginalDeltas(strengthInputs, "subject");
+
+    expect(deltas).toHaveLength(3);
+    deltas.forEach((delta, sampleIndex) => {
+      const withoutSample = strengthInputs.map((input) =>
+        input.id === "subject"
+          ? { ...input, values: input.values.filter((_value, index) => index !== sampleIndex) }
+          : input
+      );
+      const scoreWithoutSample = calculateRobustViewStrengthScores(withoutSample).find(
+        (result) => result.id === "subject"
+      )?.score ?? 0;
+
+      expect(delta).toBeCloseTo(fullScore - scoreWithoutSample, 8);
+    });
+    expect(deltas[0]).toBeLessThan(0);
+    expect(deltas[2]).toBeGreaterThan(0);
+    expect(calculateRobustViewStrengthMarginalDeltas(strengthInputs, "missing")).toEqual([]);
   });
 
   it("does not inflate low view-strength samples upward to the global field", () => {

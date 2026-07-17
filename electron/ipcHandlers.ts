@@ -464,6 +464,28 @@ const hololiveBracketResetSchema = z.object({
 const hololiveBracketStatsSchema = z.object({
   format: hololiveBracketStatsFormatSchema.optional().default("all")
 });
+const hololiveBracketStatHistorySchema = z.object({
+  subject: z.enum(["song", "talent"]),
+  subjectId: z.string().trim().min(1),
+  metric: z.enum([
+    "matches",
+    "rating",
+    "wins",
+    "titles",
+    "runnerUps",
+    "deepRuns",
+    "earlyExits",
+    "strengthWins",
+    "strengthLosses",
+    "clutch",
+    "pressure",
+    "overperformer",
+    "reliable"
+  ]),
+  format: hololiveBracketStatsFormatSchema.optional().default("all"),
+  offset: z.number().int().nonnegative().optional().default(0),
+  limit: z.number().int().min(1).max(100).optional().default(50)
+});
 
 const hololiveBracketDuplicateSchema = z.object({
   bracketId: z.string().trim().min(1)
@@ -1247,6 +1269,17 @@ export function installIpcHandlers(context: IpcContext): void {
   handle("hololive:brackets:stats", async (_event, payload) => {
     const input = hololiveBracketStatsSchema.parse(payload ?? {});
     return context.database.getHololiveBracketStatsOverview(input.format);
+  });
+  handle("hololive:brackets:stats:history", async (_event, payload) => {
+    const input = hololiveBracketStatHistorySchema.parse(payload);
+    return context.database.getHololiveBracketStatHistory(
+      input.subject,
+      input.subjectId,
+      input.metric,
+      input.format,
+      input.offset,
+      input.limit
+    );
   });
 }
 

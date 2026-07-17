@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildHololiveMusicSongKey } from "./classification";
-import { buildDuplicateTitleCore, cleanupCatalogRows, normalizeVideoDetail } from "./cleanup";
+import {
+  buildDuplicateTitleCore,
+  cleanupCatalogRows,
+  normalizeVideoDetail,
+  parseProvidedToYoutubeArtistCredits
+} from "./cleanup";
 import type { HolodexCatalogRow, HolodexVideoDetail, HolodexVideoRecord } from "./types";
 
 function row(input: Partial<HolodexCatalogRow> & Pick<HolodexCatalogRow, "youtubeVideoId" | "title">): HolodexCatalogRow {
@@ -22,11 +27,23 @@ function detail(input: Partial<HolodexVideoDetail> & Pick<HolodexVideoDetail, "y
     duration: input.duration ?? 180,
     originalChannelId: input.originalChannelId ?? "",
     providedToYoutube: input.providedToYoutube ?? false,
+    description: input.description ?? "",
     songNames: input.songNames ?? []
   });
 }
 
 describe("Holodex cleanup rules", () => {
+  it("extracts only the structured Provided to YouTube artist-credit line", () => {
+    expect(
+      parseProvidedToYoutubeArtistCredits(
+        "Provided to YouTube by cover corp.\n\nPray · Amane Kanata · Tokoyami Towa · Ofutonttu · t+pazolite\n\nReleased on: 2022-07-30"
+      )
+    ).toEqual(["Amane Kanata", "Tokoyami Towa", "Ofutonttu", "t+pazolite"]);
+    expect(
+      parseProvidedToYoutubeArtistCredits("A normal description that thanks Tokoyami Towa for helping.")
+    ).toEqual([]);
+  });
+
   it("filters missing, short, preview, remix, instrumental, and vocal-only rows", () => {
     const rows = [
       row({ youtubeVideoId: "ok", title: "Full Song" }),
@@ -223,6 +240,115 @@ describe("Holodex cleanup rules", () => {
         reason: "topic_duplicate_of_non_topic"
       }
     ]);
+  });
+
+  it("allows a bounded duration difference for confidently matched topic duplicates", () => {
+    const rows = [
+      row({
+        youtubeVideoId: "official-full",
+        title: "[Official MV] Example Song",
+        topicId: "Original_Song",
+        publishedAt: "2021-01-01T00:00:00.000Z"
+      }),
+      row({
+        youtubeVideoId: "topic-trimmed",
+        title: "Example Song",
+        topicId: "Original_Song",
+        publishedAt: "2021-01-02T00:00:00.000Z"
+      })
+    ];
+    const details = {
+      "official-full": detail({
+        youtubeVideoId: "official-full",
+        channelId: "talent-channel",
+        duration: 193,
+        songNames: ["Example Song"]
+      }),
+      "topic-trimmed": detail({
+        youtubeVideoId: "topic-trimmed",
+        channelId: "talent-channel",
+        originalChannelId: "topic-owner",
+        providedToYoutube: true,
+        duration: 162,
+        songNames: ["Example Song"]
+      })
+    };
+
+    const result = cleanupCatalogRows(rows, {}, details);
+
+    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["official-full"]);
+    expect(result.duplicateRemovals).toMatchObject([
+      {
+        removedYoutubeVideoId: "topic-trimmed",
+        keptYoutubeVideoId: "official-full",
+        reason: "topic_duplicate_of_non_topic"
+      }
+    ]);
+  });
+
+  it("uses authoritative replacements when multilingual duplicate titles cannot be inferred safely", () => {
+    const rows = [
+      row({
+        youtubeVideoId: "LYFciXBcXIQ",
+        title: "「3時12分 / TAKU INOUE & 星街すいせい」MUSIC VIDEO",
+        topicId: "Original_Song",
+        publishedAt: "2021-07-14T10:00:10.000Z"
+      }),
+      row({
+        youtubeVideoId: "APB19Vr233c",
+        title: "Sanji Juunihun",
+        topicId: "Original_Song",
+        publishedAt: "2021-12-21T10:01:44.000Z"
+      }),
+      row({
+        youtubeVideoId: "ev7menqLdK4",
+        title: "3時12分 (Sanji Junnihun)",
+        topicId: "Original_Song",
+        publishedAt: "2022-10-09T10:03:40.000Z"
+      })
+    ];
+    const details = {
+      LYFciXBcXIQ: detail({
+        youtubeVideoId: "LYFciXBcXIQ",
+        channelId: "suisei-channel",
+        duration: 193,
+        songNames: ["3時12分"]
+      }),
+      APB19Vr233c: detail({
+        youtubeVideoId: "APB19Vr233c",
+        channelId: "suisei-channel",
+        originalChannelId: "topic-owner",
+        providedToYoutube: true,
+        duration: 193,
+        songNames: ["Sanji Juunihun"]
+      }),
+      ev7menqLdK4: detail({
+        youtubeVideoId: "ev7menqLdK4",
+        channelId: "suisei-channel",
+        originalChannelId: "topic-owner",
+        providedToYoutube: true,
+        duration: 162,
+        songNames: ["3時12分 (Sanji Junnihun)"]
+      })
+    };
+
+    const result = cleanupCatalogRows(rows, {}, details);
+
+    expect(result.rows.map((entry) => entry.youtubeVideoId)).toEqual(["LYFciXBcXIQ"]);
+    expect(result.duplicateRemovals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          removedYoutubeVideoId: "APB19Vr233c",
+          keptYoutubeVideoId: "LYFciXBcXIQ",
+          reason: "known_duplicate_of_official"
+        }),
+        expect.objectContaining({
+          removedYoutubeVideoId: "ev7menqLdK4",
+          keptYoutubeVideoId: "LYFciXBcXIQ",
+          reason: "known_duplicate_of_official"
+        })
+      ])
+    );
   });
 
   it("removes topic duplicates with noisy group suffixes when the official upload has overlapping performers", () => {

@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-07-13T00:23:32.907Z",
-  "completedAt": "2026-07-13T00:32:37.087Z",
+  "startedAt": "2026-07-16T16:02:01.271Z",
+  "completedAt": "2026-07-16T16:12:27.718Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-07-13T002332Z",
+  "officialDataVersion": "2026-07-16T160201Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -13,34 +13,34 @@
   "channelRefresh": {
     "refreshedChannels": 32,
     "classifiedChannels": 81,
-    "updatedAt": "2026-07-13T00:23:34.196Z"
+    "updatedAt": "2026-07-16T16:02:01.732Z"
   },
   "musicRefresh": {
-    "sourceRows": 3016,
-    "importedRows": 2931,
-    "filteredRows": 85,
-    "duplicateRows": 1153,
+    "sourceRows": 3009,
+    "importedRows": 2930,
+    "filteredRows": 79,
+    "duplicateRows": 1170,
     "run": {
-      "id": "3371fe28-bddf-47e5-81df-1a9af4ecac77",
+      "id": "6a2da351-6975-4487-b0f7-b4b2ab2603b0",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-07-13T00:32:23.338Z",
-      "completedAt": "2026-07-13T00:32:30.571Z",
-      "fetchedRows": 3016,
-      "keptRows": 2931,
-      "filteredRows": 85,
-      "duplicateRows": 1153,
+      "startedAt": "2026-07-16T16:12:11.383Z",
+      "completedAt": "2026-07-16T16:12:19.818Z",
+      "fetchedRows": 3009,
+      "keptRows": 2930,
+      "filteredRows": 79,
+      "duplicateRows": 1170,
       "error": null
     }
   },
   "videoStatsRefresh": {
-    "requestedVideos": 2923,
-    "updatedVideos": 2923,
-    "missingVideos": 0,
-    "unavailableVideos": 0,
+    "requestedVideos": 2922,
+    "updatedVideos": 2920,
+    "missingVideos": 2,
+    "unavailableVideos": 2,
     "failedBatches": 0,
     "batches": 59,
-    "fetchedAt": "2026-07-13T00:32:30.945Z"
+    "fetchedAt": "2026-07-16T16:12:20.258Z"
   },
   "imageRefresh": {
     "cached": 0,
@@ -49,12 +49,12 @@
     "total": 74
   },
   "counts": {
-    "totalMusicRows": 2914,
-    "totalChannels": 177,
+    "totalMusicRows": 2911,
+    "totalChannels": 178,
     "officialIdols": 74,
     "customIdols": 0,
-    "statsRows": 2907,
-    "detailCacheRows": 2914,
-    "duplicateRemovalRows": 1145
+    "statsRows": 2904,
+    "detailCacheRows": 2911,
+    "duplicateRemovalRows": 1170
   }
 }

@@ -23,6 +23,37 @@ export interface Glicko2Options {
   tau?: number;
 }
 
+export interface SequentialGlicko2Event<Context = unknown> {
+  id: string;
+  winnerId: string;
+  loserId: string;
+  context: Context;
+}
+
+export interface SequentialGlicko2ParticipantResult {
+  id: string;
+  score: 0 | 1;
+  expectedScore: number;
+  before: Glicko2Rating;
+  after: Glicko2Rating;
+  beforeConservativeRating: number;
+  afterConservativeRating: number;
+  ratingDelta: number;
+  conservativeRatingDelta: number;
+}
+
+export interface SequentialGlicko2TimelineEntry<Context = unknown> {
+  eventId: string;
+  context: Context;
+  winner: SequentialGlicko2ParticipantResult;
+  loser: SequentialGlicko2ParticipantResult;
+}
+
+export interface SequentialGlicko2ReplayResult<Context = unknown> {
+  ratings: Map<string, Glicko2Rating>;
+  timeline: SequentialGlicko2TimelineEntry<Context>[];
+}
+
 function createInitialRating(options: Glicko2Options): Glicko2Rating {
   return {
     rating: options.initialRating ?? DEFAULT_RATING,
@@ -174,4 +205,88 @@ export function updateGlicko2RatingPeriod(
   }
 
   return nextRatings;
+}
+
+export function replaySequentialGlicko2<Context = unknown>(
+  events: readonly SequentialGlicko2Event<Context>[],
+  options: Glicko2Options & {
+    captureTimeline?: boolean;
+    initialRatings?: ReadonlyMap<string, Glicko2Rating>;
+    onResult?: (entry: SequentialGlicko2TimelineEntry<Context>) => void;
+  } = {}
+): SequentialGlicko2ReplayResult<Context> {
+  const ratings = new Map(options.initialRatings ?? []);
+  const timeline: SequentialGlicko2TimelineEntry<Context>[] = [];
+
+  for (const event of events) {
+    if (!event.winnerId || !event.loserId || event.winnerId === event.loserId) {
+      continue;
+    }
+
+    const winnerBefore = ratings.get(event.winnerId) ?? createInitialRating(options);
+    const loserBefore = ratings.get(event.loserId) ?? createInitialRating(options);
+    const localRatings = new Map<string, Glicko2Rating>([
+      [event.winnerId, winnerBefore],
+      [event.loserId, loserBefore]
+    ]);
+    const localMatches = new Map<string, Glicko2Match[]>([
+      [event.winnerId, [{ opponentId: event.loserId, score: 1 }]],
+      [event.loserId, [{ opponentId: event.winnerId, score: 0 }]]
+    ]);
+    const updated = updateGlicko2RatingPeriod(localRatings, localMatches, options);
+    const winnerAfter = updated.get(event.winnerId) ?? winnerBefore;
+    const loserAfter = updated.get(event.loserId) ?? loserBefore;
+
+    ratings.set(event.winnerId, winnerAfter);
+    ratings.set(event.loserId, loserAfter);
+
+    if (options.captureTimeline || options.onResult) {
+      const buildParticipant = (
+        id: string,
+        score: 0 | 1,
+        expected: number,
+        before: Glicko2Rating,
+        after: Glicko2Rating
+      ): SequentialGlicko2ParticipantResult => {
+        const beforeConservativeRating = getConservativeGlicko2Rating(before);
+        const afterConservativeRating = getConservativeGlicko2Rating(after);
+        return {
+          id,
+          score,
+          expectedScore: expected,
+          before: { ...before },
+          after: { ...after },
+          beforeConservativeRating,
+          afterConservativeRating,
+          ratingDelta: after.rating - before.rating,
+          conservativeRatingDelta: afterConservativeRating - beforeConservativeRating
+        };
+      };
+
+      const timelineEntry = {
+        eventId: event.id,
+        context: event.context,
+        winner: buildParticipant(
+          event.winnerId,
+          1,
+          getGlicko2ExpectedScore(winnerBefore, loserBefore, options),
+          winnerBefore,
+          winnerAfter
+        ),
+        loser: buildParticipant(
+          event.loserId,
+          0,
+          getGlicko2ExpectedScore(loserBefore, winnerBefore, options),
+          loserBefore,
+          loserAfter
+        )
+      } satisfies SequentialGlicko2TimelineEntry<Context>;
+      options.onResult?.(timelineEntry);
+      if (options.captureTimeline) {
+        timeline.push(timelineEntry);
+      }
+    }
+  }
+
+  return { ratings, timeline };
 }

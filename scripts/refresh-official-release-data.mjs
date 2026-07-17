@@ -197,7 +197,7 @@ function exportArtifacts(database, artifactDirectory, summary) {
     path.join(artifactDirectory, "hololive_music_detail_cache.csv"),
     database.select(
       `SELECT youtube_video_id, channel_id, duration_seconds, original_channel_id,
-              provided_to_youtube, song_names_json, mentions_json, collab_channel_ids_json,
+              provided_to_youtube, description, song_names_json, mentions_json, collab_channel_ids_json,
               relationships_loaded, updated_at
        FROM hololive_music_detail_cache
        ORDER BY youtube_video_id`

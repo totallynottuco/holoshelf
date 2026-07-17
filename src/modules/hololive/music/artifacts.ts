@@ -59,6 +59,7 @@ export function parseHolodexDetailCacheJson(text: string): Record<string, Holode
       duration?: number | string | null;
       original_channel_id?: string;
       provided_to_youtube?: boolean;
+      description?: string;
       song_names?: string[];
     }
   >;
@@ -75,6 +76,7 @@ export function parseHolodexDetailCacheJson(text: string): Record<string, Holode
       duration: parseDuration(detail.duration),
       originalChannelId: detail.original_channel_id ?? "",
       providedToYoutube: Boolean(detail.provided_to_youtube),
+      description: detail.description ?? "",
       songNames: Array.isArray(detail.song_names) ? detail.song_names : []
     });
   }

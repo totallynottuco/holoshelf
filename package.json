@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.32",
+  "version": "1.1.52",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -91,7 +91,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "- Added Double Elimination brackets\n- Added bracket zooming, panning, round-focused views, and text search\n- Updated bracket statistics, placements, exports, and match records for Double Elimination\n- Added optional Overview artwork for custom talents\n- Improved startup performance and data loading\n- Song data and filtering updates\n- Bug fixes"
+      "releaseNotes": "- Added Song View to Detailed Stats\n- Added live ratings that update after every completed matchup\n- Added Stat History with match evidence and grouping options\n- Improved Strength of Wins and Losses history tracking\n- Improved talent limits and solo/group song detection\n- Song data, duplicate filtering, and library cleanup updates\n- UI polish and bug fixes"
     },
     "win": {
       "icon": "ico.ico",

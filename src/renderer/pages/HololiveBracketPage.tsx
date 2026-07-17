@@ -12,11 +12,15 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  Minus,
   MoveHorizontal,
   MoveVertical,
+  PanelRightClose,
   RotateCcw,
   Swords,
   Trash2,
+  TrendingDown,
+  TrendingUp,
   Trophy,
   Undo2,
   ZoomIn,
@@ -32,6 +36,10 @@ import type {
   HololiveBracketMatch,
   HololiveBracketRatingBucket,
   HololiveBracketRatingStatsRow,
+  HololiveBracketStatHistoryEntry,
+  HololiveBracketStatHistoryMetric,
+  HololiveBracketStatHistoryResponse,
+  HololiveBracketStatHistorySubject,
   HololiveBracketRound,
   HololiveBracketRivalryStats,
   HololiveBracketSize,
@@ -287,7 +295,7 @@ function youtubeThumbnailUrl(videoId: string): string {
   return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
 }
 
-function displaySongTitle(title: string): string {
+function displaySongTitle(title: string, ownerLabel?: string | null): string {
   const original = title.trim();
   let next = original;
 
@@ -306,6 +314,12 @@ function displaySongTitle(title: string): string {
     .replace(/\s*\((?:official\s*)?(?:music\s*)?(?:video|mv)\)\s*$/iu, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const owner = ownerLabel?.trim();
+  if (owner) {
+    const escapedOwner = owner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    next = next.replace(new RegExp(`^${escapedOwner}\\s*(?:[-–—:|]|／)\\s*`, "iu"), "").trim();
+  }
 
   return next || original;
 }
@@ -611,7 +625,7 @@ function PlaySide({
           <div className="hololive-bracket-arena-meta" title={entryMeta(entry)}>
             <span>{entry.idolName}</span>
             <span>{topicLabel(entry)}</span>
-            {record ? <span className="song-record" title="Archived bracket match record">{record.wins}-{record.losses} W-L</span> : null}
+            {record ? <span className="song-record" title="Bracket match record">{record.wins}-{record.losses} W-L</span> : null}
             <span>{formatHololiveViewCount(entry.viewCount)}</span>
             <span>{formatHololiveSongDate(entry.publishedAt)}</span>
             <span>{formatHololiveDuration(entry.durationSeconds)}</span>
@@ -757,6 +771,12 @@ function formatBracketViewDelta(value: number): string {
 
 function formatBracketViewScore(value: number): string {
   return formatHololiveViewCount(value).replace(/\s+views$/i, "") || "0";
+}
+
+function formatBracketSignedViewScore(value: number): string {
+  const rounded = Math.abs(value) < 0.5 ? 0 : value;
+  const magnitude = formatBracketViewScore(Math.abs(rounded));
+  return `${rounded > 0 ? "+" : rounded < 0 ? "-" : ""}${magnitude}`;
 }
 
 function giantKillerAverageScore(row: HololiveBracketSongStats): number {
@@ -1125,9 +1145,6 @@ function BracketStatsModeToggle({
 type BracketStatsSection = "overview" | "detailed";
 type BracketSongSort = "rating" | "wins" | "winRate" | "titles" | "apps" | "upsets" | "highStakes";
 type BracketTalentSort = "rating" | "wins" | "winRate" | "strength" | "top4" | "titles";
-type BracketStatsDetail =
-  | { kind: "song"; row: HololiveBracketSongStats }
-  | { kind: "talent"; row: HololiveBracketTalentStats };
 
 const BRACKET_STATS_SECTIONS: Array<{ value: BracketStatsSection; label: string }> = [
   { value: "overview", label: "Overview" },
@@ -2603,7 +2620,7 @@ function BracketStatsOverviewView({
       createSongAward(
         "song-under-pressure",
         "Under Pressure",
-        "Results above or below pre-period Glicko expectations from Quarter Finals onward.",
+        "Results above or below pre-match Glicko expectations from Quarter Finals onward.",
         stats.topSongsByPressureEdge,
         talentsById,
         (row) => formatBracketSignedRawScore(row.pressureEdgeScore),
@@ -2686,246 +2703,8 @@ function BracketRivalryTable({
   );
 }
 
-function BracketStatsDetailPanel({
-  detail,
-  songRows,
-  talentRows,
-  rivalryRows,
-  songRatingRows,
-  talentRatingRows,
-  songStatsById,
-  talentStatsById,
-  onClose,
-  onSongSelect,
-  onTalentSelect
-}: {
-  detail: BracketStatsDetail;
-  songRows: HololiveBracketSongStats[];
-  talentRows: HololiveBracketTalentStats[];
-  rivalryRows: HololiveBracketRivalryStats[];
-  songRatingRows: Map<string, HololiveBracketRatingStatsRow>;
-  talentRatingRows: Map<string, HololiveBracketRatingStatsRow>;
-  songStatsById: Map<string, HololiveBracketSongStats>;
-  talentStatsById: Map<string, HololiveBracketTalentStats>;
-  onClose: () => void;
-  onSongSelect: (row: HololiveBracketSongStats) => void;
-  onTalentSelect: (row: HololiveBracketTalentStats) => void;
-}) {
-  const panelRef = useRef<HTMLElement | null>(null);
-  useDismissableLayer({
-    enabled: true,
-    ref: panelRef,
-    onDismiss: onClose
-  });
 
-  if (detail.kind === "song") {
-    const row = detail.row;
-    const rating = songRatingRows.get(row.youtubeVideoId);
-    const talent = row.idolId ? talentStatsById.get(row.idolId) : undefined;
-    const detailStats = [
-      { label: "Rating", value: rating ? formatBracketRating(rating.conservativeRating) : "-" },
-      { label: "Record", value: formatBracketRecord(row) },
-      { label: "Win %", value: formatBracketPercent(row.winRate) },
-      { label: "Apps", value: formatBracketNumber(row.appearances) },
-      { label: "Titles", value: formatBracketNumber(row.championCount) },
-      { label: "Top 4", value: formatBracketNumber(row.top4Count) },
-      { label: "Upsets", value: formatBracketNumber(row.upsetWins) },
-      {
-        label: "Underdog",
-        value:
-          row.punchingAboveOpportunities > 0
-            ? `${formatBracketNumber(row.punchingAboveWins)} of ${formatBracketNumber(row.punchingAboveOpportunities)}`
-            : "-"
-      },
-      {
-        label: "High-Stakes %",
-        value: row.highStakesPerformanceMatches > 0 ? formatBracketPercent(row.highStakesPerformanceRate) : "-"
-      },
-      { label: "High-Stakes", value: row.bigGameScore > 0 ? formatBracketViewScore(row.bigGameScore) : "-" }
-    ];
 
-    return (
-      <aside className="hololive-bracket-detail-panel" ref={panelRef} aria-label="Song stats detail">
-        <header>
-          <div>
-            <span>Song Detail</span>
-            <strong title={row.title}>{displaySongTitle(row.title)}</strong>
-            <small>
-              {row.idolName ?? "Unknown"} / {topicLabel({ topicId: row.topicId ?? "Original_Song" })}
-            </small>
-          </div>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
-        <div className="hololive-bracket-detail-metrics">
-          {detailStats.map((item) => (
-            <article key={item.label}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </article>
-          ))}
-        </div>
-        {rating ? (
-          <p title={`Raw rating ${formatBracketRating(rating.rating)}, volatility ${rating.volatility.toFixed(4)}`}>
-            Rating is conservative Glicko-2: {formatBracketRating(rating.rating)} raw minus &plusmn;{formatBracketRating(rating.ratingDeviation)} uncertainty twice.
-          </p>
-        ) : null}
-        {talent ? (
-          <section>
-            <h3>Talent</h3>
-            <button type="button" className="hololive-bracket-detail-row" onClick={() => onTalentSelect(talent)}>
-              <strong>{talent.idolName}</strong>
-              <span>
-                {formatBracketRecord(talent)} / {formatBracketNumber(talent.championCount)} titles
-              </span>
-            </button>
-          </section>
-        ) : null}
-      </aside>
-    );
-  }
-
-  const row = detail.row;
-  const rating = talentRatingRows.get(row.idolId);
-  const bestSongs = sortBracketSongs(
-    songRows.filter((song) => song.idolId === row.idolId),
-    "wins",
-    songRatingRows
-  ).slice(0, 6);
-  const rivalries = rivalryRows
-    .filter((rivalry) => rivalry.leftIdolId === row.idolId || rivalry.rightIdolId === row.idolId)
-    .slice(0, 6);
-  const detailStats = [
-    { label: "Rating", value: rating ? formatBracketRating(rating.conservativeRating) : "-" },
-    { label: "Record", value: formatBracketRecord(row) },
-    { label: "Win %", value: formatBracketPercent(row.winRate) },
-    { label: "Entries", value: formatBracketNumber(row.appearances) },
-    { label: "Titles", value: formatBracketNumber(row.championCount) },
-    { label: "2nd Places", value: formatBracketNumber(row.runnerUpCount) },
-    { label: "Finals", value: formatBracketNumber(row.finalistCount) },
-    {
-      label: "Final Conv",
-      value: row.finalistCount > 0 ? formatBracketPercent(row.finalsConversionRate) : "-"
-    },
-    { label: "Top 4", value: formatBracketNumber(row.top4Count) },
-    {
-      label: "Deep Rate",
-      value: row.appearances > 0 ? formatBracketPercent(row.deepRunRate) : "-"
-    },
-    {
-      label: "Opp Level",
-      value: row.strengthOfWinsScore > 0 ? formatBracketViewScore(row.strengthOfWinsScore) : "-"
-    },
-    {
-      label: "Loss Level",
-      value: row.strengthOfLossesScore > 0 ? formatBracketViewScore(row.strengthOfLossesScore) : "-"
-    },
-    {
-      label: "Punch Above",
-      value: row.punchingAboveOpportunities > 0 ? formatBracketRawScore(row.punchingAboveScore) : "-"
-    },
-    {
-      label: "Underdog",
-      value:
-        row.punchingAboveOpportunities > 0
-          ? `${formatBracketNumber(row.punchingAboveWins)} of ${formatBracketNumber(row.punchingAboveOpportunities)}`
-          : "-"
-    },
-    {
-      label: "Clutch",
-      value: row.clutchMatches > 0 ? formatBracketRawScore(row.clutchRate) : "-"
-    },
-    {
-      label: "Pressure Edge",
-      value: row.pressureEdgeMatches > 0 ? formatBracketSignedRawScore(row.pressureEdgeScore) : "-"
-    },
-    {
-      label: "Resilience",
-      value: row.upsetResilienceChecks > 0 ? formatBracketRawScore(row.upsetResilienceScore) : "-"
-    },
-    { label: "Early Exits", value: formatBracketNumber(row.earlyExitCount) },
-    {
-      label: "Exit Rate",
-      value: row.appearances > 0 ? formatBracketPercent(row.earlyExitRate) : "-"
-    }
-  ];
-
-  return (
-    <aside className="hololive-bracket-detail-panel" ref={panelRef} aria-label="Talent stats detail">
-      <header>
-        <div>
-          <span>Talent Detail</span>
-          <strong title={row.idolName}>{row.idolName}</strong>
-          <small>
-            {formatBracketRecord(row)} / {formatBracketPercent(row.winRate)} / {formatBracketNumber(row.appearances)} entries
-          </small>
-        </div>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
-      </header>
-      <div className="hololive-bracket-detail-metrics">
-        {detailStats.map((item) => (
-          <article key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </article>
-        ))}
-      </div>
-      {rating ? (
-        <p title={`Raw rating ${formatBracketRating(rating.rating)}, volatility ${rating.volatility.toFixed(4)}`}>
-          Rating is conservative Glicko-2: {formatBracketRating(rating.rating)} raw minus &plusmn;{formatBracketRating(rating.ratingDeviation)} uncertainty twice.
-        </p>
-      ) : null}
-      <section>
-        <h3>Best Songs</h3>
-        {bestSongs.length === 0 ? (
-          <div className="hololive-bracket-detail-empty">No song history yet.</div>
-        ) : (
-          bestSongs.map((song) => (
-            <button type="button" className="hololive-bracket-detail-row" key={song.youtubeVideoId} onClick={() => onSongSelect(song)}>
-              <strong title={song.title}>{displaySongTitle(song.title)}</strong>
-              <span>
-                {formatBracketRecord(song)} / {formatBracketNumber(song.championCount)} titles
-              </span>
-            </button>
-          ))
-        )}
-      </section>
-      <section>
-        <h3>Rivalries</h3>
-        {rivalries.length === 0 ? (
-          <div className="hololive-bracket-detail-empty">No repeat rivalries yet.</div>
-        ) : (
-          rivalries.map((rivalry) => {
-            const otherId = rivalry.leftIdolId === row.idolId ? rivalry.rightIdolId : rivalry.leftIdolId;
-            const other = talentStatsById.get(otherId);
-            return (
-              <button
-                type="button"
-                className="hololive-bracket-detail-row"
-                key={rivalry.key}
-                onClick={() => {
-                  if (other) {
-                    onTalentSelect(other);
-                  }
-                }}
-              >
-                <strong title={`${rivalry.leftIdolName} vs ${rivalry.rightIdolName}`}>
-                  {rivalry.leftIdolName} vs {rivalry.rightIdolName}
-                </strong>
-                <span>
-                  {rivalry.leftWins}-{rivalry.rightWins} / {formatBracketNumber(rivalry.matches)} matches
-                </span>
-              </button>
-            );
-          })
-        )}
-      </section>
-    </aside>
-  );
-}
 
 type DetailedTalentSortKey =
   | "talent"
@@ -2941,22 +2720,47 @@ type DetailedTalentSortKey =
   | "pressure"
   | "overperformer"
   | "reliable";
-type DetailedTalentSortDirection = "asc" | "desc";
+type DetailedSongSortKey =
+  | "song"
+  | "owner"
+  | "rating"
+  | "wins"
+  | "titles"
+  | "runnerUps"
+  | "deepRuns"
+  | "earlyExits"
+  | "strengthWins"
+  | "strengthLosses"
+  | "clutch"
+  | "pressure"
+  | "overperformer"
+  | "reliable";
+type DetailedStatsSortDirection = "asc" | "desc";
 type DetailedTalentRow = { stats: HololiveBracketTalentStats; rating: HololiveBracketRatingStatsRow };
-type DetailedTalentColumn = {
-  key: DetailedTalentSortKey;
+type DetailedSongRow = { stats: HololiveBracketSongStats; rating: HololiveBracketRatingStatsRow };
+type BracketStatHistorySelection = {
+  subject: HololiveBracketStatHistorySubject;
+  subjectId: string;
+  metric: HololiveBracketStatHistoryMetric;
+};
+type DetailedStatsColumn<Row, SortKey extends string> = {
+  key: SortKey;
   label: string;
   tooltip: string;
-  value: (row: DetailedTalentRow) => string;
-  sortValue: (row: DetailedTalentRow) => number | string;
-  detail: (row: DetailedTalentRow) => string;
+  cellClassName?: string;
+  value: (row: Row) => string;
+  sortValue: (row: Row) => number | string;
+  detail: (row: Row) => string;
 };
+type DetailedTalentColumn = DetailedStatsColumn<DetailedTalentRow, DetailedTalentSortKey>;
+type DetailedSongColumn = DetailedStatsColumn<DetailedSongRow, DetailedSongSortKey>;
 
 const DETAILED_TALENT_COLUMNS: DetailedTalentColumn[] = [
   {
     key: "talent",
     label: "Talent",
     tooltip: "Talent name.",
+    cellClassName: "entity talent",
     value: (row) => row.stats.idolName,
     sortValue: (row) => row.stats.idolName,
     detail: (row) => `${formatBracketRecord(row.stats)} across ${formatBracketNumber(row.stats.appearances)} brackets`
@@ -3036,7 +2840,7 @@ const DETAILED_TALENT_COLUMNS: DetailedTalentColumn[] = [
   {
     key: "pressure",
     label: "Under Pressure",
-    tooltip: "Late-round results above or below pre-period Glicko expectations.",
+    tooltip: "Late-round results above or below pre-match Glicko expectations.",
     value: (row) => formatBracketSignedRawScore(row.stats.pressureEdgeScore),
     sortValue: (row) => row.stats.pressureEdgeScore,
     detail: (row) => talentPressureEdgeDetail(row.stats)
@@ -3059,61 +2863,185 @@ const DETAILED_TALENT_COLUMNS: DetailedTalentColumn[] = [
   }
 ];
 
-function BracketDetailedStatsView({ stats }: { stats: HololiveBracketStatsOverview }) {
-  const [sortKey, setSortKey] = useState<DetailedTalentSortKey>("rating");
-  const [sortDirection, setSortDirection] = useState<DetailedTalentSortDirection>("desc");
-  const ratingByTalentId = useMemo(() => new Map(stats.topTalentRatings.map((rating) => [rating.id, rating])), [stats.topTalentRatings]);
-  const rows = useMemo(() => {
-    const column = DETAILED_TALENT_COLUMNS.find((candidate) => candidate.key === sortKey) ?? DETAILED_TALENT_COLUMNS[1];
-    const direction = sortDirection === "desc" ? -1 : 1;
-    return stats.talentStats
-      .flatMap((talent) => {
-        const rating = ratingByTalentId.get(talent.idolId);
-        return rating ? [{ stats: talent, rating } satisfies DetailedTalentRow] : [];
-      })
-      .sort((left, right) => {
-        const leftValue = column.sortValue(left);
-        const rightValue = column.sortValue(right);
-        const comparison =
-          typeof leftValue === "string" && typeof rightValue === "string"
-            ? leftValue.localeCompare(rightValue)
-            : Number(leftValue) - Number(rightValue);
-        return comparison * direction || left.stats.idolName.localeCompare(right.stats.idolName);
-      });
-  }, [ratingByTalentId, sortDirection, sortKey, stats.talentStats]);
+const DETAILED_SONG_COLUMNS: DetailedSongColumn[] = [
+  {
+    key: "song",
+    label: "Song",
+    tooltip: "Canonical song performance.",
+    cellClassName: "entity song",
+    value: (row) => displaySongTitle(row.stats.title),
+    sortValue: (row) => row.stats.title,
+    detail: (row) => row.stats.title
+  },
+  {
+    key: "owner",
+    label: "Talent",
+    tooltip: "Primary talent or owner.",
+    cellClassName: "owner",
+    value: (row) => row.stats.idolName ?? "Unknown",
+    sortValue: (row) => row.stats.idolName ?? "",
+    detail: (row) => row.stats.idolName ?? "Unknown talent"
+  },
+  {
+    key: "rating",
+    label: "Elo Rating",
+    tooltip: "Conservative Glicko-2 rating: rating minus twice the uncertainty.",
+    value: (row) => formatBracketRating(row.rating.conservativeRating),
+    sortValue: (row) => row.rating.conservativeRating,
+    detail: (row) => `Raw ${formatBracketRating(row.rating.rating)} / uncertainty +/-${formatBracketRating(row.rating.ratingDeviation)}`
+  },
+  {
+    key: "wins",
+    label: "Wins",
+    tooltip: "Total matchup wins.",
+    value: (row) => formatBracketNumber(row.stats.wins),
+    sortValue: (row) => row.stats.wins,
+    detail: (row) => songRecordDetail(row.stats)
+  },
+  {
+    key: "titles",
+    label: "Titles",
+    tooltip: "Total bracket championships.",
+    value: (row) => formatBracketNumber(row.stats.championCount),
+    sortValue: (row) => row.stats.championCount,
+    detail: (row) => songFinalsDetail(row.stats)
+  },
+  {
+    key: "runnerUps",
+    label: "2nd Places",
+    tooltip: "Total runner-up finishes.",
+    value: (row) => formatBracketNumber(row.stats.runnerUpCount),
+    sortValue: (row) => row.stats.runnerUpCount,
+    detail: (row) => songFinalsDetail(row.stats)
+  },
+  {
+    key: "deepRuns",
+    label: "Deep Runs",
+    tooltip: "Total bracket appearances reaching the Top 4.",
+    value: (row) => formatBracketNumber(row.stats.top4Count),
+    sortValue: (row) => row.stats.top4Count,
+    detail: (row) => `${row.stats.idolName ?? "Unknown"} / ${formatBracketNumber(row.stats.top4Count)} top 4 / ${formatBracketNumber(row.stats.appearances)} brackets`
+  },
+  {
+    key: "earlyExits",
+    label: "Early Exits",
+    tooltip: "Total first-round eliminations.",
+    value: (row) => formatBracketNumber(row.stats.firstRoundEliminations),
+    sortValue: (row) => row.stats.firstRoundEliminations,
+    detail: (row) => `${row.stats.idolName ?? "Unknown"} / ${formatBracketNumber(row.stats.firstRoundEliminations)} first-round exits / ${formatBracketNumber(row.stats.appearances)} brackets`
+  },
+  {
+    key: "strengthWins",
+    label: "Strength of Wins",
+    tooltip: "Confidence-adjusted typical current view level of defeated songs.",
+    value: (row) => formatBracketViewScore(row.stats.strengthOfWinsScore),
+    sortValue: (row) => row.stats.strengthOfWinsScore,
+    detail: (row) => songStrengthOfWinsDetail(row.stats)
+  },
+  {
+    key: "strengthLosses",
+    label: "Strength of Losses",
+    tooltip: "Confidence-adjusted typical current view level of songs lost to.",
+    value: (row) => formatBracketViewScore(row.stats.strengthOfLossesScore),
+    sortValue: (row) => row.stats.strengthOfLossesScore,
+    detail: (row) => songStrengthOfLossesDetail(row.stats)
+  },
+  {
+    key: "clutch",
+    label: "Most Clutch",
+    tooltip: "Confidence-adjusted performance from Quarter Finals onward.",
+    value: (row) => formatBracketRawScore(row.stats.clutchRate),
+    sortValue: (row) => row.stats.clutchRate,
+    detail: (row) => songClutchDetail(row.stats)
+  },
+  {
+    key: "pressure",
+    label: "Under Pressure",
+    tooltip: "Late-round results above or below pre-match Glicko expectations.",
+    value: (row) => formatBracketSignedRawScore(row.stats.pressureEdgeScore),
+    sortValue: (row) => row.stats.pressureEdgeScore,
+    detail: (row) => songPressureDetail(row.stats)
+  },
+  {
+    key: "overperformer",
+    label: "Overperformer",
+    tooltip: "Confidence-adjusted performance across lower-view underdog opportunities.",
+    value: (row) => formatBracketRawScore(row.stats.punchingAboveScore),
+    sortValue: (row) => row.stats.punchingAboveScore,
+    detail: (row) => songOverperformerDetail(row.stats)
+  },
+  {
+    key: "reliable",
+    label: "Most Reliable",
+    tooltip: "Confidence-adjusted performance across higher-view favorite opportunities.",
+    value: (row) => formatBracketRawScore(row.stats.upsetResilienceScore),
+    sortValue: (row) => row.stats.upsetResilienceScore,
+    detail: (row) => songReliabilityDetail(row.stats)
+  }
+];
 
-  const changeSort = (key: DetailedTalentSortKey) => {
-    if (key === sortKey) {
-      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
-    } else {
-      setSortKey(key);
-      setSortDirection(key === "talent" ? "asc" : "desc");
-    }
-  };
+function BracketDetailedStatsTable<Row, SortKey extends string>({
+  ariaLabel,
+  className,
+  rows,
+  columns,
+  sortKey,
+  sortDirection,
+  onSortChange,
+  rowKey,
+  fallbackLabel,
+  historyTarget,
+  onOpenHistory
+}: {
+  ariaLabel: string;
+  className?: string;
+  rows: Row[];
+  columns: Array<DetailedStatsColumn<Row, SortKey>>;
+  sortKey: SortKey;
+  sortDirection: DetailedStatsSortDirection;
+  onSortChange: (key: SortKey) => void;
+  rowKey: (row: Row) => string;
+  fallbackLabel: (row: Row) => string;
+  historyTarget: (row: Row, columnKey?: SortKey) => BracketStatHistorySelection;
+  onOpenHistory: (selection: BracketStatHistorySelection) => void;
+}) {
+  const sortedRows = useMemo(() => {
+    const column = columns.find((candidate) => candidate.key === sortKey) ?? columns[0];
+    const direction = sortDirection === "desc" ? -1 : 1;
+    return [...rows].sort((left, right) => {
+      const leftValue = column.sortValue(left);
+      const rightValue = column.sortValue(right);
+      const comparison =
+        typeof leftValue === "string" && typeof rightValue === "string"
+          ? leftValue.localeCompare(rightValue)
+          : Number(leftValue) - Number(rightValue);
+      return comparison * direction || fallbackLabel(left).localeCompare(fallbackLabel(right));
+    });
+  }, [columns, fallbackLabel, rows, sortDirection, sortKey]);
 
   return (
-    <section className="hololive-bracket-detailed-stats" aria-label="Detailed talent stats">
+    <section className="hololive-bracket-detailed-stats" aria-label={ariaLabel}>
       <div className="hololive-bracket-detailed-table-scroll">
-        <table className="hololive-bracket-detailed-table">
+        <table className={`hololive-bracket-detailed-table${className ? ` ${className}` : ""}`}>
           <colgroup>
             <col className="detailed-col-rank" />
-            {DETAILED_TALENT_COLUMNS.map((column) => (
+            {columns.map((column) => (
               <col className={`detailed-col-${column.key}`} key={column.key} />
             ))}
           </colgroup>
           <thead>
             <tr>
               <th className="rank" scope="col">#</th>
-              {DETAILED_TALENT_COLUMNS.map((column) => {
+              {columns.map((column) => {
                 const active = column.key === sortKey;
                 return (
                   <th
-                    className={`${column.key === "talent" ? "talent " : ""}column-${column.key}`}
+                    className={`${column.cellClassName ? `${column.cellClassName} ` : ""}column-${column.key}`}
                     scope="col"
                     key={column.key}
                     aria-sort={active ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}
                   >
-                    <button type="button" title={column.tooltip} onClick={() => changeSort(column.key)}>
+                    <button type="button" title={column.tooltip} onClick={() => onSortChange(column.key)}>
                       <span>{column.label}</span>
                       {active ? (sortDirection === "desc" ? <ChevronDown size={13} /> : <ChevronUp size={13} />) : <ArrowUpDown size={12} />}
                     </button>
@@ -3123,15 +3051,41 @@ function BracketDetailedStatsView({ stats }: { stats: HololiveBracketStatsOvervi
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr key={row.stats.idolId}>
+            {sortedRows.map((row, index) => (
+              <tr
+                key={rowKey(row)}
+                tabIndex={0}
+                role="button"
+                aria-label={`Open all match history for ${fallbackLabel(row)}`}
+                onClick={() => onOpenHistory(historyTarget(row))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenHistory(historyTarget(row));
+                  }
+                }}
+              >
                 <td className="rank">{index + 1}</td>
-                {DETAILED_TALENT_COLUMNS.map((column) => (
+                {columns.map((column) => (
                   <td
-                    className={`${column.key === "talent" ? "talent " : ""}column-${column.key}`}
+                    className={`${column.cellClassName ? `${column.cellClassName} ` : ""}column-${column.key}`}
                     data-sort-value={column.sortValue(row)}
                     key={column.key}
                     title={column.detail(row)}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Open ${column.label} history for ${fallbackLabel(row)}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenHistory(historyTarget(row, column.key));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpenHistory(historyTarget(row, column.key));
+                      }
+                    }}
                   >
                     {column.value(row)}
                   </td>
@@ -3142,6 +3096,476 @@ function BracketDetailedStatsView({ stats }: { stats: HololiveBracketStatsOvervi
         </table>
       </div>
     </section>
+  );
+}
+
+function BracketDetailedStatsView({
+  stats,
+  subject,
+  onOpenHistory
+}: {
+  stats: HololiveBracketStatsOverview;
+  subject: "talent" | "song";
+  onOpenHistory: (selection: BracketStatHistorySelection) => void;
+}) {
+  const [talentSortKey, setTalentSortKey] = useState<DetailedTalentSortKey>("rating");
+  const [talentSortDirection, setTalentSortDirection] = useState<DetailedStatsSortDirection>("desc");
+  const [songSortKey, setSongSortKey] = useState<DetailedSongSortKey>("rating");
+  const [songSortDirection, setSongSortDirection] = useState<DetailedStatsSortDirection>("desc");
+  const ratingByTalentId = useMemo(() => new Map(stats.topTalentRatings.map((rating) => [rating.id, rating])), [stats.topTalentRatings]);
+  const ratingBySongId = useMemo(() => new Map(stats.topSongRatings.map((rating) => [rating.id, rating])), [stats.topSongRatings]);
+  const talentRows = useMemo(
+    () =>
+      stats.talentStats.flatMap((talent) => {
+        const rating = ratingByTalentId.get(talent.idolId);
+        return rating ? [{ stats: talent, rating } satisfies DetailedTalentRow] : [];
+      }),
+    [ratingByTalentId, stats.talentStats]
+  );
+  const songRows = useMemo(
+    () =>
+      stats.songStats.flatMap((song) => {
+        const rating = ratingBySongId.get(song.canonicalPerformanceKey);
+        return rating ? [{ stats: song, rating } satisfies DetailedSongRow] : [];
+      }),
+    [ratingBySongId, stats.songStats]
+  );
+
+  const changeTalentSort = (key: DetailedTalentSortKey) => {
+    if (key === talentSortKey) {
+      setTalentSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+    } else {
+      setTalentSortKey(key);
+      setTalentSortDirection(key === "talent" ? "asc" : "desc");
+    }
+  };
+
+  const changeSongSort = (key: DetailedSongSortKey) => {
+    if (key === songSortKey) {
+      setSongSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+    } else {
+      setSongSortKey(key);
+      setSongSortDirection(key === "song" || key === "owner" ? "asc" : "desc");
+    }
+  };
+
+  const metricForColumn = (key?: DetailedTalentSortKey | DetailedSongSortKey): HololiveBracketStatHistoryMetric => {
+    if (!key || key === "talent" || key === "song" || key === "owner") return "matches";
+    return key;
+  };
+
+  if (subject === "song") {
+    return (
+      <BracketDetailedStatsTable
+        ariaLabel="Detailed song stats"
+        className="song-view"
+        rows={songRows}
+        columns={DETAILED_SONG_COLUMNS}
+        sortKey={songSortKey}
+        sortDirection={songSortDirection}
+        onSortChange={changeSongSort}
+        rowKey={(row) => row.stats.canonicalPerformanceKey}
+        fallbackLabel={(row) => row.stats.title}
+        historyTarget={(row, columnKey) =>
+          columnKey === "owner" && row.stats.idolId
+            ? { subject: "talent", subjectId: row.stats.idolId, metric: "matches" }
+            : {
+                subject: "song",
+                subjectId: row.stats.canonicalPerformanceKey,
+                metric: metricForColumn(columnKey)
+              }
+        }
+        onOpenHistory={onOpenHistory}
+      />
+    );
+  }
+
+  return (
+    <BracketDetailedStatsTable
+      ariaLabel="Detailed talent stats"
+      rows={talentRows}
+      columns={DETAILED_TALENT_COLUMNS}
+      sortKey={talentSortKey}
+      sortDirection={talentSortDirection}
+      onSortChange={changeTalentSort}
+      rowKey={(row) => row.stats.idolId}
+      fallbackLabel={(row) => row.stats.idolName}
+      historyTarget={(row, columnKey) => ({
+        subject: "talent",
+        subjectId: row.stats.idolId,
+        metric: metricForColumn(columnKey)
+      })}
+      onOpenHistory={onOpenHistory}
+    />
+  );
+}
+
+type BracketHistoryContributionTone = "positive" | "negative" | "neutral";
+
+interface BracketHistoryRowPresentation {
+  badge: string | null;
+  badgeTitle: string;
+  badgeTone: BracketHistoryContributionTone;
+  directional: boolean;
+  headline: string;
+  headlineTitle: string;
+  context: string;
+  completedAt: string;
+  resultClass: string;
+}
+
+function formatBracketHistoryContribution(value: number): string {
+  const rounded = Math.abs(value) < 0.005 ? 0 : Number(value.toFixed(2));
+  return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}`;
+}
+
+function bracketHistoryContributionTone(value: number): BracketHistoryContributionTone {
+  return value > 0.004 ? "positive" : value < -0.004 ? "negative" : "neutral";
+}
+
+function joinBracketHistoryContext(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part?.trim())).join(" | ");
+}
+
+function bracketHistoryMatchPresentation(
+  entry: Extract<HololiveBracketStatHistoryEntry, { kind: "match" }>,
+  metric: HololiveBracketStatHistoryResponse["metric"],
+  subject: HololiveBracketStatHistoryResponse["subject"],
+  subjectLabel: string | null
+): BracketHistoryRowPresentation {
+  const resultLabel = entry.result === "internal" ? "INTERNAL" : entry.result.toUpperCase();
+  const opponentLabel =
+    subject === "talent" && entry.result !== "internal"
+      ? entry.opponentTalentLabel || entry.opponentSongLabel
+      : displaySongTitle(entry.opponentSongLabel, entry.opponentTalentLabel);
+  const subjectSong = subject === "talent" ? displaySongTitle(entry.subjectSongLabel, subjectLabel) : null;
+  let badge: string | null = entry.result === "win" ? "W" : entry.result === "loss" ? "L" : "I";
+  let badgeTitle = entry.result === "internal" ? "Internal matchup" : `${resultLabel.toLowerCase()} result`;
+  let badgeTone: BracketHistoryContributionTone =
+    entry.result === "win" ? "positive" : entry.result === "loss" ? "negative" : "neutral";
+  let directional = false;
+  let context = joinBracketHistoryContext([subjectSong, entry.roundLabel]);
+
+  if (metric === "wins") {
+    badge = null;
+  } else if (entry.evidence.kind === "strength") {
+    const scoreDelta = Math.abs(entry.evidence.scoreDelta) < 0.5 ? 0 : entry.evidence.scoreDelta;
+    badge = formatBracketSignedViewScore(scoreDelta);
+    badgeTitle = "Effect on final Strength score";
+    badgeTone = bracketHistoryContributionTone(scoreDelta);
+    directional = true;
+    context = joinBracketHistoryContext([
+      subjectSong,
+      entry.roundLabel,
+      `${formatBracketViewScore(entry.evidence.opponentViews)} opponent views`
+    ]);
+  } else if (entry.evidence.kind === "clutch") {
+    const contribution = entry.evidence.signedResult * entry.evidence.roundWeight;
+    badge = formatBracketHistoryContribution(contribution);
+    badgeTitle = "Round-weighted result";
+    badgeTone = bracketHistoryContributionTone(contribution);
+    directional = true;
+    context = joinBracketHistoryContext([
+      subjectSong,
+      entry.roundLabel,
+      `${entry.evidence.roundWeight.toFixed(2)}x impact`
+    ]);
+  } else if (entry.evidence.kind === "pressure") {
+    const contribution = entry.evidence.performanceDelta * entry.evidence.roundWeight;
+    badge = formatBracketHistoryContribution(contribution);
+    badgeTitle = "Expectation performance contribution";
+    badgeTone = bracketHistoryContributionTone(contribution);
+    directional = true;
+    context = joinBracketHistoryContext([
+      subjectSong,
+      `${Math.round(entry.evidence.expectedScore * 100)}% expected win`,
+      entry.roundLabel
+    ]);
+  } else if (entry.evidence.kind === "viewExpectation") {
+    const contribution = entry.evidence.performanceDelta;
+    badge = formatBracketHistoryContribution(contribution);
+    badgeTitle = `${entry.evidence.perspective === "favorite" ? "Favorite" : "Underdog"} performance contribution`;
+    badgeTone = bracketHistoryContributionTone(contribution);
+    directional = true;
+    context = joinBracketHistoryContext([
+      subjectSong,
+      `${entry.evidence.viewRatio.toFixed(2)}x ${entry.evidence.perspective}`,
+      `${Math.round(entry.evidence.expectedScore * 100)}% expected win`
+    ]);
+  }
+
+  return {
+    badge,
+    badgeTitle,
+    badgeTone,
+    directional,
+    headline: `${resultLabel} vs ${opponentLabel}`,
+    headlineTitle: `${resultLabel} vs ${opponentLabel} / ${entry.roundLabel}`,
+    context,
+    completedAt: entry.completedAt,
+    resultClass: entry.result
+  };
+}
+
+function bracketHistoryRatingPresentation(
+  entry: Extract<HololiveBracketStatHistoryEntry, { kind: "rating" }>,
+  subject: HololiveBracketStatHistoryResponse["subject"],
+  subjectLabel: string | null
+): BracketHistoryRowPresentation {
+  const delta = Math.round(entry.conservativeRatingDelta);
+  const opponentLabel = subject === "song" ? displaySongTitle(entry.opponentLabel, entry.opponentDetail) : entry.opponentLabel;
+  const resultLabel = `${entry.result.toUpperCase()} vs ${opponentLabel}`;
+  return {
+    badge: `${delta > 0 ? "+" : ""}${formatBracketNumber(delta)}`,
+    badgeTitle: "Conservative rating change",
+    badgeTone: bracketHistoryContributionTone(delta),
+    directional: true,
+    headline: resultLabel,
+    headlineTitle: `${resultLabel} / ${entry.roundLabel}`,
+    context: joinBracketHistoryContext([
+      subject === "talent" && entry.subjectSongLabel ? displaySongTitle(entry.subjectSongLabel, subjectLabel) : null,
+      `${Math.round(entry.expectedScore * 100)}% expected win`,
+      `${formatBracketRating(entry.beforeConservativeRating)} -> ${formatBracketRating(entry.afterConservativeRating)}`
+    ]),
+    completedAt: entry.completedAt,
+    resultClass: entry.result
+  };
+}
+
+function bracketHistoryPlacementPresentation(
+  entry: Extract<HololiveBracketStatHistoryEntry, { kind: "placement" }>,
+  subject: HololiveBracketStatHistoryResponse["subject"],
+  subjectLabel: string | null
+): BracketHistoryRowPresentation {
+  const labels = { champion: "CHAMPION", runnerUp: "2ND PLACE", top4: "TOP 4", earlyExit: "EARLY EXIT" } as const;
+  const headline = labels[entry.placement];
+  const resultTone: BracketHistoryContributionTone =
+    entry.placement === "champion" || entry.placement === "top4"
+      ? "positive"
+      : entry.placement === "earlyExit"
+        ? "negative"
+        : "neutral";
+  return {
+    badge: null,
+    badgeTitle: `${labels[entry.placement].toLowerCase()} contribution`,
+    badgeTone: resultTone,
+    directional: false,
+    headline,
+    headlineTitle: headline,
+    context: joinBracketHistoryContext([
+      subject === "talent" ? displaySongTitle(entry.subjectSongLabel, subjectLabel) : null,
+      entry.roundLabel,
+      entry.opponentSongLabel ? `vs ${displaySongTitle(entry.opponentSongLabel)}` : null
+    ]),
+    completedAt: entry.completedAt,
+    resultClass: entry.placement
+  };
+}
+
+function BracketStatHistoryShelf({
+  response,
+  loading,
+  loadingMore,
+  onLoadMore,
+  onClose
+}: {
+  response: HololiveBracketStatHistoryResponse | null;
+  loading: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+  onClose: () => void;
+}) {
+  const shelfRef = useRef<HTMLElement | null>(null);
+  useDismissableLayer({ enabled: true, ref: shelfRef, onDismiss: onClose });
+  const [grouping, setGrouping] = useState<"none" | "bracket" | "date">("bracket");
+  const entries = useMemo(
+    () =>
+      [...(response?.entries ?? [])].sort((left, right) => {
+        const dateDifference = Date.parse(right.completedAt) - Date.parse(left.completedAt);
+        return dateDifference || right.eventId.localeCompare(left.eventId);
+      }),
+    [response]
+  );
+  const groups = useMemo(() => {
+    if (grouping === "none") return [];
+    const grouped = new Map<string, HololiveBracketStatHistoryEntry[]>();
+    for (const entry of entries) {
+      const completedAt = new Date(entry.completedAt);
+      const dateKey = `${completedAt.getFullYear()}-${String(completedAt.getMonth() + 1).padStart(2, "0")}-${String(completedAt.getDate()).padStart(2, "0")}`;
+      const key = grouping === "bracket" ? `${entry.bracketId}:${entry.archiveId ?? "active"}` : dateKey;
+      const groupEntries = grouped.get(key) ?? [];
+      groupEntries.push(entry);
+      grouped.set(key, groupEntries);
+    }
+    return [...grouped.entries()]
+      .map(([key, groupEntries]) => ({
+        key,
+        entries: groupEntries,
+        label:
+          grouping === "bracket"
+            ? groupEntries[0].bracketName
+            : new Date(groupEntries[0].completedAt).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: "numeric"
+              })
+      }))
+      .sort((left, right) => {
+        const dateDifference = Date.parse(right.entries[0].completedAt) - Date.parse(left.entries[0].completedAt);
+        return dateDifference || right.key.localeCompare(left.key);
+      });
+  }, [entries, grouping]);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setExpandedGroupKeys((current) => {
+      const availableKeys = new Set(groups.map((group) => group.key));
+      const next = new Set([...current].filter((key) => availableKeys.has(key)));
+      if (next.size === 0 && groups[0]) next.add(groups[0].key);
+      return next;
+    });
+  }, [groups]);
+
+  function renderHistoryRowContent(presentation: BracketHistoryRowPresentation) {
+    const showContribution = presentation.badge != null;
+    return (
+      <div className={`hololive-bracket-history-row-layout has-context${showContribution ? "" : " no-contribution"}`}>
+        {showContribution ? (
+          <span
+            className={`hololive-bracket-history-contribution ${presentation.badgeTone}`}
+            title={presentation.badgeTitle}
+          >
+            {presentation.directional
+              ? presentation.badgeTone === "positive"
+                ? <TrendingUp size={11} />
+                : presentation.badgeTone === "negative"
+                  ? <TrendingDown size={11} />
+                  : <Minus size={11} />
+              : null}
+            {presentation.badge}
+          </span>
+        ) : null}
+        <strong title={presentation.headlineTitle}>{presentation.headline}</strong>
+        <span className="hololive-bracket-history-row-date">
+          <time dateTime={presentation.completedAt}>{new Date(presentation.completedAt).toLocaleDateString()}</time>
+        </span>
+        <small title={presentation.context}>{presentation.context}</small>
+      </div>
+    );
+  }
+
+  function renderHistoryEntry(entry: HololiveBracketStatHistoryEntry) {
+    const metric = response?.metric ?? "matches";
+    const presentation =
+      entry.kind === "rating"
+        ? bracketHistoryRatingPresentation(entry, response?.subject ?? "talent", response?.subjectLabel ?? null)
+        : entry.kind === "placement"
+          ? bracketHistoryPlacementPresentation(entry, response?.subject ?? "talent", response?.subjectLabel ?? null)
+          : bracketHistoryMatchPresentation(entry, metric, response?.subject ?? "talent", response?.subjectLabel ?? null);
+    const key = `${entry.kind}:${entry.eventId}`;
+    return (
+      <article
+        className={`hololive-bracket-history-entry result-${presentation.resultClass}`}
+        key={key}
+      >
+        {renderHistoryRowContent(presentation)}
+      </article>
+    );
+  }
+
+  return (
+    <aside className="hololive-bracket-history-shelf" ref={shelfRef} aria-label="Stat History">
+      <header>
+        <div className="hololive-bracket-history-title-row">
+          <span>Stat History</span>
+          <button type="button" aria-label="Close stat history" title="Close" onClick={onClose}>
+            <PanelRightClose size={17} />
+          </button>
+        </div>
+        <div className="hololive-bracket-history-identity-row">
+          <strong title={[response?.subjectLabel, response?.subjectDetail].filter(Boolean).join(" / ")}>
+            {response?.subjectLabel ?? "Loading history"}
+          </strong>
+          <div className="hololive-bracket-history-controls">
+            <span>Group</span>
+            <CompactSelect
+              ariaLabel="Group stat history"
+              className="hololive-bracket-history-group-select"
+              value={grouping}
+              options={[
+                { value: "bracket", label: "Bracket" },
+                { value: "date", label: "Date" },
+                { value: "none", label: "No grouping" }
+              ]}
+              onChange={setGrouping}
+            />
+          </div>
+        </div>
+      </header>
+      {loading && !response ? (
+        <div className="hololive-bracket-history-state"><Loader2 size={18} className="spin" /> Loading history</div>
+      ) : response ? (
+        <>
+           <div className="hololive-bracket-history-list">
+             {entries.length === 0 ? (
+               <div className="hololive-bracket-history-state">No qualifying history.</div>
+             ) : grouping === "none" ? (
+               <div className="hololive-bracket-history-ungrouped">
+                 {entries.map((entry) => renderHistoryEntry(entry))}
+               </div>
+             ) : (
+               groups.map(({ key, entries: groupEntries, label }) => {
+                 const first = groupEntries[0];
+                 const expanded = expandedGroupKeys.has(key);
+                 return (
+                  <section className="hololive-bracket-history-group" key={key}>
+                    <button
+                      type="button"
+                      className="hololive-bracket-history-group-toggle"
+                      aria-expanded={expanded}
+                      data-latest-at={first.completedAt}
+                      onClick={() => {
+                        setExpandedGroupKeys((current) => {
+                          const next = new Set(current);
+                          next.has(key) ? next.delete(key) : next.add(key);
+                          return next;
+                        });
+                      }}
+                    >
+                      <span className="hololive-bracket-history-group-copy">
+                        <strong title={label}>{label}</strong>
+                        <small>
+                          {groupEntries.length} {groupEntries.length === 1 ? "result" : "results"}
+                        </small>
+                      </span>
+                      <span className="hololive-bracket-history-group-meta">
+                        {grouping === "bracket"
+                          ? first.source === "active"
+                            ? "LIVE"
+                            : new Date(first.completedAt).toLocaleDateString()
+                          : null}
+                        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </span>
+                    </button>
+                    {expanded ? (
+                      <div className="hololive-bracket-history-group-entries">
+                        {groupEntries.map((entry) => renderHistoryEntry(entry))}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })
+            )}
+            {response.hasMore ? (
+              <button type="button" className="hololive-bracket-history-more" disabled={loadingMore} onClick={onLoadMore}>
+                {loadingMore ? <Loader2 size={14} className="spin" /> : null}
+                Load older
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </aside>
   );
 }
 
@@ -3161,9 +3585,81 @@ export function BracketStatsView({
   deletingArchiveId: string | null;
   onDeleteArchive: (archive: HololiveBracketArchiveSummary) => void;
 }) {
+  const { showToast } = useHololiveActionToast();
   const statsViewRef = useRef<HTMLDivElement | null>(null);
+  const historyCacheRef = useRef(new Map<string, HololiveBracketStatHistoryResponse>());
   const [section, setSection] = useState<BracketStatsSection>("overview");
   const [subject, setSubject] = useState<"talent" | "song">("talent");
+  const [historySelection, setHistorySelection] = useState<BracketStatHistorySelection | null>(null);
+  const [historyResponse, setHistoryResponse] = useState<HololiveBracketStatHistoryResponse | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
+
+  const historyCacheKey = useCallback(
+    (selection: BracketStatHistorySelection) => `${format}:${selection.subject}:${selection.subjectId}:${selection.metric}`,
+    [format]
+  );
+
+  const loadHistory = useCallback(
+    async (selection: BracketStatHistorySelection, append = false) => {
+      const key = historyCacheKey(selection);
+      const cached = historyCacheRef.current.get(key) ?? null;
+      if (!append && cached) {
+        setHistoryResponse(cached);
+        return;
+      }
+      append ? setHistoryLoadingMore(true) : setHistoryLoading(true);
+      try {
+        const response = await api.invoke("hololive:brackets:stats:history", {
+          ...selection,
+          format,
+          offset: append ? cached?.entries.length ?? 0 : 0,
+          limit: 50
+        });
+        const next =
+          append && cached
+            ? { ...response, offset: 0, entries: [...cached.entries, ...response.entries] }
+            : response;
+        historyCacheRef.current.set(key, next);
+        setHistoryResponse(next);
+      } catch (error) {
+        showToast({
+          tone: "error",
+          message: "Could not load stat history",
+          detail: error instanceof Error ? error.message : String(error)
+        });
+        if (!append) setHistoryResponse(null);
+      } finally {
+        setHistoryLoading(false);
+        setHistoryLoadingMore(false);
+      }
+    },
+    [format, historyCacheKey, showToast]
+  );
+
+  useEffect(() => {
+    if (!historySelection || section !== "detailed") return;
+    setHistoryResponse(null);
+    void loadHistory(historySelection);
+  }, [format, historyRevision, historySelection, loadHistory, section]);
+
+  useEffect(() => {
+    historyCacheRef.current.clear();
+    setHistoryRevision((current) => current + 1);
+  }, [stats]);
+
+  useEffect(() => {
+    setHistorySelection(null);
+    setHistoryResponse(null);
+  }, [subject]);
+
+  useEffect(() => {
+    if (section !== "detailed") {
+      setHistorySelection(null);
+      setHistoryResponse(null);
+    }
+  }, [section]);
 
   useEffect(() => {
     statsViewRef.current?.scrollTo({ top: 0, left: 0 });
@@ -3203,33 +3699,61 @@ export function BracketStatsView({
             </button>
           ))}
         </div>
-        <CompactSelect
-          ariaLabel="Bracket format history"
-          className="hololive-bracket-stats-format-select"
-          value={format}
-          options={[
-            { value: "all", label: "All Formats" },
-            { value: "single_elimination", label: "Single" },
-            { value: "double_elimination", label: "Double" }
-          ]}
-          onChange={(value) => onFormatChange(value as HololiveBracketStatsFormat)}
-        />
-        {section === "overview" ? (
+        <div className="hololive-bracket-stats-toolbar-controls">
+          <CompactSelect
+            ariaLabel="Bracket format history"
+            className="hololive-bracket-stats-format-select"
+            value={format}
+            options={[
+              { value: "all", label: "All Formats" },
+              { value: "single_elimination", label: "Single" },
+              { value: "double_elimination", label: "Double" }
+            ]}
+            onChange={(value) => onFormatChange(value as HololiveBracketStatsFormat)}
+          />
           <div className="hololive-bracket-stats-scope-switcher" role="group" aria-label="Stats subject">
-            <button type="button" aria-pressed={subject === "talent"} onClick={() => setSubject("talent")}>
+            <button
+              type="button"
+              aria-pressed={subject === "talent"}
+              onClick={() => setSubject("talent")}
+            >
               Talent View
             </button>
-            <button type="button" aria-pressed={subject === "song"} onClick={() => setSubject("song")}>
+            <button
+              type="button"
+              aria-pressed={subject === "song"}
+              onClick={() => setSubject("song")}
+            >
               Song View
             </button>
           </div>
-        ) : null}
+        </div>
       </div>
       {section === "overview" ? (
         <BracketStatsOverviewView stats={stats} talents={talents} subject={subject} />
       ) : (
-        <BracketDetailedStatsView stats={stats} />
+        <BracketDetailedStatsView
+          stats={stats}
+          subject={subject}
+          onOpenHistory={(selection) => {
+            setHistorySelection(selection);
+            setHistoryResponse(null);
+          }}
+        />
       )}
+      {section === "detailed" && historySelection ? (
+        <BracketStatHistoryShelf
+          key={`${format}:${historySelection.subject}:${historySelection.subjectId}:${historySelection.metric}`}
+          response={historyResponse}
+          loading={historyLoading}
+          loadingMore={historyLoadingMore}
+          onLoadMore={() => void loadHistory(historySelection, true)}
+          onClose={() => {
+            setHistorySelection(null);
+            setHistoryResponse(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4024,6 +4548,16 @@ export function HololiveBracketPage() {
     }
   }
 
+  function invalidateBracketStats(refreshLoadedStats = false) {
+    const hadLoadedStats = statsCacheRef.current.size > 0 || statsOverview !== null || playSongStats !== null;
+    statsCacheRef.current.clear();
+    setStatsOverview(null);
+    setPlaySongStats(null);
+    if (refreshLoadedStats && hadLoadedStats) {
+      void loadBracketStats(statsFormat);
+    }
+  }
+
   useEffect(() => {
     void loadInitial();
   }, []);
@@ -4076,7 +4610,7 @@ export function HololiveBracketPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeBracket?.id, mode]);
+  }, [activeBracket?.id, activeBracket?.updatedAt, mode]);
 
   useEffect(() => {
     const stage = activeBracket?.currentMatch?.stage;
@@ -4275,12 +4809,7 @@ export function HololiveBracketPage() {
       });
       setActiveBracket(bracket);
       setSummaries(await api.invoke("hololive:brackets:list", null));
-      if (bracket.status === "complete") {
-        statsCacheRef.current.clear();
-      }
-      if (bracket.status === "complete" && (statsOverview || archiveSummaries.length > 0)) {
-        await loadBracketStats();
-      }
+      invalidateBracketStats(true);
     } catch (nextError) {
       showBracketError(nextError, "Could not save winner");
     } finally {
@@ -4296,6 +4825,7 @@ export function HololiveBracketPage() {
     try {
       setActiveBracket(await api.invoke("hololive:brackets:undo", { bracketId: activeBracket.id }));
       setSummaries(await api.invoke("hololive:brackets:list", null));
+      invalidateBracketStats(true);
     } catch (nextError) {
       showBracketError(nextError, "Could not undo pick");
     } finally {
@@ -4311,6 +4841,7 @@ export function HololiveBracketPage() {
     try {
       setActiveBracket(await api.invoke("hololive:brackets:reset", { bracketId: activeBracket.id }));
       setSummaries(await api.invoke("hololive:brackets:list", null));
+      invalidateBracketStats(true);
     } catch (nextError) {
       showBracketError(nextError, "Could not reset bracket");
     } finally {
@@ -4346,9 +4877,7 @@ export function HololiveBracketPage() {
       const nextSummaries = await api.invoke("hololive:brackets:delete", { bracketId: bracket.id });
       setSummaries(nextSummaries);
       setActiveBracket(nextSummaries[0] ? await api.invoke("hololive:brackets:get", { bracketId: nextSummaries[0].id }) : null);
-      if (bracket.status === "complete" || statsOverview || archiveSummaries.length > 0) {
-        await loadBracketStats();
-      }
+      invalidateBracketStats(true);
     } catch (nextError) {
       showBracketError(nextError, "Could not delete bracket");
     } finally {
@@ -4373,7 +4902,7 @@ export function HololiveBracketPage() {
     setDeletingArchiveId(archive.id);
     try {
       const response = await api.invoke("hololive:brackets:archives:delete", { archiveId: archive.id });
-      statsCacheRef.current.clear();
+      invalidateBracketStats();
       const nextStats = await api.invoke("hololive:brackets:stats", { format: statsFormat });
       setArchiveSummaries(response.data);
       setStatsOverview(nextStats);

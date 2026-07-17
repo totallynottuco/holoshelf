@@ -16,6 +16,12 @@ import { isExcludedHolodexChannelId } from "./types";
 const MIN_FULL_DURATION_SECONDS = 90;
 const LONG_FORM_COMPILATION_MIN_SECONDS = 600;
 export const HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS = 20;
+export const HOLODEX_TOPIC_DUPLICATE_DURATION_MAX_DIFFERENCE_SECONDS = 45;
+export const HOLODEX_TOPIC_DUPLICATE_DURATION_MAX_RATIO = 0.2;
+export const KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS = [
+  { removedYoutubeVideoId: "APB19Vr233c", keptYoutubeVideoId: "LYFciXBcXIQ" },
+  { removedYoutubeVideoId: "ev7menqLdK4", keptYoutubeVideoId: "LYFciXBcXIQ" }
+] as const;
 const OFFICIAL_TITLE_MARKERS = ["official", "mv", "original", "\u30aa\u30ea\u30b8\u30ca\u30eb", "\u30aa\u30ea\u30b8\u30ca\u30eb\u30bd\u30f3\u30b0"];
 const VERSION_KEEP_MARKERS = ["acoustic", "piano", "re paint", "repaint", "live", "tour"];
 const DUPLICATE_CONTEXT_DROP_MARKERS = [
@@ -301,6 +307,7 @@ export function normalizeVideoDetail(videoId: string, detail: Partial<HolodexVid
     duration: parseDuration(detail.duration),
     originalChannelId: detail.originalChannelId?.trim() ?? "",
     providedToYoutube: Boolean(detail.providedToYoutube),
+    description: detail.description?.trim() ?? "",
     songNames: (detail.songNames ?? []).map((songName) => songName.trim()).filter(Boolean),
     channel: detail.channel ?? null,
     mentions: detail.mentions ?? [],
@@ -313,6 +320,24 @@ export function normalizeVideoDetail(videoId: string, detail: Partial<HolodexVid
     ],
     relationshipsLoaded: Boolean(detail.relationshipsLoaded)
   };
+}
+
+export function parseProvidedToYoutubeArtistCredits(description: string | null | undefined): string[] {
+  const lines = (description ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const providerIndex = lines.findIndex((line) => /^Provided to YouTube by\b/iu.test(line));
+  if (providerIndex < 0) {
+    return [];
+  }
+
+  const creditLine = lines[providerIndex + 1] ?? "";
+  const segments = creditLine
+    .split(/\s*[·•]\s*/u)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return segments.length > 1 ? segments.slice(1) : [];
 }
 
 export function hasTopicDuplicateSignal(detail: HolodexVideoDetail | undefined): boolean {
@@ -436,7 +461,50 @@ function hasSimilarDuplicateDuration(
     return true;
   }
 
-  return Math.abs(leftDuration - rightDuration) <= HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS;
+  return hasCompatibleHolodexTopicDuplicateDuration(leftDuration, rightDuration);
+}
+
+export function hasCompatibleHolodexTopicDuplicateDuration(leftDuration: number, rightDuration: number): boolean {
+  const difference = Math.abs(leftDuration - rightDuration);
+  if (difference <= HOLODEX_TOPIC_DUPLICATE_DURATION_TOLERANCE_SECONDS) {
+    return true;
+  }
+
+  const longerDuration = Math.max(leftDuration, rightDuration);
+  return (
+    difference <= HOLODEX_TOPIC_DUPLICATE_DURATION_MAX_DIFFERENCE_SECONDS &&
+    longerDuration > 0 &&
+    difference / longerDuration <= HOLODEX_TOPIC_DUPLICATE_DURATION_MAX_RATIO
+  );
+}
+
+function findKnownDuplicateRemovals(
+  rows: HolodexCatalogRow[],
+  detailsById: Record<string, HolodexVideoDetail>
+): HolodexDuplicateRemoval[] {
+  const rowsById = new Map(rows.map((row) => [row.youtubeVideoId, row]));
+  const removals: HolodexDuplicateRemoval[] = [];
+
+  for (const replacement of KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS) {
+    const removedRow = rowsById.get(replacement.removedYoutubeVideoId);
+    const keptRow = rowsById.get(replacement.keptYoutubeVideoId);
+    if (!removedRow || !keptRow) {
+      continue;
+    }
+
+    removals.push({
+      removedYoutubeVideoId: removedRow.youtubeVideoId,
+      removedTitle: removedRow.title,
+      keptYoutubeVideoId: keptRow.youtubeVideoId,
+      keptTitle: keptRow.title,
+      reason: "known_duplicate_of_official",
+      songName: getPrimarySongName(keptRow, detailsById[keptRow.youtubeVideoId]),
+      removedPublishedAt: removedRow.publishedAt,
+      keptPublishedAt: keptRow.publishedAt
+    });
+  }
+
+  return removals;
 }
 
 function buildCrossOwnerTopicDuplicateGroups(
@@ -616,14 +684,26 @@ export function cleanupCatalogRows(
     ...buildDuplicateCandidateGroups(baseKeptRows, recordsById, detailsById),
     ...buildCrossOwnerTopicDuplicateGroups(baseKeptRows, detailsById, recordsById)
   ];
-  const { removals, duplicateClusterCount } = findDuplicateRemovals(candidateGroups, detailsById, recordsById);
+  const automaticResult = findDuplicateRemovals(candidateGroups, detailsById, recordsById);
+  const knownRemovals = findKnownDuplicateRemovals(baseKeptRows, detailsById);
+  const automaticRemovedIds = new Set(automaticResult.removals.map((removal) => removal.removedYoutubeVideoId));
+  const additionalKnownClusters = new Set(
+    knownRemovals
+      .filter((removal) => !automaticRemovedIds.has(removal.removedYoutubeVideoId))
+      .map((removal) => removal.keptYoutubeVideoId)
+  ).size;
+  const removals = [
+    ...new Map(
+      [...automaticResult.removals, ...knownRemovals].map((removal) => [removal.removedYoutubeVideoId, removal])
+    ).values()
+  ];
   const removedIds = new Set(removals.map((removal) => removal.removedYoutubeVideoId));
 
   return {
     rows: baseKeptRows.filter((row) => !removedIds.has(row.youtubeVideoId)),
     removedByBaseRules,
     removedDuplicateRows: removedIds.size,
-    duplicateClusterCount,
+    duplicateClusterCount: automaticResult.duplicateClusterCount + additionalKnownClusters,
     duplicateRemovals: removals
   };
 }
