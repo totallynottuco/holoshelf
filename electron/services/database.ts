@@ -1435,7 +1435,7 @@ export class DatabaseService {
       this.backfillHololiveMusicClassifications();
       this.migrateHololiveMusicMarkersToKeyedSchema();
       this.backfillHololiveMusicMarkerFallbackKeys();
-      this.repairHololiveMusicDuplicateRows("startup");
+      this.repairHololiveMusicDuplicateRows();
       this.normalizeAllHololiveMusicPlaylistItemPositions();
       this.persistSettingValue(STARTUP_MAINTENANCE_SETTING, STARTUP_MAINTENANCE_VERSION);
       this.persistSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING, this.getStartupMaintenanceFingerprint());
@@ -1949,8 +1949,9 @@ export class DatabaseService {
     this.purgeRejectedHolodexMusicRows();
   }
 
-  repairHololiveMusicDuplicateRows(runId = "repair"): number {
+  repairHololiveMusicDuplicateRows(runId: string | null = null): number {
     let repairedRows = 0;
+    const repairStartedAt = new Date().toISOString();
     const repair = () => {
       this.upsertKnownHololiveDuplicateReplacementRows(runId);
       repairedRows += this.applyStoredHololiveDuplicateRemovalRows(runId);
@@ -1959,9 +1960,9 @@ export class DatabaseService {
       repairedRows += this.purgeCanonicalVariantDuplicateRows(runId);
       repairedRows += this.purgeSupersededDirectUploadRows(runId);
       if (repairedRows > 0) {
-        this.transferHololiveMusicMarkersFromDuplicateRemovals(runId);
+        this.transferHololiveMusicMarkersFromDuplicateRemovals(runId, repairStartedAt);
       }
-      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId);
+      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId, repairStartedAt);
     };
 
     if (this.inTransaction) {
@@ -11767,7 +11768,7 @@ export class DatabaseService {
     }
   }
 
-  private upsertHolodexDuplicateRemovals(removals: HolodexDuplicateRemoval[], runId: string): void {
+  private upsertHolodexDuplicateRemovals(removals: HolodexDuplicateRemoval[], runId: string | null): void {
     const now = new Date().toISOString();
 
     for (const removal of removals) {
@@ -11809,7 +11810,7 @@ export class DatabaseService {
     }
   }
 
-  private upsertKnownHololiveDuplicateReplacementRows(runId: string): void {
+  private upsertKnownHololiveDuplicateReplacementRows(runId: string | null): void {
     const videoIds = [
       ...new Set(
         KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS.flatMap((replacement) => [
@@ -11859,7 +11860,7 @@ export class DatabaseService {
     this.upsertHolodexDuplicateRemovals(removals, runId);
   }
 
-  private applyStoredHololiveDuplicateRemovalRows(runId: string): number {
+  private applyStoredHololiveDuplicateRemovalRows(runId: string | null): number {
     const rows = this.select<{
       removed_youtube_video_id: string;
       removed_title: string;
@@ -12091,7 +12092,7 @@ export class DatabaseService {
     }
   }
 
-  private purgeCanonicalTopicDuplicateRows(runId: string): number {
+  private purgeCanonicalTopicDuplicateRows(runId: string | null): number {
     const rows = this.select<{
       youtube_video_id: string;
       title: string;
@@ -12161,7 +12162,7 @@ export class DatabaseService {
     return removals.length;
   }
 
-  private purgeCrossOwnerTopicDuplicateRows(runId: string): number {
+  private purgeCrossOwnerTopicDuplicateRows(runId: string | null): number {
     const rows = this.select<HololiveStoredMusicDuplicateRow>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
               v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds, stats.view_count, v.published_at,
@@ -12298,7 +12299,7 @@ export class DatabaseService {
     return signals;
   }
 
-  private purgeCanonicalVariantDuplicateRows(runId: string): number {
+  private purgeCanonicalVariantDuplicateRows(runId: string | null): number {
     const rows = this.select<{
       youtube_video_id: string;
       title: string;
@@ -12420,7 +12421,7 @@ export class DatabaseService {
     return removals.length;
   }
 
-  private purgeSupersededDirectUploadRows(runId: string): number {
+  private purgeSupersededDirectUploadRows(runId: string | null): number {
     const rows = this.select<{
       youtube_video_id: string;
       title: string;
@@ -12577,18 +12578,29 @@ export class DatabaseService {
     return [...keys];
   }
 
-  private transferHololiveMusicReferencesFromDuplicateRemovals(runId: string): void {
-    const removals = this.select<{
+  private selectHololiveMusicDuplicateRemovalsForTransfer(
+    runId: string | null,
+    updatedSince: string | null = null
+  ): Array<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null }> {
+    const sourceFilter = runId ? "source_run_id = ?" : "source_run_id IS NULL AND updated_at >= ?";
+    return this.select<{
       removed_youtube_video_id: string;
       kept_youtube_video_id: string | null;
     }>(
       `SELECT removed_youtube_video_id, kept_youtube_video_id
        FROM hololive_music_duplicate_removals
-       WHERE source_run_id = ?
+       WHERE ${sourceFilter}
          AND kept_youtube_video_id IS NOT NULL
          AND kept_youtube_video_id != ''`,
-      [runId]
+      [runId ?? updatedSince ?? ""]
     );
+  }
+
+  private transferHololiveMusicReferencesFromDuplicateRemovals(
+    runId: string | null,
+    updatedSince: string | null = null
+  ): void {
+    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince);
     if (removals.length === 0) {
       return;
     }
@@ -12684,18 +12696,11 @@ export class DatabaseService {
     }
   }
 
-  private transferHololiveMusicMarkersFromDuplicateRemovals(runId: string): void {
-    const removals = this.select<{
-      removed_youtube_video_id: string;
-      kept_youtube_video_id: string | null;
-    }>(
-      `SELECT removed_youtube_video_id, kept_youtube_video_id
-       FROM hololive_music_duplicate_removals
-       WHERE source_run_id = ?
-         AND kept_youtube_video_id IS NOT NULL
-         AND kept_youtube_video_id != ''`,
-      [runId]
-    );
+  private transferHololiveMusicMarkersFromDuplicateRemovals(
+    runId: string | null,
+    updatedSince: string | null = null
+  ): void {
+    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince);
     if (removals.length === 0) {
       return;
     }

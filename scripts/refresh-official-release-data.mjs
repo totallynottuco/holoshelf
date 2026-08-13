@@ -487,7 +487,7 @@ async function main() {
       log("Skipping YouTube stats refresh");
     }
 
-    const repairedDuplicateRows = database.repairHololiveMusicDuplicateRows("release-data-refresh");
+    const repairedDuplicateRows = database.repairHololiveMusicDuplicateRows();
     if (repairedDuplicateRows > 0) {
       log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
     }

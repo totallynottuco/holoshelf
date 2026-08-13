@@ -13,7 +13,7 @@ function Show-Help {
   Write-Host ""
   Write-Host "This bumps the patch version, builds the production Windows installer,"
   Write-Host "installs it over the current per-user Holoshelf install, and verifies"
-  Write-Host "the installed executable version."
+  Write-Host "the installed executable and bundled-data versions in AppData."
   Write-Host ""
   Write-Host "Double-click Update Installed App.cmd from the project root, or run:"
   Write-Host "  npm run release:update:installed"
@@ -62,6 +62,18 @@ function Read-PackageVersion {
   return [string]$packageJson.version
 }
 
+function Test-VersionInstalled {
+  param([Parameter(Mandatory = $true)][string]$Version)
+
+  $installedPath = Join-Path $env:LOCALAPPDATA "Programs\Holoshelf\Holoshelf.exe"
+  if (-not (Test-Path -LiteralPath $installedPath)) {
+    return $false
+  }
+
+  $installedVersion = [string](Get-Item -LiteralPath $installedPath).VersionInfo.ProductVersion
+  return $installedVersion.StartsWith($Version)
+}
+
 Write-Host ""
 Write-Host "Holoshelf installed app updater"
 Write-Host "This installs the current project code as a new local production build."
@@ -79,23 +91,40 @@ Write-Host "Installed target: $env:LOCALAPPDATA\Programs\Holoshelf\Holoshelf.exe
 Write-Host ""
 Write-Host "This will:"
 Write-Host "  1. Bump package.json to the next patch version."
-Write-Host "  2. Build the real unsigned Windows installer."
+Write-Host "  2. Build the real unsigned Windows installer with the current release seed."
 Write-Host "  3. Close Holoshelf if it is running."
 Write-Host "  4. Install the new build over your current per-user install."
-Write-Host "  5. Verify the installed executable version."
+Write-Host "  5. Launch Holoshelf and verify the release data was applied to AppData."
 
 if (-not $Yes -and -not (Read-YesNo "Start the local installed-app update now?" $true)) {
   Write-Host "Cancelled."
   exit 0
 }
 
-Invoke-Npm @("run", "release:bump:patch")
-$newVersion = Read-PackageVersion
+$packageJsonPath = Join-Path $projectRoot "package.json"
+$packageLockPath = Join-Path $projectRoot "package-lock.json"
+$packageJsonBefore = [IO.File]::ReadAllBytes($packageJsonPath)
+$packageLockBefore = if (Test-Path -LiteralPath $packageLockPath) { [IO.File]::ReadAllBytes($packageLockPath) } else { $null }
+$newVersion = ""
+
+try {
+  Invoke-Npm @("run", "release:bump:patch")
+  $newVersion = Read-PackageVersion
+
+  Write-Host ""
+  Write-Host "Version bumped: $oldVersion -> $newVersion"
+  Invoke-Npm @("run", "release:install:local:prepared")
+} catch {
+  if (-not [string]::IsNullOrWhiteSpace($newVersion) -and -not (Test-VersionInstalled -Version $newVersion)) {
+    [IO.File]::WriteAllBytes($packageJsonPath, $packageJsonBefore)
+    if ($null -ne $packageLockBefore) {
+      [IO.File]::WriteAllBytes($packageLockPath, $packageLockBefore)
+    }
+    Write-Warning "Installation did not reach $newVersion; restored package.json and package-lock.json to $oldVersion."
+  }
+  throw
+}
 
 Write-Host ""
-Write-Host "Version bumped: $oldVersion -> $newVersion"
-Invoke-Npm @("run", "release:install:local")
-
-Write-Host ""
-Write-Host "Done. Holoshelf $newVersion is installed locally."
+Write-Host "Done. Holoshelf $newVersion is installed and its AppData merge is verified."
 Write-Host "Use this updater again whenever you want the installed app to pick up the latest project code."

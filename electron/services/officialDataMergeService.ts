@@ -611,7 +611,7 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         imageCacheRows: upsertRows(options.database, "hololive_image_cache", imageCacheRows, ["idol_id", "kind"])
       };
       options.database.repairHololiveMusicClassifications();
-      options.database.repairHololiveMusicDuplicateRows("official-data-merge");
+      options.database.repairHololiveMusicDuplicateRows();
       options.database.repairRejectedHololiveMusicRows();
 
       const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);

@@ -596,6 +596,7 @@ describe("mergeBundledOfficialData", () => {
     )?.id;
     expect(playlistId).toBeTruthy();
     user.database.addHololiveMusicPlaylistItem({ playlistId: playlistId ?? "", youtubeVideoId: "kamouflage-3d-live" });
+    user.database.run("PRAGMA foreign_keys = ON");
 
     await mergeBundledOfficialData({
       database: user.database,
@@ -621,7 +622,11 @@ describe("mergeBundledOfficialData", () => {
         ?.items?.map((item) => item.youtubeVideoId)
     ).toEqual(["kamouflage-official"]);
     expect(
-      user.database.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string; source_run_id: string }>(
+      user.database.select<{
+        removed_youtube_video_id: string;
+        kept_youtube_video_id: string;
+        source_run_id: string | null;
+      }>(
         `SELECT removed_youtube_video_id, kept_youtube_video_id, source_run_id
          FROM hololive_music_duplicate_removals
          WHERE removed_youtube_video_id = 'kamouflage-3d-live'`
@@ -630,7 +635,7 @@ describe("mergeBundledOfficialData", () => {
       {
         removed_youtube_video_id: "kamouflage-3d-live",
         kept_youtube_video_id: "kamouflage-official",
-        source_run_id: "official-data-merge"
+        source_run_id: null
       }
     ]);
   });

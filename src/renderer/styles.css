@@ -4633,7 +4633,7 @@ select {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 10px 14px 12px;
+  padding: 0 14px 12px;
 }
 
 .hololive-bracket-canvas {
@@ -4720,7 +4720,7 @@ select {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 10px 14px 12px;
+  padding: 0 14px 12px;
 }
 
 .hololive-double-bracket-content {
@@ -4930,24 +4930,31 @@ select {
 }
 
 .hololive-bracket-round header {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 24px;
   padding: 0 4px;
   border-bottom: 1px solid rgba(64, 171, 210, 0.22);
+  background: #071923;
+  box-shadow:
+    -11px 0 0 #071923,
+    11px 0 0 #071923,
+    0 5px 8px rgba(2, 12, 18, 0.34);
   text-align: center;
 }
 
 .hololive-bracket-round.current header {
   border-color: rgba(93, 218, 255, 0.58);
-  background: linear-gradient(90deg, rgba(42, 167, 225, 0.14), rgba(42, 167, 225, 0));
+  background: linear-gradient(90deg, rgba(42, 167, 225, 0.14), rgba(42, 167, 225, 0)), #071923;
 }
 
 .hololive-bracket-round.complete header {
   border-color: rgba(89, 218, 168, 0.34);
-  background: linear-gradient(90deg, rgba(49, 177, 127, 0.1), rgba(49, 177, 127, 0));
+  background: linear-gradient(90deg, rgba(49, 177, 127, 0.1), rgba(49, 177, 127, 0)), #071923;
 }
 
 .hololive-bracket-round header strong {

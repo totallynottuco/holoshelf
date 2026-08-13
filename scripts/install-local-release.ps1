@@ -12,8 +12,22 @@ if (-not (Test-Path -LiteralPath $installerPath)) {
 
 $running = Get-Process -Name "Holoshelf" -ErrorAction SilentlyContinue
 if ($running) {
-  $running | Stop-Process -Force
-  Start-Sleep -Seconds 1
+  foreach ($process in $running) {
+    if ($process.MainWindowHandle -ne 0) {
+      [void]$process.CloseMainWindow()
+    }
+  }
+
+  $closeDeadline = (Get-Date).AddSeconds(5)
+  do {
+    Start-Sleep -Milliseconds 250
+    $remaining = Get-Process -Name "Holoshelf" -ErrorAction SilentlyContinue
+  } while ($remaining -and (Get-Date) -lt $closeDeadline)
+
+  if ($remaining) {
+    $remaining | Stop-Process -Force
+    Start-Sleep -Milliseconds 500
+  }
 }
 
 Start-Process -FilePath $installerPath -ArgumentList "/S", "/currentuser" -Wait
@@ -29,3 +43,13 @@ if (-not $installedVersion.StartsWith($version)) {
 }
 
 Write-Host "Installed Holoshelf $installedVersion at $installPath"
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  throw "node was not found on PATH, so the installed data merge could not be verified."
+}
+
+Write-Host "Launching Holoshelf and verifying the installed release data merge..."
+& node (Join-Path $projectRoot "scripts\verify-installed-data-merge.mjs") "--installed-exe=$installPath"
+if ($LASTEXITCODE -ne 0) {
+  throw "Installed release-data verification failed with exit code $LASTEXITCODE."
+}

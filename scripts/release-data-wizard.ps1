@@ -11,7 +11,7 @@ function Show-Help {
   Write-Host "Holoshelf release data updater"
   Write-Host ""
   Write-Host "This wizard prompts for API keys, refreshes the release source database,"
-  Write-Host "regenerates resources\seed, and can optionally bump/install a local patch update."
+  Write-Host "regenerates resources\seed, and can optionally install and verify that exact seed."
   Write-Host ""
   Write-Host "Double-click Update Release Data.cmd from the project root, or run:"
   Write-Host "  npm run release:data:wizard"
@@ -77,6 +77,23 @@ function Invoke-Npm {
   if ($LASTEXITCODE -ne 0) {
     throw "npm $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
   }
+}
+
+function Read-PackageVersion {
+  $packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
+  return [string]$packageJson.version
+}
+
+function Test-VersionInstalled {
+  param([Parameter(Mandatory = $true)][string]$Version)
+
+  $installedPath = Join-Path $env:LOCALAPPDATA "Programs\Holoshelf\Holoshelf.exe"
+  if (-not (Test-Path -LiteralPath $installedPath)) {
+    return $false
+  }
+
+  $installedVersion = [string](Get-Item -LiteralPath $installedPath).VersionInfo.ProductVersion
+  return $installedVersion.StartsWith($Version)
 }
 
 function Read-HolodexKey {
@@ -157,15 +174,38 @@ try {
   Invoke-Npm $refreshArguments
 
   if ($installLocalUpdate) {
-    Invoke-Npm @("run", "release:bump:patch")
-    Invoke-Npm @("run", "release:install:local")
+    $packageJsonPath = Join-Path $projectRoot "package.json"
+    $packageLockPath = Join-Path $projectRoot "package-lock.json"
+    $packageJsonBefore = [IO.File]::ReadAllBytes($packageJsonPath)
+    $packageLockBefore = if (Test-Path -LiteralPath $packageLockPath) { [IO.File]::ReadAllBytes($packageLockPath) } else { $null }
+    $oldVersion = Read-PackageVersion
+    $newVersion = ""
+
+    try {
+      Invoke-Npm @("run", "release:bump:patch")
+      $newVersion = Read-PackageVersion
+      Invoke-Npm @("run", "release:install:local:refreshed")
+    } catch {
+      if (-not [string]::IsNullOrWhiteSpace($newVersion) -and -not (Test-VersionInstalled -Version $newVersion)) {
+        [IO.File]::WriteAllBytes($packageJsonPath, $packageJsonBefore)
+        if ($null -ne $packageLockBefore) {
+          [IO.File]::WriteAllBytes($packageLockPath, $packageLockBefore)
+        }
+        Write-Warning "Installation did not reach $newVersion; restored package files to $oldVersion."
+      }
+      throw
+    }
   }
 
   $packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
   Write-Host ""
   Write-Host "Done."
   Write-Host "Current package version: $($packageJson.version)"
-  Write-Host "Fresh installs now use the regenerated seed. Existing installs merge it after updating."
+  if ($installLocalUpdate) {
+    Write-Host "Fresh installs use the regenerated seed, and the installed AppData merge was verified."
+  } else {
+    Write-Host "Fresh installs will use the regenerated seed after the next packaged update."
+  }
 } finally {
   if ($null -eq $previousHolodexKey) {
     Remove-Item Env:\HOLODEX_API_KEY -ErrorAction SilentlyContinue

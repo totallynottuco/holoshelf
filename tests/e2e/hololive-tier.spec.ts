@@ -670,6 +670,10 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await expect(page.locator(".hololive-bracket-match.current")).toHaveCount(1);
   await expect(page.locator(".hololive-bracket-round.current").first()).toBeVisible();
   await expect(page.locator(".hololive-bracket-round-state")).toHaveCount(0);
+  await expect(page.locator(".hololive-bracket-tree")).toHaveCSS("padding-top", "0px");
+  const bracketRoundHeader = page.locator(".hololive-bracket-round > header").first();
+  await expect(bracketRoundHeader).toHaveCSS("position", "sticky");
+  await expect(bracketRoundHeader).toHaveCSS("top", "0px");
 
   await page.getByRole("button", { name: "Play" }).click();
   await page.locator(".hololive-bracket-pick-button").first().click();

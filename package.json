@@ -1,13 +1,15 @@
 {
   "name": "holoshelf",
-  "version": "1.1.52",
+  "version": "1.1.67",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -w -p tsconfig.electron.json\" \"wait-on tcp:5173 file:dist-electron/electron/main.js && electron .\"",
-    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "build:electron": "tsc -p tsconfig.electron.json --incremental --tsBuildInfoFile dist-electron/.electron.tsbuildinfo",
+    "build:renderer": "tsc --noEmit -p tsconfig.json --incremental --tsBuildInfoFile dist-electron/.renderer.tsbuildinfo && vite build",
     "start": "npm run build && electron .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json --incremental --tsBuildInfoFile dist-electron/.renderer-typecheck.tsbuildinfo && tsc --noEmit -p tsconfig.electron.json --incremental --tsBuildInfoFile dist-electron/.electron-typecheck.tsbuildinfo",
     "test": "vitest run",
     "test:changed": "vitest run --changed HEAD",
     "test:watch": "vitest",
@@ -18,7 +20,7 @@
     "verify:ci": "npm run build && npm test && npm run e2e",
     "release:clean": "node -e \"require('fs').rmSync('release',{recursive:true,force:true})\"",
     "release:seed": "node scripts/create-release-seed.mjs",
-    "release:data:refresh": "npm run build && node scripts/refresh-official-release-data.mjs",
+    "release:data:refresh": "npm run build:electron && node scripts/refresh-official-release-data.mjs",
     "release:data:wizard": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-data-wizard.ps1",
     "official-data:refresh": "npm run release:data:refresh",
     "release:check-version": "node scripts/assert-release-version.mjs",
@@ -31,14 +33,22 @@
     "release:verify-published": "node scripts/verify-published-release.mjs",
     "release:local": "npm run package:installer && npm run release:assert",
     "release:install:local": "npm run release:local && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-release.ps1",
+    "release:local:prepared": "npm run release:audit && npm run package:installer:prepared && npm run release:assert",
+    "release:install:local:prepared": "npm run release:local:prepared && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-release.ps1",
+    "release:local:refreshed": "npm run release:audit && npm run package:installer:refreshed && npm run release:assert",
+    "release:install:local:refreshed": "npm run release:local:refreshed && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-release.ps1",
     "release:update:installed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-installed-app.ps1 -Yes",
-    "release:data:local": "npm run release:data:refresh && npm run release:bump:patch && npm run release:install:local",
+    "release:data:local": "npm run release:data:refresh && npm run release:bump:patch && npm run release:install:local:refreshed",
     "release:bump:patch": "npm version patch --no-git-tag-version",
     "release:bump:minor": "npm version minor --no-git-tag-version",
     "release:bump:major": "npm version major --no-git-tag-version",
     "release:ci": "npm run release:verify:ci && npm run release:clean && electron-builder --win --dir --publish never && node scripts/apply-win-resources.mjs && node scripts/write-app-update-config.mjs && electron-builder --win --prepackaged release/win-unpacked --publish always && npm run release:assert",
     "package:exe": "npm run release:clean && npm run release:seed && npm run build && electron-builder --win --dir --publish never && node scripts/apply-win-resources.mjs && node scripts/write-app-update-config.mjs",
     "package:installer": "npm run package:exe && electron-builder --win --prepackaged release/win-unpacked --publish never",
+    "package:exe:prepared": "npm run release:clean && npm run build && electron-builder --win --dir --publish never && node scripts/apply-win-resources.mjs && node scripts/write-app-update-config.mjs",
+    "package:installer:prepared": "npm run package:exe:prepared && electron-builder --win --prepackaged release/win-unpacked --publish never",
+    "package:exe:refreshed": "npm run release:clean && npm run build:renderer && electron-builder --win --dir --publish never && node scripts/apply-win-resources.mjs && node scripts/write-app-update-config.mjs",
+    "package:installer:refreshed": "npm run package:exe:refreshed && electron-builder --win --prepackaged release/win-unpacked --publish never",
     "clean": "node scripts/clean-generated.mjs"
   },
   "keywords": [
@@ -93,7 +103,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "- Added Song View to Detailed Stats\n- Added live ratings that update after every completed matchup\n- Added Stat History with match evidence and grouping options\n- Improved Strength of Wins and Losses history tracking\n- Improved talent limits and solo/group song detection\n- Song data, duplicate filtering, and library cleanup updates\n- UI polish and bug fixes"
+      "releaseNotes": "- Song updates"
     },
     "win": {
       "icon": "ico.ico",
