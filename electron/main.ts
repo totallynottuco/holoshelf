@@ -9,6 +9,7 @@ import { HolodexMusicService } from "./services/holodexMusicService";
 import { mergeBundledOfficialData } from "./services/officialDataMergeService";
 import { UpdateService } from "./services/updateService";
 import { YouTubeVideoStatsService } from "./services/youtubeVideoStatsService";
+import { CatalogUpdateService } from "./services/catalogUpdateService";
 import { createSourceAdapters, trackerModules } from "../src/modules/registry";
 import { installIpcHandlers } from "./ipcHandlers";
 
@@ -380,6 +381,14 @@ async function createMainWindow(): Promise<void> {
   const fetchScheduler = new FetchScheduler(database, createSourceAdapters());
   const holodexMusicService = new HolodexMusicService(database);
   const youtubeVideoStatsService = new YouTubeVideoStatsService(database);
+  const catalogUpdateService = new CatalogUpdateService({
+    database, paths, appVersion: app.getVersion(), log: writeAppLog,
+    onApplied(version) {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("catalog:updated", {version});
+    }
+  });
+  mainWindow.on("closed", () => catalogUpdateService.stop());
+  app.once("before-quit", () => catalogUpdateService.stop());
   const updateService = new UpdateService({
     isPackaged: app.isPackaged,
     currentVersion: app.getVersion(),
@@ -406,6 +415,7 @@ async function createMainWindow(): Promise<void> {
     fetchScheduler,
     holodexMusicService,
     youtubeVideoStatsService,
+    catalogUpdateService,
     updateService,
     restartApp() {
       app.relaunch();
@@ -428,6 +438,7 @@ async function createMainWindow(): Promise<void> {
     writeAppLog(`[startup] official data ready in ${Date.now() - mergeStartedAt}ms`);
     await mainWindow.loadURL("app://holoshelf/index.html");
     void updateService.checkForUpdates();
+    catalogUpdateService.start();
   } else {
     await mainWindow.loadURL("http://127.0.0.1:5173");
   }

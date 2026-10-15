@@ -27,6 +27,7 @@ import { getAppPaths } from "./services/appPaths";
 import { HolodexMusicService } from "./services/holodexMusicService";
 import type { UpdateService } from "./services/updateService";
 import type { YouTubeVideoStatsService } from "./services/youtubeVideoStatsService";
+import type { CatalogUpdateService } from "./services/catalogUpdateService";
 
 const TRANSPARENT_PIXEL = { r: 0, g: 0, b: 0, alpha: 0 };
 const HOLOLIVE_IMAGE_CACHE_VERSION = 6;
@@ -516,6 +517,7 @@ export interface IpcContext {
   holodexMusicService: HolodexMusicService;
   youtubeVideoStatsService: YouTubeVideoStatsService;
   updateService: UpdateService;
+  catalogUpdateService?: CatalogUpdateService;
   restartApp: () => void;
 }
 
@@ -621,6 +623,16 @@ function restartAfterDataChange(context: IpcContext): void {
 }
 
 export function installIpcHandlers(context: IpcContext): void {
+  function handle<C extends keyof IpcChannelMap>(
+    channel: C,
+    listener: (event: Electron.IpcMainInvokeEvent, payload: IpcChannelMap[C]["request"]) => Promise<IpcChannelMap[C]["response"]> | IpcChannelMap[C]["response"]
+  ): void {
+    ipcMain.handle(channel, (event, payload) => {
+      const work = async () => listener(event, payload);
+      return context.catalogUpdateService && channel.startsWith("hololive:") && /refresh|import-artifacts/.test(channel)
+        ? context.catalogUpdateService.withLocalRefresh(work) : work();
+    });
+  }
   handle("app:bootstrap", async (): Promise<AppBootstrap> => ({
     appName: context.appName,
     dataDirectory: context.dataDirectory,
@@ -1779,14 +1791,4 @@ async function deleteSupersededHololiveImageFiles(
   } catch {
     // Cache cleanup is best-effort; a failed cleanup should never block profile loading.
   }
-}
-
-function handle<C extends keyof IpcChannelMap>(
-  channel: C,
-  listener: (
-    event: Electron.IpcMainInvokeEvent,
-    payload: IpcChannelMap[C]["request"]
-  ) => Promise<IpcChannelMap[C]["response"]> | IpcChannelMap[C]["response"]
-): void {
-  ipcMain.handle(channel, listener as never);
 }

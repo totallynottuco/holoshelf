@@ -857,6 +857,13 @@ export function HololivePage() {
     storeTierData(next);
   }
 
+  useEffect(() => api.onCatalogUpdated(() => {
+    setProfileCache({});
+    void loadTierData().catch(() => undefined);
+    if (activeProfileId) void api.invoke("hololive:idol:profile", {idolId: activeProfileId})
+      .then(profile => setProfileCache(current => ({...current, [activeProfileId]: profile}))).catch(() => undefined);
+  }), [activeBoardId, activeProfileId]);
+
   useEffect(() => {
     void loadTierData(null);
   }, []);

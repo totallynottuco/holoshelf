@@ -20,6 +20,11 @@ const bridge: HoloshelfBridge = {
     ipcRenderer.on("updates:status", handler);
     return () => ipcRenderer.removeListener("updates:status", handler);
   },
+  onCatalogUpdated(listener) {
+    const handler = (_event: IpcRendererEvent, payload: {version: string}) => listener(payload);
+    ipcRenderer.on("catalog:updated", handler);
+    return () => ipcRenderer.removeListener("catalog:updated", handler);
+  },
   onFindInPageResult(listener) {
     const handler = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]) => {
       listener(payload);

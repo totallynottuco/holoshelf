@@ -106,8 +106,9 @@ function Read-LocalUpdateMode {
   Write-Host "  1. Apply data to the installed app (fast; keeps the app version)."
   Write-Host "  2. Build and install a full app update (bumps the patch version)."
   Write-Host "  3. Refresh bundled data only."
+  Write-Host "  4. Update local data and publish a silent songs/stats update to GitHub."
   while ($true) {
-    $choice = (Read-Host "Choose 1, 2, or 3 [default $defaultChoice]").Trim()
+    $choice = (Read-Host "Choose 1, 2, 3, or 4 [default $defaultChoice]").Trim()
     if ([string]::IsNullOrWhiteSpace($choice)) { $choice = $defaultChoice }
     if ($choice -eq "1" -and -not $canApplyData) {
       Write-Host "Install Holoshelf with option 2 before using a data-only update."
@@ -116,7 +117,8 @@ function Read-LocalUpdateMode {
     if ($choice -eq "1") { return "data-only" }
     if ($choice -eq "2") { return "full-app" }
     if ($choice -eq "3") { return "seed-only" }
-    Write-Host "Please choose 1, 2, or 3."
+    if ($choice -eq "4") { return "silent-publish" }
+    Write-Host "Please choose 1, 2, 3, or 4."
   }
 }
 
@@ -171,7 +173,15 @@ if ([string]::IsNullOrWhiteSpace($youtubeKey)) {
 }
 
 $updateMode = Read-LocalUpdateMode
-$installLocalUpdate = $updateMode -ne "seed-only"
+$installedAppExists = Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "Programs\Holoshelf\Holoshelf.exe")
+$installLocalUpdate = $updateMode -eq "data-only" -or $updateMode -eq "full-app" -or ($updateMode -eq "silent-publish" -and $installedAppExists)
+
+if ($updateMode -eq "silent-publish") {
+  if ($skipStats) { throw "Silent publishing requires a complete YouTube stats refresh." }
+  Invoke-Npm @("run", "build:electron")
+  & node (Join-Path $PSScriptRoot "publish-catalog-update.mjs") --check
+  if ($LASTEXITCODE -ne 0) { throw "GitHub silent-update preflight failed. Publish the compatible app release first." }
+}
 
 Write-Host ""
 Write-Host "Ready:"
@@ -210,13 +220,18 @@ try {
 
   Invoke-Npm $refreshArguments
 
-  if ($updateMode -eq "data-only") {
+  if ($updateMode -eq "data-only" -or ($updateMode -eq "silent-publish" -and $installedAppExists)) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
       & (Join-Path $PSScriptRoot "install-local-data.ps1")
     } finally {
       Write-Host ("Data update elapsed: {0:n1}s" -f $timer.Elapsed.TotalSeconds)
     }
+  }
+
+  if ($updateMode -eq "silent-publish") {
+    & node (Join-Path $PSScriptRoot "publish-catalog-update.mjs") --yes
+    if ($LASTEXITCODE -ne 0) { throw "Silent catalog publishing failed; refreshed local data was retained." }
   }
 
   if ($updateMode -eq "full-app") {
@@ -249,6 +264,8 @@ try {
   Write-Host "Current package version: $($packageJson.version)"
   if ($installLocalUpdate) {
     Write-Host "Fresh installs use the regenerated seed, and the installed AppData merge was verified."
+  } elseif ($updateMode -eq "silent-publish") {
+    Write-Host "Silent catalog published. Compatible installed clients fetch it in the background."
   } else {
     Write-Host "Fresh installs will use the regenerated seed after the next packaged update."
   }

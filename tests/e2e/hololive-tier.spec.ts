@@ -194,6 +194,19 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/#/module/hololive");
 });
 
+test("@smoke retains the silent catalog update preference while navigating", async ({ page }) => {
+  await page.getByRole("link", {name: "Settings", exact: true}).click();
+  const preference = page.getByRole("checkbox", {name: "Automatically keep songs and stats up to date"});
+  await expect(preference).toBeChecked();
+  await preference.uncheck();
+  await expect(preference).not.toBeChecked();
+  await page.getByRole("link", {name: "Player", exact: true}).click();
+  await page.getByRole("link", {name: "Settings", exact: true}).click();
+  await expect(preference).not.toBeChecked();
+  await preference.check();
+  await expect(preference).toBeChecked();
+});
+
 test("@smoke renders the Hololive tier list route", async ({ page }) => {
   await expect(page.locator(".topbar")).toHaveCount(0);
   await expect(page.locator(".search-box")).toHaveCount(0);

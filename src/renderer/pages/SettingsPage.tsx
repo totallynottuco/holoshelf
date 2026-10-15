@@ -16,6 +16,7 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
   const { showToast } = useHololiveActionToast();
   const [holodexApiKey, setHolodexApiKey] = useState("");
   const [youtubeApiKey, setYoutubeApiKey] = useState("");
+  const [catalogAutoUpdates, setCatalogAutoUpdates] = useState(true);
   const [officialDataVersion, setOfficialDataVersion] = useState("");
   const [officialDataMergedAt, setOfficialDataMergedAt] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -87,11 +88,19 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
   }, []);
 
   function applySettings(settings: Record<string, string>) {
+    setCatalogAutoUpdates(settings["hololive.catalogAutoUpdates"] !== "false");
     setHolodexApiKey(settings["sources.holodexApiKey"] ?? "");
     setYoutubeApiKey(settings["sources.youtubeApiKey"] ?? "");
     setOfficialDataVersion(settings["hololive.officialDataVersion"] ?? "");
     setOfficialDataMergedAt(settings["hololive.officialDataMergedAt"] ?? "");
   }
+
+  useEffect(() => api.onCatalogUpdated(() => {
+    void api.invoke("settings:get", null).then(settings => {
+      setOfficialDataVersion(settings["hololive.officialDataVersion"] ?? "");
+      setOfficialDataMergedAt(settings["hololive.officialDataMergedAt"] ?? "");
+    }).catch(() => undefined);
+  }), []);
 
   async function save() {
     setSaving(true);
@@ -405,6 +414,14 @@ export function SettingsPage({ bootstrap }: SettingsPageProps) {
                   ) : null}
                 </div>
               </div>
+              <label className="settings-status-line">
+                <input type="checkbox" checked={catalogAutoUpdates} onChange={event => {
+                  const enabled = event.target.checked;
+                  void api.invoke("settings:set", {key: "hololive.catalogAutoUpdates", value: String(enabled)})
+                    .then(applySettings).catch(() => showToast({message: "Could not save catalog update preference", tone: "error"}));
+                }} />
+                <span>Automatically keep songs and stats up to date</span>
+              </label>
             </div>
           ) : null}
         </section>

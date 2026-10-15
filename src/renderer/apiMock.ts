@@ -3400,6 +3400,7 @@ async function duplicateMockHololiveBracket(bracketId: string): Promise<Hololive
 }
 
 const mockBridge: HoloshelfBridge = {
+  onCatalogUpdated() { return () => undefined; },
   onHololiveRefreshProgress() {
     return () => undefined;
   },

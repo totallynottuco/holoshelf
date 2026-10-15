@@ -22,6 +22,7 @@
     "release:seed": "node scripts/create-release-seed.mjs",
     "release:data:refresh": "npm run build:electron && node scripts/refresh-official-release-data.mjs",
     "release:data:wizard": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-data-wizard.ps1",
+    "release:data:publish": "npm run build:electron && node scripts/publish-catalog-update.mjs",
     "official-data:refresh": "npm run release:data:refresh",
     "release:check-version": "node scripts/assert-release-version.mjs",
     "release:audit": "node scripts/audit-release-safety.mjs",

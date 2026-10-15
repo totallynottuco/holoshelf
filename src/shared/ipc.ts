@@ -921,5 +921,6 @@ export interface HoloshelfBridge {
   ): Promise<IpcChannelMap[C]["response"]>;
   onHololiveRefreshProgress(listener: (event: HololiveRefreshProgressEvent) => void): () => void;
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
+  onCatalogUpdated(listener: (event: {version: string}) => void): () => void;
   onFindInPageResult(listener: (result: FindInPageResult) => void): () => void;
 }

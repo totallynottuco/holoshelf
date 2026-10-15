@@ -3,6 +3,7 @@ import type { HoloshelfBridge, IpcChannel, IpcChannelMap } from "../shared/ipc";
 const electronBridge = window.holoshelf ?? null;
 
 const missingBridge: HoloshelfBridge = {
+  onCatalogUpdated() { return () => undefined; },
   onHololiveRefreshProgress() {
     return () => undefined;
   },
@@ -30,6 +31,12 @@ async function getBrowserMock(): Promise<HoloshelfBridge> {
 
 function createBrowserMockProxy(): HoloshelfBridge {
   return {
+    onCatalogUpdated(listener) {
+      let cancelled = false;
+      let unsubscribe = () => undefined as void;
+      void getBrowserMock().then(mock => { if (!cancelled) unsubscribe = mock.onCatalogUpdated(listener); });
+      return () => { cancelled = true; unsubscribe(); };
+    },
     onHololiveRefreshProgress(listener) {
       let unsubscribe: () => void = () => undefined;
       void getBrowserMock().then((mock) => {

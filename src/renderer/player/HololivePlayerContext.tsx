@@ -1222,6 +1222,8 @@ export function HololivePlayerProvider({ children }: { children: ReactNode }) {
     return next;
   }
 
+  useEffect(() => api.onCatalogUpdated(() => { void loadPlayerData().catch(() => undefined); }), []);
+
   async function applyPlayerData(work: () => Promise<HololiveMusicPlayerData>, message?: string) {
     try {
       const next = await work();

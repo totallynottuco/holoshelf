@@ -18,6 +18,21 @@ Double-click `Update Release Data.cmd` to refresh the maintainer database and re
 
 For an existing installation, the wizard defaults to a fast **data-only update**: it applies the new bundled catalog directly and verifies the AppData merge. The app version stays the same. A full app rebuild/install with a patch-version bump remains available for app-code changes, along with a seed-only option.
 
+Wizard option **4: Update local data and publish a silent songs/stats update to GitHub** refreshes the complete Holodex catalog and YouTube stats, validates the sanitized seed, applies and verifies a local data-only update when Holoshelf is installed, then uploads a compressed database and `holoshelf-catalog.json` to the existing latest stable GitHub release. It does not create a release or tag, change release notes, upload an installer, bump the app version, or push source commits. It requires GitHub CLI authentication with release-upload access. Existing immutable releases cannot accept asset updates. The wizard checks publishing prerequisites before spending API quota. Option 1 continues to apply a local data-only update without publishing.
+
+**One app release at version 1.1.90 or later is required first.** Older installations do not know about this data channel and must receive the app update once. Compatible clients check in the background shortly after startup and every six hours while open. Downloads require no API keys, and updates have no popup, patch-notes dialog, or restart. Settings includes **Automatically keep songs and stats up to date**, enabled by default. Normal app releases also publish their catalog through this channel. GitHub's own watcher notification preferences are outside the app's control; this publisher only changes assets on an existing release.
+
+Clients validate the repository download URL, app compatibility, compressed and SQLite checksums, bounded sizes, database integrity, version, absence of personal records/secrets, and complete fresh statistics before merging. The existing transactional merge preserves personal playlists, markers, exclusions, custom songs/talents, tiers, brackets, and newer personal stats. A failed download or validation leaves the current catalog usable. User-requested API refreshes take precedence. Visible libraries refresh quietly without reloading the window or interrupting playback. Only songs, stats, and catalog metadata travel through this channel; image files continue through the existing image cache.
+
+To inspect the assets without publishing, or publish an already fully refreshed seed:
+
+```powershell
+npm run release:data:publish -- --prepare-only
+npm run release:data:publish -- --yes
+```
+
+The publisher verifies the payload asset before replacing the small manifest and retains older payloads so cached manifests remain usable. It refuses older snapshots, inconsistent same-version contents, or a release that changed during publication. GitHub may briefly return 404 while a manifest is replaced; clients keep their current data and check again later.
+
 The data-only updater stages the complete seed, reuses unchanged files through hard links (or copies when unsupported), and swaps the installed seed directory. It retains the old seed and a personal database snapshot until verification succeeds. A verification failure closes the app and restores both snapshots. Unsupported manifests and older seeds are rejected before installation. If restoration itself fails, recovery files are retained and their location is reported.
 
 Holodex pages, collaboration channels, and missing video details now use up to four simultaneous requests. Channel metadata and music fetching share the existing quota of 76 requests per 120 seconds. Low remaining quota reported by the server pauses new requests until its reset, retaining four requests of headroom; a `Retry-After` response also pauses all workers. Server headers can only tighten the local quota. The full historical scan, cleanup rules, backups, and seed sanitization remain enabled. Collaboration responses already include video details, so those details are reused instead of requested again ([Holodex API documentation](https://docs.holodex.net/)).

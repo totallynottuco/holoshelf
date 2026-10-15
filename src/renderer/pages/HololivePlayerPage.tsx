@@ -431,6 +431,11 @@ export function HololivePlayerPage() {
     setLibraryRefreshVersion((version) => version + 1);
   }
 
+  useEffect(() => api.onCatalogUpdated(() => {
+    refreshLibrary();
+    void api.invoke("hololive:tier-data", null).then(next => setTalents(next.idols)).catch(() => undefined);
+  }), []);
+
   function selectLibraryTalent(value: string) {
     setLibraryTalentId(value);
     setLibraryPage(0);
