@@ -73,9 +73,14 @@ function Invoke-Npm {
 
   Write-Host ""
   Write-Host "> npm $($Arguments -join ' ')"
-  & npm @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "npm $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+  $timer = [Diagnostics.Stopwatch]::StartNew()
+  try {
+    & npm @Arguments
+    if ($LASTEXITCODE -ne 0) {
+      throw "npm $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Write-Host ("Elapsed: {0:n1}s" -f $timer.Elapsed.TotalSeconds)
   }
 }
 

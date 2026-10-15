@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type {
   HololiveCustomTalentInput,
   HololiveCustomTalentPreview,
@@ -26,6 +27,7 @@ import {
   type HolodexVideoRecord
 } from "../../src/modules/hololive/music";
 import type { DatabaseService } from "./database";
+import { mapConcurrent, requestConcurrency } from "../../src/shared/asyncPool";
 
 const HOLODEX_API_KEY_SETTING = "sources.holodexApiKey";
 const HOLODEX_VIDEOS_FILE = "holodex_videos.csv";
@@ -41,10 +43,18 @@ const CUSTOM_CHANNEL_RECENT_MUSIC_TIMEOUT_MS = 10_000;
 
 interface HolodexMusicServiceOptions {
   apiKey?: string | null;
+  requestConcurrency?: number;
 }
 
 export class HolodexMusicService {
   private readonly apiKeyOverride: string | null;
+  private readonly concurrency: number;
+  private refreshClient: {
+    apiKey: string | null;
+    maxRequests: number;
+    windowMs: number;
+    client: HolodexApiClient;
+  } | null = null;
 
   constructor(
     private readonly database: DatabaseService,
@@ -53,6 +63,7 @@ export class HolodexMusicService {
     options: HolodexMusicServiceOptions = {}
   ) {
     this.apiKeyOverride = options.apiKey?.trim() || null;
+    this.concurrency = requestConcurrency(options.requestConcurrency);
   }
 
   async importArtifacts(directoryPath: string): Promise<HololiveMusicImportResult> {
@@ -78,8 +89,11 @@ export class HolodexMusicService {
     return this.database.importHolodexMusicArtifacts(bundle);
   }
 
-  async refreshChannels(): Promise<{ refreshedChannels: number; classifiedChannels: number; updatedAt: string }> {
-    const client = new HolodexApiClient(this.getApiKey(), this.fetcher);
+  async refreshChannels(input: {
+    maxRequestsPerWindow?: number | null;
+    requestWindowMs?: number | null;
+  } = {}): Promise<{ refreshedChannels: number; classifiedChannels: number; updatedAt: string }> {
+    const client = this.createHolodexClient(input);
     return this.refreshChannelsWithClient(client);
   }
 
@@ -150,6 +164,7 @@ export class HolodexMusicService {
       pageSize: 50
     });
     const collabChannelIdsByVideoId = new Map<string, Set<string>>();
+    const collabDetails: Record<string, HolodexVideoDetail> = {};
     const collabs =
       input.includeCollabs === false
         ? []
@@ -157,12 +172,14 @@ export class HolodexMusicService {
             includeRelationships: input.includeRelationships !== false,
             pageLimit: input.collabPageLimit ?? 1,
             collabChannelIdsByVideoId,
+            detailCache: collabDetails,
             channelLinks: [{ idolId: idol.id, youtubeChannelId: channelId }]
           });
     const records = [...direct.records, ...collabs];
     const rows = this.filterRowsToKnownHolodexChannels(makeCatalogRowsFromRecords(records), collabChannelIdsByVideoId);
-    const directDetailIds = new Set(Object.keys(direct.detailCache));
+    const directDetailIds = new Set([...Object.keys(direct.detailCache), ...Object.keys(collabDetails)]);
     const detailCache = {
+      ...collabDetails,
       ...direct.detailCache,
       ...(await this.fetchDetailsForRows(
         client,
@@ -206,6 +223,7 @@ export class HolodexMusicService {
     maxRequestsPerWindow?: number | null;
     requestWindowMs?: number | null;
   } = {}): Promise<HololiveMusicImportResult> {
+    const startedAt = performance.now();
     try {
       const client = this.createHolodexClient(input);
       if (input.includeChannels !== false) {
@@ -297,6 +315,7 @@ export class HolodexMusicService {
               includeRelationships: input.includeRelationships !== false,
               pageLimit: input.collabPageLimit ?? 1,
               collabChannelIdsByVideoId,
+              detailCache,
               channelLinks: officialOnlyChannelLinks
             }))
           );
@@ -323,6 +342,7 @@ export class HolodexMusicService {
           detailCache[videoId].relationshipsLoaded = input.includeRelationships !== false;
         }
       }
+      const fetchedAt = performance.now();
       const cleanup = cleanupCatalogRows(
         rowsForCleanup,
         Object.fromEntries(records.map((record) => [record.youtubeVideoId, record])),
@@ -335,7 +355,13 @@ export class HolodexMusicService {
       };
 
       this.reportProgress(`Importing ${cleanup.rows.length} cleaned Holodex music row(s)`);
-      return this.database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: Boolean(input.replaceExisting) });
+      const metrics = client.getRequestMetrics();
+      this.reportProgress(`Holodex requests: ${metrics.requests}, rate-limit retries: ${metrics.retries}, concurrency: ${this.concurrency}`);
+      const importingAt = performance.now();
+      this.reportProgress(`Holodex fetching: ${((fetchedAt - startedAt) / 1000).toFixed(1)}s; cleanup: ${((importingAt - fetchedAt) / 1000).toFixed(1)}s`);
+      const result = this.database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: Boolean(input.replaceExisting) });
+      this.reportProgress(`Holodex database import: ${((performance.now() - importingAt) / 1000).toFixed(1)}s`);
+      return result;
     } catch (error) {
       return this.database.recordFailedHolodexRefresh({
         source: "live",
@@ -485,11 +511,20 @@ export class HolodexMusicService {
     maxRequestsPerWindow?: number | null;
     requestWindowMs?: number | null;
   } = {}): HolodexApiClient {
-    return new HolodexApiClient(this.getApiKey(), this.fetcher, {
-      ...HOLODEX_FULL_REFRESH_RATE_LIMIT,
-      maxRequests: Math.max(1, Math.round(input.maxRequestsPerWindow ?? HOLODEX_FULL_REFRESH_RATE_LIMIT.maxRequests)),
-      windowMs: Math.max(1_000, Math.round(input.requestWindowMs ?? HOLODEX_FULL_REFRESH_RATE_LIMIT.windowMs))
-    });
+    const apiKey = this.getApiKey();
+    const maxRequests = Math.max(1, Math.round(input.maxRequestsPerWindow ?? HOLODEX_FULL_REFRESH_RATE_LIMIT.maxRequests));
+    const windowMs = Math.max(1_000, Math.round(input.requestWindowMs ?? HOLODEX_FULL_REFRESH_RATE_LIMIT.windowMs));
+    if (!this.refreshClient || this.refreshClient.apiKey !== apiKey ||
+      this.refreshClient.maxRequests !== maxRequests || this.refreshClient.windowMs !== windowMs) {
+      this.refreshClient = {
+        apiKey, maxRequests, windowMs,
+        client: new HolodexApiClient(apiKey, this.fetcher, {
+          ...HOLODEX_FULL_REFRESH_RATE_LIMIT, maxRequests, windowMs,
+          onRateLimitWait: (waitMs) => this.reportProgress(`Holodex quota cooldown: waiting ${(waitMs / 1000).toFixed(1)}s`)
+        })
+      };
+    }
+    return this.refreshClient.client;
   }
 
   private getApiKey(): string | null {
@@ -599,12 +634,16 @@ export class HolodexMusicService {
       );
     }
 
-    for (const [index, videoId] of missingVideoIds.entries()) {
-      details[videoId] = await client.fetchVideoDetail(videoId, { includeRelationships: input.includeRelationships });
-      if (index === missingVideoIds.length - 1 || (index + 1) % 25 === 0) {
-        this.reportProgress(`Fetched Holodex details ${index + 1}/${missingVideoIds.length}`);
+    let completed = 0;
+    const fetched = await mapConcurrent(missingVideoIds, this.concurrency, async (videoId) => {
+      const detail = await client.fetchVideoDetail(videoId, { includeRelationships: input.includeRelationships });
+      completed += 1;
+      if (completed === missingVideoIds.length || completed % 25 === 0) {
+        this.reportProgress(`Fetched Holodex details ${completed}/${missingVideoIds.length}`);
       }
-    }
+      return detail;
+    });
+    missingVideoIds.forEach((videoId, index) => { details[videoId] = fetched[index]; });
 
     return details;
   }
@@ -643,7 +682,9 @@ export class HolodexMusicService {
           includeRelationships: input.includeRelationships
         });
 
-        for (let pageNumber = 2; pageNumber <= lastPage; pageNumber += 1) {
+        const pageNumbers = Array.from({ length: lastPage - 1 }, (_, index) => index + 2);
+        let completedPages = 1;
+        const pages = await mapConcurrent(pageNumbers, this.concurrency, async (pageNumber) => {
           const page = await client.fetchVideosPage({
             topicId,
             videoType,
@@ -651,6 +692,14 @@ export class HolodexMusicService {
             pageSize,
             includeRelationships: input.includeRelationships
           });
+          completedPages += 1;
+          if (completedPages === lastPage || completedPages % 10 === 0) {
+            this.reportProgress(`Fetched Holodex song uploads ${topicId}: ${completedPages}/${lastPage} pages`);
+          }
+          return page;
+        });
+        pages.forEach((page, index) => {
+          const pageNumber = pageNumbers[index];
           this.collectOfficialMusicVideoPage(page.items, {
             records,
             detailCache,
@@ -659,10 +708,7 @@ export class HolodexMusicService {
             pageNumber,
             includeRelationships: input.includeRelationships
           });
-          if (pageNumber === lastPage || pageNumber % 10 === 0) {
-            this.reportProgress(`Fetched Holodex song uploads ${topicId} page ${pageNumber}/${lastPage}`);
-          }
-        }
+        });
       }
     }
 
@@ -948,6 +994,7 @@ export class HolodexMusicService {
       pageLimit: number | null;
       collabChannelIdsByVideoId: Map<string, Set<string>>;
       channelLinks?: Array<{ idolId: string; youtubeChannelId: string }>;
+      detailCache?: Record<string, HolodexVideoDetail>;
     }
   ): Promise<HolodexVideoRecord[]> {
     const records: HolodexVideoRecord[] = [];
@@ -957,7 +1004,11 @@ export class HolodexMusicService {
       ...new Map((input.channelLinks ?? this.database.listHololiveIdolMainChannels()).map((link) => [link.youtubeChannelId, link])).values()
     ];
 
-    for (const link of uniqueLinks) {
+    let completedChannels = 0;
+    this.reportProgress(`Fetching Holodex collaborations for ${uniqueLinks.length} channel(s)`);
+    const channelRecords = await mapConcurrent(uniqueLinks, this.concurrency, async (link) => {
+      const linkedRecords: HolodexVideoRecord[] = [];
+      const linkedDetails: Record<string, HolodexVideoDetail> = {};
       for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
         const page = await client.fetchChannelVideos({
           channelId: link.youtubeChannelId,
@@ -968,17 +1019,40 @@ export class HolodexMusicService {
         const normalized = this.normalizePageItems(page.items, undefined, pageNumber, [
           { type: "channel", value: link.youtubeChannelId }
         ]);
+        const itemsById = new Map(page.items.map((item) => [item.id, item]));
         for (const record of normalized) {
           if (record.topicId !== "Original_Song" && record.topicId !== "Music_Cover") {
             continue;
           }
-          records.push(record);
-          input.collabChannelIdsByVideoId.set(record.youtubeVideoId, input.collabChannelIdsByVideoId.get(record.youtubeVideoId) ?? new Set());
-          input.collabChannelIdsByVideoId.get(record.youtubeVideoId)?.add(link.youtubeChannelId);
+          linkedRecords.push(record);
+          const item = itemsById.get(record.youtubeVideoId);
+          // Some responses omit requested include fields. Preserve the existing
+          // cache/detail-fetch fallback rather than treating sparse data as complete.
+          if (item && input.includeRelationships && item.description !== undefined &&
+            (Array.isArray(item.songs) || item.songs === null) &&
+            (Array.isArray(item.mentions) || item.mentions === null)) {
+            linkedDetails[record.youtubeVideoId] = normalizeHolodexVideoItemDetail(record.youtubeVideoId, item, true);
+          }
         }
 
         if (page.items.length < HOLODEX_CHANNEL_PAGE_SIZE) {
           break;
+        }
+      }
+      completedChannels += 1;
+      if (completedChannels === uniqueLinks.length || completedChannels % 10 === 0) {
+        this.reportProgress(`Fetched Holodex collaborations ${completedChannels}/${uniqueLinks.length} channels`);
+      }
+      return { link, records: linkedRecords, details: linkedDetails };
+    });
+    for (const result of channelRecords) {
+      records.push(...result.records);
+      for (const record of result.records) {
+        const id = record.youtubeVideoId;
+        input.collabChannelIdsByVideoId.set(id, input.collabChannelIdsByVideoId.get(id) ?? new Set());
+        input.collabChannelIdsByVideoId.get(id)?.add(result.link.youtubeChannelId);
+        if (input.detailCache && !input.detailCache[id] && result.details[id]) {
+          input.detailCache[id] = result.details[id];
         }
       }
     }

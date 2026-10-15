@@ -1,6 +1,7 @@
 import type { HololiveCustomSongPreview, HololiveMusicVideoStatsRefreshResult } from "../../src/shared/contracts";
 import type { HololiveCustomSongUpsertRequest } from "../../src/shared/ipc";
 import type { DatabaseService } from "./database";
+import { mapConcurrent, requestConcurrency } from "../../src/shared/asyncPool";
 
 const YOUTUBE_VIDEOS_API_URL = "https://www.googleapis.com/youtube/v3/videos";
 const YOUTUBE_VIDEO_STATS_BATCH_SIZE = 50;
@@ -8,6 +9,7 @@ const YOUTUBE_VIDEO_STATS_BATCH_SIZE = 50;
 interface YouTubeVideoStatsServiceOptions {
   apiKey?: string | null;
   fetcher?: typeof fetch;
+  requestConcurrency?: number;
 }
 
 interface YouTubeVideosApiItem {
@@ -130,6 +132,7 @@ function pickBestThumbnail(thumbnails?: YouTubeThumbnailMap): string | null {
 export class YouTubeVideoStatsService {
   private readonly fetcher: typeof fetch;
   private readonly apiKeyOverride: string | null;
+  private readonly concurrency: number;
 
   constructor(
     private readonly database: DatabaseService,
@@ -137,6 +140,7 @@ export class YouTubeVideoStatsService {
   ) {
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.apiKeyOverride = options.apiKey?.trim() || null;
+    this.concurrency = requestConcurrency(options.requestConcurrency);
   }
 
   async refreshViewCounts(input: {
@@ -165,32 +169,39 @@ export class YouTubeVideoStatsService {
     let failedBatches = 0;
     let unavailableBackupCreated = false;
 
-    for (const batch of batches) {
-      try {
-        const batchResult = await this.fetchBatch(batch, apiKey, fetchedAt);
-        const sourceMismatches = batchResult.stats.flatMap((stat) => {
-          const reason = this.database.getHololiveMusicSourceChannelMismatchReason({
-            youtubeVideoId: stat.youtubeVideoId,
-            youtubeChannelId: stat.youtubeChannelId,
-            youtubeChannelName: stat.youtubeChannelName
-          });
-          return reason ? [{ youtubeVideoId: stat.youtubeVideoId, reason }] : [];
-        });
-        const sourceMismatchIds = new Set(sourceMismatches.map((mismatch) => mismatch.youtubeVideoId));
-        const validStats = batchResult.stats.filter((stat) => !sourceMismatchIds.has(stat.youtubeVideoId));
-        this.database.upsertHololiveMusicVideoStats(validStats);
-        updatedVideos += validStats.length;
-        for (const unavailable of [...batchResult.unavailableVideos, ...sourceMismatches]) {
-          this.database.markHololiveMusicVideoUnavailable({
-            youtubeVideoId: unavailable.youtubeVideoId,
-            reason: unavailable.reason,
-            createBackup: !unavailableBackupCreated
-          });
-          unavailableBackupCreated = true;
-          unavailableVideos += 1;
+    // Checkpoint each bounded group instead of exporting the entire SQLite file
+    // after every 50-video response. Failed HTTP batches never become removals.
+    for (const group of this.chunk(batches, this.concurrency)) {
+      const results = await mapConcurrent(group, this.concurrency, async (batch) => {
+        try {
+          return await this.fetchBatch(batch, apiKey, fetchedAt);
+        } catch {
+          failedBatches += 1;
+          return null;
         }
-      } catch {
-        failedBatches += 1;
+      });
+      const successful = results.filter((result): result is YouTubeVideoStatsBatchResult => result !== null);
+      const fetchedStats = successful.flatMap((result) => result.stats);
+      const sourceMismatches = fetchedStats.flatMap((stat) => {
+        const reason = this.database.getHololiveMusicSourceChannelMismatchReason({
+          youtubeVideoId: stat.youtubeVideoId,
+          youtubeChannelId: stat.youtubeChannelId,
+          youtubeChannelName: stat.youtubeChannelName
+        });
+        return reason ? [{ youtubeVideoId: stat.youtubeVideoId, reason }] : [];
+      });
+      const sourceMismatchIds = new Set(sourceMismatches.map((mismatch) => mismatch.youtubeVideoId));
+      const validStats = fetchedStats.filter((stat) => !sourceMismatchIds.has(stat.youtubeVideoId));
+      this.database.upsertHololiveMusicVideoStats(validStats);
+      updatedVideos += validStats.length;
+      for (const unavailable of [...successful.flatMap((result) => result.unavailableVideos), ...sourceMismatches]) {
+        this.database.markHololiveMusicVideoUnavailable({
+          youtubeVideoId: unavailable.youtubeVideoId,
+          reason: unavailable.reason,
+          createBackup: !unavailableBackupCreated
+        });
+        unavailableBackupCreated = true;
+        unavailableVideos += 1;
       }
     }
 
@@ -292,12 +303,15 @@ export class YouTubeVideoStatsService {
     url.searchParams.set("id", youtubeVideoIds.join(","));
     url.searchParams.set("key", apiKey);
 
-    const response = await this.fetcher(url);
+    const response = await this.fetcher(url, { signal: AbortSignal.timeout(45_000) });
     if (!response.ok) {
       throw new Error(`YouTube video stats request failed with HTTP ${response.status}`);
     }
 
     const body = (await response.json()) as YouTubeVideosApiResponse;
+    if (!Array.isArray(body.items)) {
+      throw new Error("YouTube video stats response is missing its items array");
+    }
     const returnedIds = new Set<string>();
     const unavailableVideos: YouTubeVideoStatsBatchResult["unavailableVideos"] = [];
     const stats = (body.items ?? [])

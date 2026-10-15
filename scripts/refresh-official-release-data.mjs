@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { performance } from "node:perf_hooks";
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,8 @@ Rate-limit controls:
   --max-requests=76
   --window-ms=120000
   --video-stats-limit=10000
+  --concurrency=4                         Parallel Holodex requests (1-8; quota unchanged).
+  --stats-concurrency=4                   Parallel YouTube batches (1-8).
 `);
 }
 
@@ -400,6 +403,8 @@ async function main() {
   const maxRequestsPerWindow = readNumberArg("max-requests", 76);
   const requestWindowMs = readNumberArg("window-ms", 120000);
   const videoStatsLimit = readNumberArg("video-stats-limit", null);
+  const concurrency = Math.min(8, Math.max(1, Math.floor(readNumberArg("concurrency", 4))));
+  const statsConcurrency = Math.min(8, Math.max(1, Math.floor(readNumberArg("stats-concurrency", 4))));
   const replaceExisting = !hasFlag("keep-existing");
   const refreshHolodex = !hasFlag("skip-holodex");
   const refreshStats = !hasFlag("skip-stats");
@@ -413,16 +418,26 @@ async function main() {
     throw new Error(`Release source database not found: ${dbPath}`);
   }
 
-  const database = new DatabaseService(dbPath, backupDirectory);
-  await database.init();
-
   const log = (message) => console.log(`[release-data] ${message}`);
+  const timingsMs = {};
+  const measure = async (name, work) => {
+    const start = performance.now();
+    try {
+      return await work();
+    } finally {
+      timingsMs[name] = Math.round(performance.now() - start);
+      log(`${name}: ${(timingsMs[name] / 1000).toFixed(1)}s`);
+    }
+  };
+  const database = new DatabaseService(dbPath, backupDirectory);
+  await measure("databaseInit", () => database.init());
   log(`Database: ${dbPath}`);
   log(`Backups: ${backupDirectory}`);
   log(`Artifacts: ${artifactDirectory}`);
   log(`Images: ${imagesDirectory}`);
   log(`Official data version: ${officialDataVersion}`);
   log(`Replace existing official Holodex rows: ${replaceExisting ? "yes" : "no"}`);
+  log(`Request concurrency: Holodex=${concurrency}, YouTube=${statsConcurrency}`);
 
   let channelRefresh = null;
   let musicRefresh = null;
@@ -434,16 +449,16 @@ async function main() {
         database,
         globalThis.fetch.bind(globalThis),
         (message) => log(message),
-        { apiKey: holodexApiKey }
+        { apiKey: holodexApiKey, requestConcurrency: concurrency }
       );
 
       if (refreshChannels) {
         log("Refreshing Holodex channel metadata");
-        channelRefresh = await service.refreshChannels();
+        channelRefresh = await measure("channels", () => service.refreshChannels({ maxRequestsPerWindow, requestWindowMs }));
       }
 
       log("Refreshing official Hololive song data from Holodex");
-      musicRefresh = await service.refreshLive({
+      musicRefresh = await measure("music", () => service.refreshLive({
         includeChannels: false,
         includeCustomTalents: false,
         includeRelationships: true,
@@ -454,7 +469,7 @@ async function main() {
         pageSize,
         maxRequestsPerWindow,
         requestWindowMs
-      });
+      }));
 
       if (musicRefresh.run.status !== "completed") {
         throw new Error(musicRefresh.run.error || "Holodex official data refresh failed");
@@ -470,14 +485,15 @@ async function main() {
       }
 
       const statsService = new YouTubeVideoStatsService(database, {
-        apiKey: youtubeApiKey || null
+        apiKey: youtubeApiKey || null,
+        requestConcurrency: statsConcurrency
       });
       const youtubeVideoIds = officialMusicVideoIds(database);
       log(`Refreshing YouTube stats for ${youtubeVideoIds.length} official video(s)`);
-      videoStatsRefresh = await statsService.refreshViewCounts({
+      videoStatsRefresh = await measure("youtubeStats", () => statsService.refreshViewCounts({
         youtubeVideoIds,
         limit: videoStatsLimit
-      });
+      }));
       if (videoStatsRefresh.failedBatches > 0) {
         throw new Error(
           `YouTube stats refresh failed for ${videoStatsRefresh.failedBatches}/${videoStatsRefresh.batches} batch(es)`
@@ -487,14 +503,14 @@ async function main() {
       log("Skipping YouTube stats refresh");
     }
 
-    const repairedDuplicateRows = database.repairHololiveMusicDuplicateRows();
+    const repairedDuplicateRows = await measure("duplicateRepair", () => database.repairHololiveMusicDuplicateRows());
     if (repairedDuplicateRows > 0) {
       log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
     }
 
     if (refreshImages) {
       log("Refreshing high-resolution talent card images");
-      imageRefresh = await refreshTalentCardImages(database, imagesDirectory, log);
+      imageRefresh = await measure("images", () => refreshTalentCardImages(database, imagesDirectory, log));
     } else {
       log("Skipping talent card image refresh");
     }
@@ -513,6 +529,9 @@ async function main() {
       includeCollabs,
       refreshStats,
       refreshImages,
+      concurrency,
+      statsConcurrency,
+      timingsMs,
       channelRefresh,
       musicRefresh: musicRefresh
         ? {
@@ -528,20 +547,32 @@ async function main() {
       counts
     };
 
-    database.setSetting("hololive.officialDataVersion", officialDataVersion);
-    database.setSetting("hololive.officialDataMergedAt", completedAt);
-    database.setSetting("hololive.officialDataRefreshSummary", JSON.stringify(summary));
-
+    database.transaction(() => {
+      database.setSetting("hololive.officialDataVersion", officialDataVersion);
+      database.setSetting("hololive.officialDataMergedAt", completedAt);
+      database.setSetting("hololive.officialDataRefreshSummary", JSON.stringify(summary));
+      if (clearSourceApiKeys) {
+        database.run("DELETE FROM settings WHERE key IN (?, ?)", ["sources.holodexApiKey", "sources.youtubeApiKey"]);
+      }
+    });
     if (clearSourceApiKeys) {
-      database.run("DELETE FROM settings WHERE key IN (?, ?)", ["sources.holodexApiKey", "sources.youtubeApiKey"]);
       log("Removed API key settings from the source release database");
     }
 
-    exportArtifacts(database, artifactDirectory, summary);
+    await measure("artifacts", () => exportArtifacts(database, artifactDirectory, summary));
 
     if (writeSeed) {
       log("Regenerating bundled seed data");
-      regenerateSeed(officialDataVersion, completedAt);
+      await measure("seed", () => regenerateSeed(officialDataVersion, completedAt));
+    }
+
+    // Record final pipeline timings without re-exporting CSVs or regenerating the seed.
+    fs.writeFileSync(path.join(artifactDirectory, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    const seedSummaryPath = path.join(root, "resources/seed/holodex-refresh/latest/summary.json");
+    if (writeSeed && fs.existsSync(seedSummaryPath)) {
+      const seedSummary = JSON.parse(fs.readFileSync(seedSummaryPath, "utf8"));
+      seedSummary.timingsMs = timingsMs;
+      fs.writeFileSync(seedSummaryPath, `${JSON.stringify(seedSummary, null, 2)}\n`, "utf8");
     }
 
   console.log(JSON.stringify(summary, null, 2));

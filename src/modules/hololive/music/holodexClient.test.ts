@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildHolodexSearchPayload,
   HolodexApiClient,
@@ -10,6 +10,53 @@ import {
 import { HOLODEX_DEFAULT_SEARCH_URL } from "./types";
 
 describe("Holodex client helpers", () => {
+  it("enforces the same rolling quota across simultaneous requests", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const starts: number[] = [];
+      const client = new HolodexApiClient(null, (async () => {
+        starts.push(Date.now());
+        return Response.json([]);
+      }) as typeof fetch, { maxRequests: 2, windowMs: 1000 });
+      const pending = Promise.all(Array.from({ length: 5 }, () => client.fetchChannelsPage()));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(starts).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1250);
+      expect(starts).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(1250);
+      await pending;
+      expect(starts).toEqual([0, 0, 1250, 1250, 2500]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares Retry-After cooldown with newly queued requests", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const starts: number[] = [];
+      const client = new HolodexApiClient(null, (async () => {
+        starts.push(Date.now());
+        return starts.length === 1
+          ? new Response("slow down", { status: 429, headers: { "Retry-After": "2" } })
+          : Response.json([]);
+      }) as typeof fetch, { maxRequests: 100, windowMs: 1000 });
+      const first = client.fetchChannelsPage();
+      await vi.advanceTimersByTimeAsync(0);
+      const pending = Promise.all([first, client.fetchChannelsPage(), client.fetchChannelsPage()]);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(starts).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(starts).toEqual([0, 2000, 2000, 2000]);
+      expect(client.getRequestMetrics()).toEqual({ requests: 4, retries: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("builds the default Holodex search payload for covers and originals", () => {
     const parsed = parseHolodexSearchUrl(HOLODEX_DEFAULT_SEARCH_URL);
     const payload = buildHolodexSearchPayload({

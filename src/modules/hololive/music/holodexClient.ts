@@ -33,6 +33,7 @@ type HolodexClientRateLimit = {
   windowMs: number;
   maxRetries?: number;
   requestTimeoutMs?: number;
+  onRateLimitWait?: (waitMs: number) => void;
 };
 
 export function parseHolodexSearchUrl(searchUrl = HOLODEX_DEFAULT_SEARCH_URL): HolodexParsedSearch {
@@ -288,6 +289,14 @@ export function normalizeHolodexVideoItemDetail(
 
 export class HolodexApiClient {
   private requestTimestamps: number[] = [];
+  private retryAfterUntil = 0;
+  private requestCount = 0;
+  private retryCount = 0;
+  private announcedWaitUntil = 0;
+
+  getRequestMetrics(): { requests: number; retries: number } {
+    return { requests: this.requestCount, retries: this.retryCount };
+  }
 
   constructor(
     private readonly apiKey: string | null = null,
@@ -475,13 +484,17 @@ export class HolodexApiClient {
 
     for (;;) {
       await this.waitForRateLimitTurn();
+      this.requestCount += 1;
       const response = await this.fetchWithTimeout(url, init);
       if (response.status !== 429 || attempt >= maxRetries) {
         return response;
       }
 
       attempt += 1;
-      await this.sleep(this.getRetryDelayMs(response, attempt));
+      this.retryCount += 1;
+      // All workers share the server's cooldown, including newly queued work.
+      this.retryAfterUntil = Math.max(this.retryAfterUntil, Date.now() + this.getRetryDelayMs(response, attempt));
+      await response.body?.cancel();
     }
   }
 
@@ -506,15 +519,19 @@ export class HolodexApiClient {
   }
 
   private async waitForRateLimitTurn(): Promise<void> {
-    if (!this.rateLimit) {
-      return;
-    }
-
-    const maxRequests = Math.max(1, Math.floor(this.rateLimit.maxRequests));
-    const windowMs = Math.max(1000, Math.floor(this.rateLimit.windowMs));
+    const maxRequests = Math.max(1, Math.floor(this.rateLimit?.maxRequests ?? 1));
+    const windowMs = Math.max(1000, Math.floor(this.rateLimit?.windowMs ?? 1000));
 
     for (;;) {
       const now = Date.now();
+      if (now < this.retryAfterUntil) {
+        this.announceWait(this.retryAfterUntil - now);
+        await this.sleep(this.retryAfterUntil - now);
+        continue;
+      }
+      if (!this.rateLimit) {
+        return;
+      }
       this.requestTimestamps = this.requestTimestamps.filter((timestamp) => now - timestamp < windowMs);
       if (this.requestTimestamps.length < maxRequests) {
         this.requestTimestamps.push(now);
@@ -522,7 +539,15 @@ export class HolodexApiClient {
       }
 
       const waitMs = windowMs - (now - this.requestTimestamps[0]) + 250;
+      this.announceWait(Math.max(250, waitMs));
       await this.sleep(Math.max(250, waitMs));
+    }
+  }
+
+  private announceWait(waitMs: number): void {
+    if (Date.now() >= this.announcedWaitUntil) {
+      this.announcedWaitUntil = Date.now() + waitMs;
+      this.rateLimit?.onRateLimitWait?.(waitMs);
     }
   }
 
