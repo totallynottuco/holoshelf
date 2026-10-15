@@ -15,6 +15,7 @@ const { YouTubeVideoStatsService } = require("../dist-electron/electron/services
 const { ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js");
 const latencyMs = Number(process.argv.find((arg) => arg.startsWith("--latency-ms="))?.split("=")[1] ?? 20);
 const concurrency = Number(process.argv.find((arg) => arg.startsWith("--concurrency="))?.split("=")[1] ?? 4);
+const pageSize = Number(process.argv.find((arg) => arg.startsWith("--page-size="))?.split("=")[1] ?? 500);
 const benchmarkResume = process.argv.includes("--resume");
 const delay = () => new Promise((resolve) => setTimeout(resolve, latencyMs));
 const benchmarkRoot = path.join(root, "data", "benchmarks");
@@ -64,7 +65,8 @@ const fetcher = async (input) => {
   if (url.pathname === "/api/v2/videos") {
     const offset = Number(url.searchParams.get("offset"));
     const topic = url.searchParams.get("topic");
-    return Response.json({ total: 1000, items: Array.from({ length: 50 }, (_, i) => makeItem(offset + i, topic)) });
+    const limit = Number(url.searchParams.get("limit"));
+    return Response.json({ total: 1000, items: Array.from({ length: Math.min(limit, 1000 - offset) }, (_, i) => makeItem(offset + i, topic)) });
   }
   if (url.pathname.endsWith("/collabs")) {
     const index = channelIds.indexOf(url.pathname.split("/")[4]);
@@ -81,7 +83,7 @@ if (benchmarkResume) {
     requestConcurrency: concurrency, responseCache: new ReleaseRequestCache(cacheOptions)
   });
   try {
-    await interrupted.refreshLive({ includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
+    await interrupted.refreshLive({ pageSize, includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
   } catch { /* Deliberately resume an interrupted refresh below. */ }
   remainingBeforeFailure = Infinity;
   requests = 0;
@@ -90,7 +92,7 @@ if (benchmarkResume) {
 const responseCache = benchmarkResume ? new ReleaseRequestCache(cacheOptions) : undefined;
 const holodex = new HolodexMusicService(fakeDatabase, fetcher, null, { requestConcurrency: concurrency, responseCache });
 let started = performance.now();
-await holodex.refreshLive({ includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
+await holodex.refreshLive({ pageSize, includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
 const holodexMs = performance.now() - started;
 const digest = createHash("sha256").update(JSON.stringify({
   rows: importedBundle.rows,
@@ -119,7 +121,7 @@ const stats = new YouTubeVideoStatsService(database, {
 started = performance.now();
 const statsResult = await stats.refreshViewCounts();
 console.log(JSON.stringify({
-  latencyMs, concurrency,
+  latencyMs, concurrency, pageSize,
   startup: { elapsedMs: startupMs, fullDatabaseWrites: startupFlushes },
   holodex: { elapsedMs: Math.round(holodexMs), requests, maxActive, rows: importedBundle.rows.length, digest,
     resumeCache: responseCache?.getMetrics() },

@@ -23,10 +23,14 @@ import Papa from "papaparse";
 import { normalizeVideoDetail, parseDuration } from "./cleanup";
 
 export class HolodexQueryError extends Error {}
+export class HolodexCatalogCoverageError extends Error {}
 
 const HOLODEX_USER_AGENT = "Holoshelf personal local Holodex catalog";
 const PROVIDED_TO_YOUTUBE_PREFIX = "Provided to YouTube by";
 const HOLODEX_VIDEO_INCLUDE_FIELDS = ["mentions", "songs", "description"] as const;
+export const HOLODEX_RELEASE_PAGE_SIZE = 500;
+
+type HolodexChannelPageInput = { offset?: number; limit?: number; org?: string; type?: "vtuber" | "subber" };
 
 type HolodexClientRateLimit = {
   maxRequests: number;
@@ -39,6 +43,7 @@ type HolodexClientRateLimit = {
 export interface HolodexResponseCache {
   read(url: string, init: RequestInit): Promise<Response | null>;
   write(url: string, init: RequestInit, response: Response): Promise<void>;
+  discard?(): void | Promise<void>;
 }
 
 export function parseHolodexSearchUrl(searchUrl = HOLODEX_DEFAULT_SEARCH_URL): HolodexParsedSearch {
@@ -341,12 +346,11 @@ export class HolodexApiClient {
     };
   }
 
-  async fetchChannelsPage(input: {
-    offset?: number;
-    limit?: number;
-    org?: string;
-    type?: "vtuber" | "subber";
-  } = {}): Promise<HolodexChannelRecord[]> {
+  async fetchChannelsPage(input: HolodexChannelPageInput = {}): Promise<HolodexChannelRecord[]> {
+    return (await this.fetchChannelsPageWithCount(input)).channels;
+  }
+
+  async fetchChannelsPageWithCount(input: HolodexChannelPageInput = {}): Promise<{ channels: HolodexChannelRecord[]; rawCount: number }> {
     const url = new URL(HOLODEX_CHANNELS_API_URL);
     url.searchParams.set("offset", String(Math.max(0, Math.round(input.offset ?? 0))));
     url.searchParams.set("limit", String(Math.min(Math.max(Math.round(input.limit ?? HOLODEX_CHANNEL_PAGE_SIZE), 1), 50)));
@@ -366,9 +370,11 @@ export class HolodexApiClient {
     }
 
     const body = (await response.json()) as HolodexChannelApiRecord[];
-    return (Array.isArray(body) ? body : [])
+    if (!Array.isArray(body)) throw new Error("Holodex channel page is not an array");
+    const channels = body
       .map((channel) => normalizeHolodexChannel(channel))
       .filter((channel): channel is HolodexChannelRecord => Boolean(channel));
+    return { channels, rawCount: body.length };
   }
 
   async fetchChannel(channelId: string): Promise<HolodexChannelRecord | null> {
@@ -431,7 +437,7 @@ export class HolodexApiClient {
     org?: string;
   }): Promise<{ items: HolodexSearchItem[]; total: number }> {
     const pageNumber = Math.max(1, Math.round(input.pageNumber ?? 1));
-    const pageSize = Math.min(Math.max(Math.round(input.pageSize ?? HOLODEX_CHANNEL_PAGE_SIZE), 1), 50);
+    const pageSize = Math.min(Math.max(Math.round(input.pageSize ?? HOLODEX_CHANNEL_PAGE_SIZE), 1), HOLODEX_RELEASE_PAGE_SIZE);
     const url = new URL(HOLODEX_DETAIL_API_URL);
     url.searchParams.set("paginated", "1");
     url.searchParams.set("offset", String((pageNumber - 1) * pageSize));
@@ -453,15 +459,11 @@ export class HolodexApiClient {
       throw new Error(`Holodex videos request failed with HTTP ${response.status}: ${await response.text()}`);
     }
 
-    const body = (await response.json()) as { items?: HolodexSearchItem[]; total?: number } | HolodexSearchItem[];
-    if (Array.isArray(body)) {
-      return { items: body, total: body.length };
+    const body = (await response.json()) as { items?: HolodexSearchItem[]; total?: number } | null;
+    if (!body || !Array.isArray(body.items) || !Number.isSafeInteger(body.total) || Number(body.total) < 0) {
+      throw new HolodexCatalogCoverageError("Holodex videos page is missing valid items or its total");
     }
-
-    return {
-      items: Array.isArray(body.items) ? body.items : [],
-      total: Number(body.total ?? 0)
-    };
+    return { items: body.items, total: Number(body.total) };
   }
 
   async fetchVideoDetail(videoId: string, input: { includeRelationships?: boolean } = {}): Promise<HolodexVideoDetail> {
@@ -489,11 +491,29 @@ export class HolodexApiClient {
     if (cached) { return cached; }
     const maxRetries = this.rateLimit?.maxRetries ?? 4;
     let attempt = 0;
+    let transientAttempts = 0;
 
     for (;;) {
       await this.waitForRateLimitTurn();
       this.requestCount += 1;
-      const response = await this.fetchWithTimeout(url, init);
+      let response: Response;
+      try {
+        response = await this.fetchWithTimeout(url, init);
+      } catch (error) {
+        if (transientAttempts >= 2) throw error;
+        this.retryCount += 1;
+        await this.sleep(500 * 2 ** transientAttempts++);
+        continue;
+      }
+      if (response.status >= 500 && transientAttempts < 2) {
+        this.retryCount += 1;
+        const delay = response.headers.has("retry-after")
+          ? this.getRetryDelayMs(response, transientAttempts + 1) : 500 * 2 ** transientAttempts;
+        transientAttempts += 1;
+        await response.body?.cancel();
+        this.retryAfterUntil = Math.max(this.retryAfterUntil, Date.now() + delay);
+        continue;
+      }
       if (response.status !== 429 || attempt >= maxRetries) {
         if (response.ok && this.responseCache) {
           await this.responseCache.write(url, init, response.clone());

@@ -116,4 +116,9 @@ export class ReleaseRequestCache implements HolodexResponseCache {
       throw new Error("Release data is complete, but its resume cache could not be invalidated. Use --fresh on the next run.");
     }
   }
+
+  discard(): void {
+    this.complete();
+    this.enabled = false;
+  }
 }

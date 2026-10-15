@@ -10,6 +10,26 @@ import {
 import { HOLODEX_DEFAULT_SEARCH_URL } from "./types";
 
 describe("Holodex client helpers", () => {
+  it.each([null, {items:[],total:'2'}, {items:[],total:-1}, {error:'bad response'}, []])("rejects malformed paginated videos %j", async body => {
+    const client=new HolodexApiClient(null,(async()=>Response.json(body)) as typeof fetch);
+    await expect(client.fetchVideosPage({topicId:'Music_Cover',videoType:'stream',pageSize:500})).rejects.toThrow('valid items or its total');
+  });
+
+  it("retries transport and server errors with bounded attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher=vi.fn().mockRejectedValueOnce(new TypeError('network failure'))
+        .mockResolvedValueOnce(new Response('temporary failure',{status:503}))
+        .mockResolvedValueOnce(Response.json([]));
+      const client=new HolodexApiClient(null,fetcher,{maxRequests:76,windowMs:120000});
+      const pending=client.fetchChannelsPage();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await pending).toEqual([]);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(client.getRequestMetrics()).toEqual({requests:3,retries:2});
+    } finally { vi.useRealTimers(); }
+  });
+
   it("enforces the same rolling quota across simultaneous requests", async () => {
     vi.useFakeTimers();
     try {

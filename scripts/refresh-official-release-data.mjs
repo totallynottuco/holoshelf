@@ -63,7 +63,7 @@ API keys:
   YOUTUBE_API_KEY or --youtube-key=...
 
 Rate-limit controls:
-  --page-size=50
+  --page-size=500                         Full-metadata video page size (adapts to server caps).
   --page-limit=10
   --collab-page-limit=1
   --max-requests=76
@@ -394,7 +394,7 @@ async function main() {
   let officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
   const holodexApiKey = readArg("holodex-key", process.env.HOLODEX_API_KEY || "");
   const youtubeApiKey = readArg("youtube-key", process.env.YOUTUBE_API_KEY || "");
-  const pageSize = readNumberArg("page-size", 50);
+  const pageSize = readNumberArg("page-size", 500);
   const pageLimit = readNumberArg("page-limit", null);
   const collabPageLimit = readNumberArg("collab-page-limit", 1);
   const maxRequestsPerWindow = readNumberArg("max-requests", 76);
@@ -449,6 +449,7 @@ async function main() {
   let musicRefresh = null;
   let videoStatsRefresh = null;
   let statsCoverage = null;
+  let holodexCoverage = null;
   let imageRefresh = null;
 
   if (refreshHolodex) {
@@ -480,6 +481,10 @@ async function main() {
 
       if (musicRefresh.run.status !== "completed") {
         throw new Error(musicRefresh.run.error || "Holodex official data refresh failed");
+      }
+      holodexCoverage = service.getRefreshCoverage();
+      if (pageLimit == null && !holodexCoverage.complete) {
+        throw new Error("Holodex catalog coverage is incomplete; refusing to publish the seed");
       }
     } else {
       log("Skipping Holodex refresh; stamping and seeding existing source database data");
@@ -513,6 +518,9 @@ async function main() {
           + (videoStatsRefresh.failedBatchDetails ?? []).map((batch) => batch.reason).join("; ")
         );
       }
+      // Representative/variant decisions also depend on fresh view counts.
+      const repairedAfterStats = await measure("duplicateRepairAfterStats", () => database.repairHololiveMusicDuplicateRows());
+      if (repairedAfterStats > 0) log(`Repaired ${repairedAfterStats} duplicate music row(s) after refreshing view counts`);
       statsCoverage = auditOfficialMusicStats(database, videoStatsRefresh.fetchedAt);
       log(`YouTube stats verified: ${statsCoverage.freshVideos}/${statsCoverage.catalogVideos} current, `
         + `${statsCoverage.missingVideos} missing, ${statsCoverage.staleVideos} stale; `
@@ -563,6 +571,7 @@ async function main() {
             run: musicRefresh.run
           }
         : null,
+      holodexCoverage,
       videoStatsRefresh,
       statsCoverage,
       statsRefreshComplete: refreshStats && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0,

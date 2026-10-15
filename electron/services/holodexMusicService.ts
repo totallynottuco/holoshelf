@@ -10,9 +10,11 @@ import type {
 } from "../../src/shared/contracts";
 import {
   HolodexApiClient,
+  HolodexCatalogCoverageError,
   HOLODEX_CHANNEL_PAGE_SIZE,
   HOLODEX_DEFAULT_PAGE_SIZE,
   HOLODEX_DEFAULT_SEARCH_URL,
+  HOLODEX_RELEASE_PAGE_SIZE,
   buildHolodexPageUrl,
   cleanupCatalogRows,
   makeCatalogRowsFromRecords,
@@ -52,6 +54,7 @@ export class HolodexMusicService {
   private readonly apiKeyOverride: string | null;
   private readonly concurrency: number;
   private readonly responseCache: HolodexResponseCache | null;
+  private refreshCoverage: Record<string, { total: number; fetched: number; pages: number; pageSize: number; complete: boolean }> = {};
   private refreshClient: {
     apiKey: string | null;
     maxRequests: number;
@@ -68,6 +71,11 @@ export class HolodexMusicService {
     this.apiKeyOverride = options.apiKey?.trim() || null;
     this.concurrency = requestConcurrency(options.requestConcurrency);
     this.responseCache = options.responseCache ?? null;
+  }
+
+  getRefreshCoverage() {
+    const topics = Object.fromEntries(Object.entries(this.refreshCoverage).map(([topic, coverage]) => [topic, { ...coverage }]));
+    return { topics, complete: Object.keys(topics).length === HOLODEX_MUSIC_TOPICS.length && Object.values(topics).every((topic) => topic.complete) };
   }
 
   async importArtifacts(directoryPath: string): Promise<HololiveMusicImportResult> {
@@ -228,6 +236,7 @@ export class HolodexMusicService {
     requestWindowMs?: number | null;
   } = {}): Promise<HololiveMusicImportResult> {
     const startedAt = performance.now();
+    this.refreshCoverage = {};
     try {
       const client = this.createHolodexClient(input);
       if (input.includeChannels !== false) {
@@ -290,7 +299,7 @@ export class HolodexMusicService {
         const officialResult = await this.fetchOfficialMusicVideoRecords(client, {
           includeRelationships: input.includeRelationships !== false,
           pageLimit: input.pageLimit ?? null,
-          pageSize: input.pageSize ?? 50
+          pageSize: input.pageSize ?? HOLODEX_RELEASE_PAGE_SIZE
         });
         records.push(...officialResult.records);
         detailCache = officialResult.detailCache;
@@ -360,13 +369,17 @@ export class HolodexMusicService {
 
       this.reportProgress(`Importing ${cleanup.rows.length} cleaned Holodex music row(s)`);
       const metrics = client.getRequestMetrics();
-      this.reportProgress(`Holodex requests: ${metrics.requests}, rate-limit retries: ${metrics.retries}, concurrency: ${this.concurrency}`);
+      this.reportProgress(`Holodex requests: ${metrics.requests}, retries: ${metrics.retries}, concurrency: ${this.concurrency}`);
       const importingAt = performance.now();
       this.reportProgress(`Holodex fetching: ${((fetchedAt - startedAt) / 1000).toFixed(1)}s; cleanup: ${((importingAt - fetchedAt) / 1000).toFixed(1)}s`);
       const result = this.database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: Boolean(input.replaceExisting) });
       this.reportProgress(`Holodex database import: ${((performance.now() - importingAt) / 1000).toFixed(1)}s`);
       return result;
     } catch (error) {
+      if (error instanceof HolodexCatalogCoverageError) {
+        await this.responseCache?.discard?.();
+        this.reportProgress("Discarded the inconsistent Holodex page cache; the next refresh will fetch fresh pages");
+      }
       return this.database.recordFailedHolodexRefresh({
         source: "live",
         error: error instanceof Error ? error.message : "Holodex live refresh failed"
@@ -540,14 +553,14 @@ export class HolodexMusicService {
   ): Promise<{ refreshedChannels: number; classifiedChannels: number; updatedAt: string }> {
     const channels: HolodexChannelRecord[] = [];
     for (let offset = 0; ; offset += HOLODEX_CHANNEL_PAGE_SIZE) {
-      const page = await client.fetchChannelsPage({
+      const { channels: page, rawCount } = await client.fetchChannelsPageWithCount({
         org: "Hololive",
         type: "vtuber",
         offset,
         limit: HOLODEX_CHANNEL_PAGE_SIZE
       });
       channels.push(...page);
-      if (page.length < HOLODEX_CHANNEL_PAGE_SIZE) {
+      if (rawCount < HOLODEX_CHANNEL_PAGE_SIZE) {
         break;
       }
     }
@@ -662,30 +675,33 @@ export class HolodexMusicService {
   ): Promise<{ records: HolodexVideoRecord[]; detailCache: Record<string, HolodexVideoDetail> }> {
     const records: HolodexVideoRecord[] = [];
     const detailCache: Record<string, HolodexVideoDetail> = {};
-    const pageSize = Math.min(Math.max(Math.round(input.pageSize), 1), 50);
+    const requestedPageSize = Math.min(Math.max(Math.round(input.pageSize), 1), HOLODEX_RELEASE_PAGE_SIZE);
     const requestedPageLimit = input.pageLimit ? Math.max(1, Math.round(input.pageLimit)) : null;
 
     for (const topicId of HOLODEX_MUSIC_TOPICS) {
       for (const videoType of HOLODEX_VIDEO_TYPES) {
-        const firstPage = await client.fetchVideosPage({
-          topicId,
-          videoType,
-          pageNumber: 1,
-          pageSize,
-          includeRelationships: input.includeRelationships
+        const fetchFirstPage = (pageSize: number) => client.fetchVideosPage({
+          topicId, videoType, pageNumber: 1, pageSize, includeRelationships: input.includeRelationships
         });
+        let requestedSize = requestedPageSize;
+        let firstPage;
+        try {
+          firstPage = await fetchFirstPage(requestedSize);
+        } catch (error) {
+          if (requestedSize <= 50 || !(error instanceof Error) || !/\bHTTP (400|413|422)\b/.test(error.message)) throw error;
+          requestedSize = 50;
+          this.reportProgress(`Holodex rejected larger ${topicId} pages; using 50-video pages`);
+          firstPage = await fetchFirstPage(requestedSize);
+        }
+        // Use the actual first-page size if the server caps a requested large
+        // page. Offsets must follow what was returned, never assume the cap.
+        const pageSize = firstPage.total > 0 ? firstPage.items.length : requestedSize;
+        if (pageSize < 1 || pageSize > requestedSize || firstPage.items.length > firstPage.total) {
+          throw new HolodexCatalogCoverageError(`Holodex ${topicId} returned an invalid first page size`);
+        }
         const pageCount = Math.max(1, Math.ceil(firstPage.total / pageSize));
         const lastPage = Math.min(pageCount, requestedPageLimit ?? pageCount);
         this.reportProgress(`Holodex song uploads ${topicId}: ${firstPage.total} row(s), ${lastPage}/${pageCount} page(s)`);
-        this.collectOfficialMusicVideoPage(firstPage.items, {
-          records,
-          detailCache,
-          topicId,
-          videoType,
-          pageNumber: 1,
-          includeRelationships: input.includeRelationships
-        });
-
         const pageNumbers = Array.from({ length: lastPage - 1 }, (_, index) => index + 2);
         let completedPages = 1;
         const pages = await mapConcurrent(pageNumbers, this.concurrency, async (pageNumber) => {
@@ -702,17 +718,28 @@ export class HolodexMusicService {
           }
           return page;
         });
-        pages.forEach((page, index) => {
-          const pageNumber = pageNumbers[index];
+        const returnedIds = new Set<string>();
+        for (const [pageIndex, page] of [firstPage, ...pages].entries()) {
+          if (page.total !== firstPage.total || page.items.length !== Math.min(pageSize, firstPage.total - pageIndex * pageSize)) {
+            throw new HolodexCatalogCoverageError(`Holodex ${topicId} changed or truncated during pagination; retry the full refresh`);
+          }
+          for (const item of page.items) {
+            if (typeof item?.id !== "string" || !item.id.trim() || returnedIds.has(item.id) ||
+                item.type !== videoType || item.topic_id !== topicId) {
+              throw new HolodexCatalogCoverageError(`Holodex ${topicId} returned an invalid, duplicate, or out-of-scope video`);
+            }
+            returnedIds.add(item.id);
+          }
           this.collectOfficialMusicVideoPage(page.items, {
-            records,
-            detailCache,
-            topicId,
-            videoType,
-            pageNumber,
+            records, detailCache, topicId, videoType, pageNumber: pageIndex + 1,
             includeRelationships: input.includeRelationships
           });
-        });
+        }
+        this.reportProgress(`Verified Holodex ${topicId}: ${returnedIds.size}/${firstPage.total} unique uploads (${pageSize} per page)`);
+        this.refreshCoverage[topicId] = {
+          total: firstPage.total, fetched: returnedIds.size, pages: lastPage, pageSize,
+          complete: returnedIds.size === firstPage.total
+        };
       }
     }
 

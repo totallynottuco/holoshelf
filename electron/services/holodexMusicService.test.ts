@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DatabaseService } from "./database";
 import { HolodexMusicService } from "./holodexMusicService";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
+import { EXCLUDED_HOLODEX_CHANNEL_IDS } from "../../src/modules/hololive/music/types";
 
 const channel = (id: string) => ({ id, name: id, org: "Hololive", type: "vtuber" });
 const item = (id: string, uploader = "official-1") => ({
@@ -32,6 +33,90 @@ function fixture() {
 }
 
 describe("parallel Holodex refresh", () => {
+  it("keeps large-page output identical to small pages, including fresh details and collab links", async () => {
+    async function run(pageSize: number, serverCap = pageSize) {
+      const { database, imported } = fixture();
+      const requests: URL[] = [];
+      const service = new HolodexMusicService(database, (async (input) => {
+        const url = new URL(String(input)); requests.push(url);
+        if (url.pathname.endsWith('/collabs')) return Response.json({total: 1, items: [item('external', 'external-uploader')]});
+        const topic = url.searchParams.get('topic')!;
+        const total = topic === 'Music_Cover' ? 521 : 1003;
+        const offset = Number(url.searchParams.get('offset'));
+        const limit = Math.min(serverCap, Number(url.searchParams.get('limit')));
+        return Response.json({total, items: Array.from({length: Math.min(limit, total-offset)}, (_, i) => ({
+          ...item(`${topic}-${offset+i}`), topic_id: topic,
+          description: `fresh description ${offset+i}`, mentions: [channel('official-2')]
+        }))});
+      }) as typeof fetch);
+      const result = await service.refreshLive({pageSize, includeChannels:false, includeCustomTalents:false, maxRequestsPerWindow:10000});
+      expect(result.run.status).toBe('completed');
+      expect(service.getRefreshCoverage().complete).toBe(true);
+      expect(service.getRefreshCoverage().topics.Original_Song.fetched).toBe(1003);
+      return {bundle: imported.mock.calls[0][0], requests};
+    }
+    const small = await run(50);
+    const large = await run(500);
+    const capped = await run(500, 50);
+    expect(large.bundle).toEqual(small.bundle);
+    expect(capped.bundle).toEqual(small.bundle);
+    expect(large.requests).toHaveLength(7); // Five video pages plus both collaboration queries.
+    expect(small.requests).toHaveLength(34);
+    expect(capped.requests.filter(url=>url.searchParams.get('topic')==='Music_Cover')[1].searchParams.get('offset')).toBe('50');
+  });
+
+  it.each(['truncated', 'duplicate', 'changed-total', 'wrong-topic', 'null-item', 'invalid-id'])("rejects %s pagination without replacing the catalog", async (failure) => {
+    const {database, imported, failed} = fixture();
+    const discard=vi.fn();
+    const service = new HolodexMusicService(database, (async (input) => {
+      const url = new URL(String(input));
+      if(url.searchParams.get('topic')==='Music_Cover') return Response.json({total:0,items:[]});
+      const offset=Number(url.searchParams.get('offset'));
+      if(failure==='null-item') return Response.json({total:3,items:[null]});
+      if(failure==='invalid-id') return Response.json({total:3,items:[{...item('song'),id:8}]});
+      return Response.json({total:failure==='changed-total' && offset>0 ? 4 : 3, items:
+        offset>0 && failure==='truncated' ? [] : [{...item(failure==='duplicate' ? 'same' : `song-${offset}`),
+          topic_id:failure==='wrong-topic' ? 'singing' : 'Original_Song'}]});
+    }) as typeof fetch, null, {responseCache:{read:async()=>null,write:async()=>{},discard}});
+    const result=await service.refreshLive({includeChannels:false,includeCustomTalents:false,includeCollabs:false,pageSize:1,maxRequestsPerWindow:1000});
+    expect(result.run.status).toBe('failed');
+    expect(imported).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledOnce();
+  });
+
+  it("continues channel pagination after filtering excluded channels from a full page", async () => {
+    const {database} = fixture();
+    database.listHololiveIdolMainChannels=()=>[];
+    const refreshed=vi.fn(channels=>({refreshedChannels:channels.length,classifiedChannels:channels.length,updatedAt:'test'}));
+    database.refreshHolodexChannels=refreshed;
+    const offsets:number[]=[];
+    const service=new HolodexMusicService(database,(async(input)=>{
+      const offset=Number(new URL(String(input)).searchParams.get('offset'));offsets.push(offset);
+      return Response.json(offset===0 ? [
+        ...Array.from({length:34},(_,i)=>channel(`official-${i}`)),
+        ...[...EXCLUDED_HOLODEX_CHANNEL_IDS].slice(0,16).map(channel)
+      ] : [channel('last-official')]);
+    }) as typeof fetch);
+    expect((await service.refreshChannels()).refreshedChannels).toBe(35);
+    expect(offsets).toEqual([0,50]);
+  });
+
+  it("falls back to complete small pages if the API rejects a larger limit", async () => {
+    const {database, imported} = fixture();
+    const service=new HolodexMusicService(database,(async(input)=>{
+      const url=new URL(String(input));
+      if(Number(url.searchParams.get('limit'))>50) return new Response('unsupported limit',{status:400});
+      if(url.searchParams.get('topic')==='Music_Cover') return Response.json({total:0,items:[]});
+      const offset=Number(url.searchParams.get('offset'));
+      return Response.json({total:51,items:Array.from({length:Math.min(50,51-offset)},(_,i)=>item(`song-${offset+i}`))});
+    }) as typeof fetch);
+    const result=await service.refreshLive({includeChannels:false,includeCustomTalents:false,includeCollabs:false,maxRequestsPerWindow:1000});
+    expect(result.run.status).toBe('completed');
+    expect(imported.mock.calls[0][0].rows).toHaveLength(51);
+    expect(service.getRefreshCoverage().topics.Original_Song).toMatchObject({pageSize:50,complete:true,fetched:51});
+  });
+
   it("shares one quota between the channel and music phases", async () => {
     vi.useFakeTimers();
     try {

@@ -60,7 +60,9 @@ export const EXCLUDED_HOLODEX_CHANNEL_IDS = new Set([
   "UCmms2EE02mK4zdECwrHBpaA",
   "UCODNLyn3L83wEmC0DLL0cxA",
   "UCEoAD_2jSLoYQd2MJZxWuxQ",
-  "UCQmcltnre6aG9SkDRYZqFIg"
+  "UCQmcltnre6aG9SkDRYZqFIg",
+  // Keep the English group channel under the same exclusion as individual HOLOSTARS channels.
+  "UCJxZpzx4wHzEYD-eCiZPikg"
 ]);
 
 export function isExcludedHolodexChannelId(channelId: string | null | undefined): boolean {
