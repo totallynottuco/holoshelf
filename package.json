@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.67",
+  "version": "1.1.90",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "- Song updates"
+      "releaseNotes": "Songs and view counts can now update quietly in the background while preserving your personal library.\n\nThis one-time app update enables future catalog updates without another installer or update popup. It also includes faster startup, Holodex refreshes, and YouTube statistics updates."
     },
     "win": {
       "icon": "ico.ico",
