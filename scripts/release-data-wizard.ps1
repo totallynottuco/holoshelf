@@ -11,7 +11,8 @@ function Show-Help {
   Write-Host "Holoshelf release data updater"
   Write-Host ""
   Write-Host "This wizard prompts for API keys, refreshes the release source database,"
-  Write-Host "regenerates resources\seed, and can optionally install and verify that exact seed."
+  Write-Host "regenerates resources\seed, and can apply data directly to your installed app."
+  Write-Host "A full app rebuild/install is also available when updating app code."
   Write-Host ""
   Write-Host "Double-click Update Release Data.cmd from the project root, or run:"
   Write-Host "  npm run release:data:wizard"
@@ -89,6 +90,36 @@ function Read-PackageVersion {
   return [string]$packageJson.version
 }
 
+function Read-LocalUpdateMode {
+  $installedPath = Join-Path $env:LOCALAPPDATA "Programs\Holoshelf\Holoshelf.exe"
+  $manifestPath = Join-Path $env:LOCALAPPDATA "Programs\Holoshelf\resources\seed\official-data.json"
+  $canApplyData = $false
+  if ((Test-Path -LiteralPath $installedPath) -and (Test-Path -LiteralPath $manifestPath)) {
+    try {
+      $installedManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+      $canApplyData = $installedManifest.schema -eq 1 -and $installedManifest.seedDatabase -eq "holoshelf-template.sqlite"
+    } catch { $canApplyData = $false }
+  }
+  $defaultChoice = if ($canApplyData) { "1" } else { "2" }
+  Write-Host ""
+  Write-Host "After refreshing data:"
+  Write-Host "  1. Apply data to the installed app (fast; keeps the app version)."
+  Write-Host "  2. Build and install a full app update (bumps the patch version)."
+  Write-Host "  3. Refresh bundled data only."
+  while ($true) {
+    $choice = (Read-Host "Choose 1, 2, or 3 [default $defaultChoice]").Trim()
+    if ([string]::IsNullOrWhiteSpace($choice)) { $choice = $defaultChoice }
+    if ($choice -eq "1" -and -not $canApplyData) {
+      Write-Host "Install Holoshelf with option 2 before using a data-only update."
+      continue
+    }
+    if ($choice -eq "1") { return "data-only" }
+    if ($choice -eq "2") { return "full-app" }
+    if ($choice -eq "3") { return "seed-only" }
+    Write-Host "Please choose 1, 2, or 3."
+  }
+}
+
 function Test-VersionInstalled {
   param([Parameter(Mandatory = $true)][string]$Version)
 
@@ -139,7 +170,8 @@ if ([string]::IsNullOrWhiteSpace($youtubeKey)) {
   }
 }
 
-$installLocalUpdate = Read-YesNo "After refreshing data, bump the patch version and install a local app update?" $true
+$updateMode = Read-LocalUpdateMode
+$installLocalUpdate = $updateMode -ne "seed-only"
 
 Write-Host ""
 Write-Host "Ready:"
@@ -147,7 +179,7 @@ Write-Host "  Release DB: data\holoshelf.sqlite"
 Write-Host "  Seed output: resources\seed"
 Write-Host "  Holodex key: $(if ([string]::IsNullOrWhiteSpace($holodexKey)) { 'not provided' } else { 'provided for this run' })"
 Write-Host "  YouTube stats: $(if ($skipStats) { 'skipped' } else { 'enabled' })"
-Write-Host "  Local install update: $(if ($installLocalUpdate) { 'yes' } else { 'no' })"
+Write-Host "  Local update: $updateMode"
 
 if (-not (Read-YesNo "Start now?" $true)) {
   Write-Host "Cancelled."
@@ -178,7 +210,16 @@ try {
 
   Invoke-Npm $refreshArguments
 
-  if ($installLocalUpdate) {
+  if ($updateMode -eq "data-only") {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+      & (Join-Path $PSScriptRoot "install-local-data.ps1")
+    } finally {
+      Write-Host ("Data update elapsed: {0:n1}s" -f $timer.Elapsed.TotalSeconds)
+    }
+  }
+
+  if ($updateMode -eq "full-app") {
     $packageJsonPath = Join-Path $projectRoot "package.json"
     $packageLockPath = Join-Path $projectRoot "package-lock.json"
     $packageJsonBefore = [IO.File]::ReadAllBytes($packageJsonPath)

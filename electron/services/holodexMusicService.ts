@@ -28,6 +28,7 @@ import {
 } from "../../src/modules/hololive/music";
 import type { DatabaseService } from "./database";
 import { mapConcurrent, requestConcurrency } from "../../src/shared/asyncPool";
+import type { HolodexResponseCache } from "../../src/modules/hololive/music/holodexClient";
 
 const HOLODEX_API_KEY_SETTING = "sources.holodexApiKey";
 const HOLODEX_VIDEOS_FILE = "holodex_videos.csv";
@@ -44,11 +45,13 @@ const CUSTOM_CHANNEL_RECENT_MUSIC_TIMEOUT_MS = 10_000;
 interface HolodexMusicServiceOptions {
   apiKey?: string | null;
   requestConcurrency?: number;
+  responseCache?: HolodexResponseCache;
 }
 
 export class HolodexMusicService {
   private readonly apiKeyOverride: string | null;
   private readonly concurrency: number;
+  private readonly responseCache: HolodexResponseCache | null;
   private refreshClient: {
     apiKey: string | null;
     maxRequests: number;
@@ -64,6 +67,7 @@ export class HolodexMusicService {
   ) {
     this.apiKeyOverride = options.apiKey?.trim() || null;
     this.concurrency = requestConcurrency(options.requestConcurrency);
+    this.responseCache = options.responseCache ?? null;
   }
 
   async importArtifacts(directoryPath: string): Promise<HololiveMusicImportResult> {
@@ -521,7 +525,7 @@ export class HolodexMusicService {
         client: new HolodexApiClient(apiKey, this.fetcher, {
           ...HOLODEX_FULL_REFRESH_RATE_LIMIT, maxRequests, windowMs,
           onRateLimitWait: (waitMs) => this.reportProgress(`Holodex quota cooldown: waiting ${(waitMs / 1000).toFixed(1)}s`)
-        })
+        }, this.responseCache)
       };
     }
     return this.refreshClient.client;

@@ -12,8 +12,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { DatabaseService } = require("../dist-electron/electron/services/database.js");
 const { HolodexMusicService } = require("../dist-electron/electron/services/holodexMusicService.js");
 const { YouTubeVideoStatsService } = require("../dist-electron/electron/services/youtubeVideoStatsService.js");
+const { ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js");
 const latencyMs = Number(process.argv.find((arg) => arg.startsWith("--latency-ms="))?.split("=")[1] ?? 20);
 const concurrency = Number(process.argv.find((arg) => arg.startsWith("--concurrency="))?.split("=")[1] ?? 4);
+const benchmarkResume = process.argv.includes("--resume");
 const delay = () => new Promise((resolve) => setTimeout(resolve, latencyMs));
 const benchmarkRoot = path.join(root, "data", "benchmarks");
 fs.mkdirSync(benchmarkRoot, { recursive: true });
@@ -21,7 +23,13 @@ const directory = fs.mkdtempSync(path.join(benchmarkRoot, "refresh-"));
 const databasePath = path.join(directory, "holoshelf.sqlite");
 fs.copyFileSync(path.join(root, "resources/seed/holoshelf-template.sqlite"), databasePath);
 const database = new DatabaseService(databasePath, path.join(directory, "backups"), { createBackups: false });
+let startupFlushes = 0;
+const startupFlush = database.flush.bind(database);
+database.flush = () => { startupFlushes += 1; startupFlush(); };
+const startupStartedAt = performance.now();
 await database.init();
+const startupMs = Math.round(performance.now() - startupStartedAt);
+database.flush = startupFlush;
 const channelIds = database.listHololiveIdolMainChannels().map((link) => link.youtubeChannelId).slice(0, 60);
 const channels = channelIds.map((id) => ({ id, name: id, org: "Hololive", type: "vtuber" }));
 const makeItem = (index, topic = "Original_Song") => ({
@@ -33,6 +41,7 @@ let requests = 0;
 let active = 0;
 let maxActive = 0;
 let importedBundle;
+let remainingBeforeFailure = Infinity;
 const fakeDatabase = {
   getSettings: () => ({}),
   listHololiveChannels: () => channels.map((channel) => ({ ...channel, kind: "main" })),
@@ -45,11 +54,12 @@ const fakeDatabase = {
   },
   recordFailedHolodexRefresh: (error) => { throw new Error(error.error); }
 };
-const holodex = new HolodexMusicService(fakeDatabase, async (input) => {
+const fetcher = async (input) => {
   requests += 1;
   maxActive = Math.max(maxActive, ++active);
   await delay();
   active -= 1;
+  if (--remainingBeforeFailure < 0) { return new Response("simulated interruption", { status: 503 }); }
   const url = new URL(String(input));
   if (url.pathname === "/api/v2/videos") {
     const offset = Number(url.searchParams.get("offset"));
@@ -63,7 +73,22 @@ const holodex = new HolodexMusicService(fakeDatabase, async (input) => {
   const id = url.pathname.split("/").at(-1);
   const index = Number(id.split("-").at(-1));
   return Response.json(makeItem(index));
-}, null, { requestConcurrency: concurrency });
+};
+const cacheOptions = { directory: path.join(directory, "cache"), scope: "offline-fixture" };
+if (benchmarkResume) {
+  remainingBeforeFailure = 60;
+  const interrupted = new HolodexMusicService(fakeDatabase, fetcher, null, {
+    requestConcurrency: concurrency, responseCache: new ReleaseRequestCache(cacheOptions)
+  });
+  try {
+    await interrupted.refreshLive({ includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
+  } catch { /* Deliberately resume an interrupted refresh below. */ }
+  remainingBeforeFailure = Infinity;
+  requests = 0;
+  maxActive = 0;
+}
+const responseCache = benchmarkResume ? new ReleaseRequestCache(cacheOptions) : undefined;
+const holodex = new HolodexMusicService(fakeDatabase, fetcher, null, { requestConcurrency: concurrency, responseCache });
 let started = performance.now();
 await holodex.refreshLive({ includeChannels: false, includeCustomTalents: false, maxRequestsPerWindow: 10000 });
 const holodexMs = performance.now() - started;
@@ -95,7 +120,9 @@ started = performance.now();
 const statsResult = await stats.refreshViewCounts();
 console.log(JSON.stringify({
   latencyMs, concurrency,
-  holodex: { elapsedMs: Math.round(holodexMs), requests, maxActive, rows: importedBundle.rows.length, digest },
+  startup: { elapsedMs: startupMs, fullDatabaseWrites: startupFlushes },
+  holodex: { elapsedMs: Math.round(holodexMs), requests, maxActive, rows: importedBundle.rows.length, digest,
+    resumeCache: responseCache?.getMetrics() },
   youtube: {
     elapsedMs: Math.round(performance.now() - started), requests: statsRequests,
     updatedVideos: statsResult.updatedVideos, flushes, exportedMiB: Math.round(exportedBytes / 1024 / 1024)

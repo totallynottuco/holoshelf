@@ -1386,6 +1386,7 @@ interface HololiveCapturedPlacement {
 export class DatabaseService {
   private db: Database | null = null;
   private inTransaction = false;
+  private initializing = false;
   private dirty = false;
   private SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
   private readonly hololiveUndoActions = new Map<string, HololiveUndoAction>();
@@ -1418,27 +1419,35 @@ export class DatabaseService {
       this.dirty = false;
       return;
     }
-    this.db.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
-    this.applyMigrations();
-    this.repairStaleActiveBracketArchives();
-    this.seedHololiveTierData();
-    const startupMaintenanceFingerprint = this.getStartupMaintenanceFingerprint();
-    if (
-      this.getSettingValue(STARTUP_MAINTENANCE_SETTING) !== STARTUP_MAINTENANCE_VERSION ||
-      this.getSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING) !== startupMaintenanceFingerprint
-    ) {
-      this.migrateHololiveChannelsToMergedSchema();
-      this.migrateHololiveMusicVideosToMergedParticipants();
-      this.backfillHololiveMusicSourceKinds();
-      this.purgeExcludedHololiveMusicRows();
-      this.purgeRejectedHolodexMusicRows();
-      this.backfillHololiveMusicClassifications();
-      this.migrateHololiveMusicMarkersToKeyedSchema();
-      this.backfillHololiveMusicMarkerFallbackKeys();
-      this.repairHololiveMusicDuplicateRows();
-      this.normalizeAllHololiveMusicPlaylistItemPositions();
-      this.persistSettingValue(STARTUP_MAINTENANCE_SETTING, STARTUP_MAINTENANCE_VERSION);
-      this.persistSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING, this.getStartupMaintenanceFingerprint());
+    // Startup is synchronous once sql.js is loaded. Keep each SQL transaction's
+    // semantics, then persist once after all maintenance succeeds. An error leaves
+    // the on-disk database at its complete pre-startup snapshot.
+    this.initializing = true;
+    try {
+      this.db.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+      this.applyMigrations();
+      this.repairStaleActiveBracketArchives();
+      this.seedHololiveTierData();
+      const startupMaintenanceFingerprint = this.getStartupMaintenanceFingerprint();
+      if (
+        this.getSettingValue(STARTUP_MAINTENANCE_SETTING) !== STARTUP_MAINTENANCE_VERSION ||
+        this.getSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING) !== startupMaintenanceFingerprint
+      ) {
+        this.migrateHololiveChannelsToMergedSchema();
+        this.migrateHololiveMusicVideosToMergedParticipants();
+        this.backfillHololiveMusicSourceKinds();
+        this.purgeExcludedHololiveMusicRows();
+        this.purgeRejectedHolodexMusicRows();
+        this.backfillHololiveMusicClassifications();
+        this.migrateHololiveMusicMarkersToKeyedSchema();
+        this.backfillHololiveMusicMarkerFallbackKeys();
+        this.repairHololiveMusicDuplicateRows();
+        this.normalizeAllHololiveMusicPlaylistItemPositions();
+        this.persistSettingValue(STARTUP_MAINTENANCE_SETTING, STARTUP_MAINTENANCE_VERSION);
+        this.persistSettingValue(STARTUP_MAINTENANCE_FINGERPRINT_SETTING, this.getStartupMaintenanceFingerprint());
+      }
+    } finally {
+      this.initializing = false;
     }
     if (this.dirty) {
       this.flush();
@@ -10253,7 +10262,7 @@ export class DatabaseService {
     if (db.getRowsModified() > 0) {
       this.dirty = true;
     }
-    if (!this.inTransaction && this.dirty) {
+    if (!this.inTransaction && !this.initializing && this.dirty) {
       this.flush();
     }
   }
@@ -10339,7 +10348,7 @@ export class DatabaseService {
       const result = work();
       this.requireDb().run("COMMIT");
       this.inTransaction = false;
-      if (this.dirty) {
+      if (this.dirty && !this.initializing) {
         this.flush();
       }
       return result;

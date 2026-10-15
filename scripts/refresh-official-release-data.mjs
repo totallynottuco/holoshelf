@@ -56,6 +56,7 @@ Common options:
   --keep-existing                         Keep existing Holodex rows instead of replacing official rows.
   --keep-source-api-keys                  Do not remove API key settings from the source DB after refresh.
   --no-seed                               Do not regenerate resources/seed after refresh.
+  --fresh                                 Discard unfinished API pages and start a fresh fetch.
 
 API keys:
   HOLODEX_API_KEY or --holodex-key=...
@@ -81,10 +82,12 @@ if (hasFlag("help") || hasFlag("h")) {
 let DatabaseService;
 let HolodexMusicService;
 let YouTubeVideoStatsService;
+let ReleaseRequestCache;
 try {
   ({ DatabaseService } = require("../dist-electron/electron/services/database.js"));
   ({ HolodexMusicService } = require("../dist-electron/electron/services/holodexMusicService.js"));
   ({ YouTubeVideoStatsService } = require("../dist-electron/electron/services/youtubeVideoStatsService.js"));
+  ({ ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js"));
 } catch (error) {
   throw new Error(
     `Compiled Electron services are missing. Run "npm run build" before this script. Original error: ${
@@ -394,7 +397,7 @@ async function main() {
   const backupDirectory = readArg("backups", defaultBackupDirectory());
   const artifactDirectory = resolveFromRoot(readArg("artifacts", "data/holodex-refresh/latest"));
   const imagesDirectory = resolveFromRoot(readArg("images", defaultImagesDirectory()));
-  const officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
+  let officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
   const holodexApiKey = readArg("holodex-key", process.env.HOLODEX_API_KEY || "");
   const youtubeApiKey = readArg("youtube-key", process.env.YOUTUBE_API_KEY || "");
   const pageSize = readNumberArg("page-size", 50);
@@ -435,9 +438,18 @@ async function main() {
   log(`Backups: ${backupDirectory}`);
   log(`Artifacts: ${artifactDirectory}`);
   log(`Images: ${imagesDirectory}`);
-  log(`Official data version: ${officialDataVersion}`);
   log(`Replace existing official Holodex rows: ${replaceExisting ? "yes" : "no"}`);
   log(`Request concurrency: Holodex=${concurrency}, YouTube=${statsConcurrency}`);
+  const responseCache = refreshHolodex ? new ReleaseRequestCache({
+    directory: path.join(root, "data", "release-request-cache"),
+    scope: JSON.stringify({ dbPath, pageSize, pageLimit, collabPageLimit, refreshChannels, includeCollabs,
+      previousOfficialDataVersion: database.getSettings()["hololive.officialDataVersion"] ?? "" }),
+    fresh: hasFlag("fresh"), log
+  }) : null;
+  if (responseCache && !readArg("version") && !process.env.HOLOSHELF_OFFICIAL_DATA_VERSION) {
+    officialDataVersion = makeOfficialDataVersion(new Date(responseCache.getMetrics().startedAt));
+  }
+  log(`Official data version: ${officialDataVersion}`);
 
   let channelRefresh = null;
   let musicRefresh = null;
@@ -449,7 +461,7 @@ async function main() {
         database,
         globalThis.fetch.bind(globalThis),
         (message) => log(message),
-        { apiKey: holodexApiKey, requestConcurrency: concurrency }
+        { apiKey: holodexApiKey, requestConcurrency: concurrency, responseCache }
       );
 
       if (refreshChannels) {
@@ -531,6 +543,7 @@ async function main() {
       refreshImages,
       concurrency,
       statsConcurrency,
+      resumeCache: responseCache?.getMetrics() ?? null,
       timingsMs,
       channelRefresh,
       musicRefresh: musicRefresh
@@ -576,6 +589,7 @@ async function main() {
     }
 
   console.log(JSON.stringify(summary, null, 2));
+  responseCache?.complete();
 }
 
 main().catch((error) => {

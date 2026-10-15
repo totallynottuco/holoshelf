@@ -36,6 +36,11 @@ type HolodexClientRateLimit = {
   onRateLimitWait?: (waitMs: number) => void;
 };
 
+export interface HolodexResponseCache {
+  read(url: string, init: RequestInit): Promise<Response | null>;
+  write(url: string, init: RequestInit, response: Response): Promise<void>;
+}
+
 export function parseHolodexSearchUrl(searchUrl = HOLODEX_DEFAULT_SEARCH_URL): HolodexParsedSearch {
   const parsed = new URL(searchUrl);
   const qValue = parsed.searchParams.get("q") ?? "";
@@ -301,7 +306,8 @@ export class HolodexApiClient {
   constructor(
     private readonly apiKey: string | null = null,
     private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
-    private readonly rateLimit: HolodexClientRateLimit | null = null
+    private readonly rateLimit: HolodexClientRateLimit | null = null,
+    private readonly responseCache: HolodexResponseCache | null = null
   ) {}
 
   async fetchSearchPage(input: {
@@ -479,6 +485,8 @@ export class HolodexApiClient {
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {
+    const cached = await this.responseCache?.read(url, init);
+    if (cached) { return cached; }
     const maxRetries = this.rateLimit?.maxRetries ?? 4;
     let attempt = 0;
 
@@ -487,6 +495,9 @@ export class HolodexApiClient {
       this.requestCount += 1;
       const response = await this.fetchWithTimeout(url, init);
       if (response.status !== 429 || attempt >= maxRetries) {
+        if (response.ok && this.responseCache) {
+          await this.responseCache.write(url, init, response.clone());
+        }
         return response;
       }
 
