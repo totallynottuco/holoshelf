@@ -56,11 +56,14 @@ describe("parallel Holodex refresh", () => {
       return {bundle: imported.mock.calls[0][0], requests};
     }
     const small = await run(50);
-    const large = await run(500);
-    const capped = await run(500, 50);
+    const large = await run(5000);
+    const capped = await run(5000, 50);
+    const intermediate = await run(5000, 500);
     expect(large.bundle).toEqual(small.bundle);
     expect(capped.bundle).toEqual(small.bundle);
-    expect(large.requests).toHaveLength(7); // Five video pages plus both collaboration queries.
+    expect(intermediate.bundle).toEqual(small.bundle);
+    expect(large.requests).toHaveLength(4); // Two video pages plus both collaboration queries.
+    expect(intermediate.requests).toHaveLength(7);
     expect(small.requests).toHaveLength(34);
     expect(capped.requests.filter(url=>url.searchParams.get('topic')==='Music_Cover')[1].searchParams.get('offset')).toBe('50');
   });
@@ -87,7 +90,8 @@ describe("parallel Holodex refresh", () => {
 
   it("continues channel pagination after filtering excluded channels from a full page", async () => {
     const {database} = fixture();
-    database.listHololiveIdolMainChannels=()=>[];
+    const links = database.listHololiveIdolMainChannels();
+    database.listHololiveIdolMainChannels = () => links.filter(link => link.idolId !== "custom");
     const refreshed=vi.fn(channels=>({refreshedChannels:channels.length,classifiedChannels:channels.length,updatedAt:'test'}));
     database.refreshHolodexChannels=refreshed;
     const offsets:number[]=[];
@@ -100,6 +104,35 @@ describe("parallel Holodex refresh", () => {
     }) as typeof fetch);
     expect((await service.refreshChannels()).refreshedChannels).toBe(35);
     expect(offsets).toEqual([0,50]);
+  });
+
+  it.each([false, true])("fully fetches channels when larger pages are rejected: %s", async rejected => {
+    const {database} = fixture();
+    const links = database.listHololiveIdolMainChannels();
+    database.listHololiveIdolMainChannels = () => links.filter(link => link.idolId !== "custom");
+    const refreshed = vi.fn(channels => ({refreshedChannels: channels.length, classifiedChannels: channels.length, updatedAt: "test"}));
+    database.refreshHolodexChannels = refreshed;
+    const all = Array.from({length: 138}, (_, i) => channel(`official-${i}`));
+    const offsets: number[] = [];
+    const service = new HolodexMusicService(database, (async input => {
+      const url = new URL(String(input));
+      const offset = Number(url.searchParams.get("offset"));
+      const limit = Number(url.searchParams.get("limit"));
+      offsets.push(offset);
+      if (rejected && limit > 50) return new Response("unsupported limit", {status: 400});
+      return Response.json(all.slice(offset, offset + limit));
+    }) as typeof fetch);
+    expect((await service.refreshChannels()).refreshedChannels).toBe(138);
+    expect(offsets).toEqual(rejected ? [0, 0, 50, 100] : [0]);
+  });
+
+  it("rejects repeated channel pages before replacing channel metadata", async () => {
+    const {database} = fixture();
+    database.refreshHolodexChannels = vi.fn();
+    const page = Array.from({length: 500}, (_, i) => channel(`official-${i}`));
+    const service = new HolodexMusicService(database, (async () => Response.json(page)) as typeof fetch);
+    await expect(service.refreshChannels()).rejects.toThrow("repeated a channel");
+    expect(database.refreshHolodexChannels).not.toHaveBeenCalled();
   });
 
   it("falls back to complete small pages if the API rejects a larger limit", async () => {

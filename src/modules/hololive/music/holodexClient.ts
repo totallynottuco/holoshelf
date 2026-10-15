@@ -28,7 +28,8 @@ export class HolodexCatalogCoverageError extends Error {}
 const HOLODEX_USER_AGENT = "Holoshelf personal local Holodex catalog";
 const PROVIDED_TO_YOUTUBE_PREFIX = "Provided to YouTube by";
 const HOLODEX_VIDEO_INCLUDE_FIELDS = ["mentions", "songs", "description"] as const;
-export const HOLODEX_RELEASE_PAGE_SIZE = 500;
+export const HOLODEX_RELEASE_PAGE_SIZE = 5_000;
+export const HOLODEX_RELEASE_CHANNEL_PAGE_SIZE = 500;
 
 type HolodexChannelPageInput = { offset?: number; limit?: number; org?: string; type?: "vtuber" | "subber" };
 
@@ -303,9 +304,16 @@ export class HolodexApiClient {
   private requestCount = 0;
   private retryCount = 0;
   private announcedWaitUntil = 0;
+  private quotaWaiters = 0;
+  private quotaWaitStartedAt = 0;
+  private quotaWaitMs = 0;
 
   getRequestMetrics(): { requests: number; retries: number } {
     return { requests: this.requestCount, retries: this.retryCount };
+  }
+
+  getQuotaWaitMs(): number {
+    return this.quotaWaitMs + (this.quotaWaiters > 0 ? Date.now() - this.quotaWaitStartedAt : 0);
   }
 
   constructor(
@@ -350,10 +358,10 @@ export class HolodexApiClient {
     return (await this.fetchChannelsPageWithCount(input)).channels;
   }
 
-  async fetchChannelsPageWithCount(input: HolodexChannelPageInput = {}): Promise<{ channels: HolodexChannelRecord[]; rawCount: number }> {
+  async fetchChannelsPageWithCount(input: HolodexChannelPageInput = {}): Promise<{ channels: HolodexChannelRecord[]; rawCount: number; rawIds: string[] }> {
     const url = new URL(HOLODEX_CHANNELS_API_URL);
     url.searchParams.set("offset", String(Math.max(0, Math.round(input.offset ?? 0))));
-    url.searchParams.set("limit", String(Math.min(Math.max(Math.round(input.limit ?? HOLODEX_CHANNEL_PAGE_SIZE), 1), 50)));
+    url.searchParams.set("limit", String(Math.min(Math.max(Math.round(input.limit ?? HOLODEX_CHANNEL_PAGE_SIZE), 1), HOLODEX_RELEASE_CHANNEL_PAGE_SIZE)));
     if (input.org) {
       url.searchParams.set("org", input.org);
     }
@@ -370,11 +378,17 @@ export class HolodexApiClient {
     }
 
     const body = (await response.json()) as HolodexChannelApiRecord[];
-    if (!Array.isArray(body)) throw new Error("Holodex channel page is not an array");
+    if (!Array.isArray(body)) throw new HolodexCatalogCoverageError("Holodex channel page has invalid records");
+    const rawIds = body.map(channel => {
+      if (!channel || typeof channel.id !== "string" || !channel.id.trim()) {
+        throw new HolodexCatalogCoverageError("Holodex channel page has invalid records");
+      }
+      return channel.id;
+    });
     const channels = body
       .map((channel) => normalizeHolodexChannel(channel))
       .filter((channel): channel is HolodexChannelRecord => Boolean(channel));
-    return { channels, rawCount: body.length };
+    return { channels, rawCount: body.length, rawIds };
   }
 
   async fetchChannel(channelId: string): Promise<HolodexChannelRecord | null> {
@@ -505,6 +519,7 @@ export class HolodexApiClient {
         await this.sleep(500 * 2 ** transientAttempts++);
         continue;
       }
+      this.observeServerQuota(response);
       if (response.status >= 500 && transientAttempts < 2) {
         this.retryCount += 1;
         const delay = response.headers.has("retry-after")
@@ -557,7 +572,7 @@ export class HolodexApiClient {
       const now = Date.now();
       if (now < this.retryAfterUntil) {
         this.announceWait(this.retryAfterUntil - now);
-        await this.sleep(this.retryAfterUntil - now);
+        await this.waitForQuota(this.retryAfterUntil - now);
         continue;
       }
       if (!this.rateLimit) {
@@ -571,7 +586,35 @@ export class HolodexApiClient {
 
       const waitMs = windowMs - (now - this.requestTimestamps[0]) + 250;
       this.announceWait(Math.max(250, waitMs));
-      await this.sleep(Math.max(250, waitMs));
+      await this.waitForQuota(Math.max(250, waitMs));
+    }
+  }
+
+  private observeServerQuota(response: Response): void {
+    const numberHeader = (name: string) => {
+      const raw = response.headers.get(name);
+      return raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
+    };
+    const limit = numberHeader("x-ratelimit-limit");
+    const remaining = numberHeader("x-ratelimit-remaining");
+    const resetAt = numberHeader("x-ratelimit-reset") * 1000;
+    const serverNow = Date.parse(response.headers.get("date") ?? "");
+    const waitMs = resetAt - serverNow;
+    // Headers may only make our existing rolling limit stricter. Keep four
+    // requests of headroom for workers already in flight and other local use.
+    if (Number.isSafeInteger(limit) && limit > 0 && Number.isSafeInteger(remaining) &&
+        remaining >= 0 && remaining <= Math.min(4, limit) && Number.isFinite(serverNow) &&
+        waitMs >= 0 && waitMs <= (this.rateLimit?.windowMs ?? 120_000) + 5_000) {
+      this.retryAfterUntil = Math.max(this.retryAfterUntil, Date.now() + waitMs + 1000);
+    }
+  }
+
+  private async waitForQuota(ms: number): Promise<void> {
+    if (this.quotaWaiters++ === 0) this.quotaWaitStartedAt = Date.now();
+    try {
+      await this.sleep(ms);
+    } finally {
+      if (--this.quotaWaiters === 0) this.quotaWaitMs += Date.now() - this.quotaWaitStartedAt;
     }
   }
 

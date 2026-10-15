@@ -15,7 +15,7 @@ const { YouTubeVideoStatsService } = require("../dist-electron/electron/services
 const { ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js");
 const latencyMs = Number(process.argv.find((arg) => arg.startsWith("--latency-ms="))?.split("=")[1] ?? 20);
 const concurrency = Number(process.argv.find((arg) => arg.startsWith("--concurrency="))?.split("=")[1] ?? 4);
-const pageSize = Number(process.argv.find((arg) => arg.startsWith("--page-size="))?.split("=")[1] ?? 500);
+const pageSize = Number(process.argv.find((arg) => arg.startsWith("--page-size="))?.split("=")[1] ?? 5000);
 const benchmarkResume = process.argv.includes("--resume");
 const delay = () => new Promise((resolve) => setTimeout(resolve, latencyMs));
 const benchmarkRoot = path.join(root, "data", "benchmarks");

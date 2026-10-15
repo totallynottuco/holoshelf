@@ -47,6 +47,7 @@ describe("Holodex client helpers", () => {
       await vi.advanceTimersByTimeAsync(1250);
       await pending;
       expect(starts).toEqual([0, 0, 1250, 1250, 2500]);
+      expect(client.getQuotaWaitMs()).toBe(2500);
     } finally {
       vi.useRealTimers();
     }
@@ -75,6 +76,54 @@ describe("Holodex client helpers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("honors low server quota before a 429 and measures concurrent waiting once", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const starts: number[] = [];
+      const serverNow = Date.parse("2026-10-15T19:00:00Z");
+      const client = new HolodexApiClient(null, (async () => {
+        starts.push(Date.now());
+        return Response.json([], starts.length === 1 ? { headers: {
+          date: new Date(serverNow).toUTCString(),
+          "x-ratelimit-limit": "80", "x-ratelimit-remaining": "4",
+          "x-ratelimit-reset": String(serverNow / 1000 + 2)
+        } } : undefined);
+      }) as typeof fetch, { maxRequests: 76, windowMs: 120000 });
+      await client.fetchChannelsPage();
+      const pending = Promise.all(Array.from({length: 3}, () => client.fetchChannelsPage()));
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(starts).toEqual([0]);
+      expect(client.getQuotaWaitMs()).toBe(2999);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(starts).toEqual([0, 3000, 3000, 3000]);
+      expect(client.getQuotaWaitMs()).toBe(3000);
+      expect(client.getRequestMetrics()).toEqual({requests: 4, retries: 0});
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("never raises the local rolling budget based on a higher server quota", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const starts: number[] = [];
+      const client = new HolodexApiClient(null, (async () => {
+        starts.push(Date.now());
+        return Response.json([], {headers: {"x-ratelimit-limit":"80", "x-ratelimit-remaining":"79"}});
+      }) as typeof fetch, {maxRequests: 2, windowMs: 1000});
+      const pending = Promise.all(Array.from({length: 3}, () => client.fetchChannelsPage()));
+      await vi.advanceTimersByTimeAsync(1250);
+      await pending;
+      expect(starts).toEqual([0, 0, 1250]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([null, [null], [{id: 8}], [{id: ""}]])("rejects malformed channel pages %j", async body => {
+    const client = new HolodexApiClient(null, (async () => Response.json(body)) as typeof fetch);
+    await expect(client.fetchChannelsPage()).rejects.toThrow("invalid records");
   });
 
   it("builds the default Holodex search payload for covers and originals", () => {

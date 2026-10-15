@@ -15,6 +15,7 @@ import {
   HOLODEX_DEFAULT_PAGE_SIZE,
   HOLODEX_DEFAULT_SEARCH_URL,
   HOLODEX_RELEASE_PAGE_SIZE,
+  HOLODEX_RELEASE_CHANNEL_PAGE_SIZE,
   buildHolodexPageUrl,
   cleanupCatalogRows,
   makeCatalogRowsFromRecords,
@@ -76,6 +77,11 @@ export class HolodexMusicService {
   getRefreshCoverage() {
     const topics = Object.fromEntries(Object.entries(this.refreshCoverage).map(([topic, coverage]) => [topic, { ...coverage }]));
     return { topics, complete: Object.keys(topics).length === HOLODEX_MUSIC_TOPICS.length && Object.values(topics).every((topic) => topic.complete) };
+  }
+
+  getRefreshRequestMetrics() {
+    const client = this.refreshClient?.client;
+    return { ...(client?.getRequestMetrics() ?? { requests: 0, retries: 0 }), quotaWaitMs: client?.getQuotaWaitMs() ?? 0 };
   }
 
   async importArtifacts(directoryPath: string): Promise<HololiveMusicImportResult> {
@@ -370,6 +376,7 @@ export class HolodexMusicService {
       this.reportProgress(`Importing ${cleanup.rows.length} cleaned Holodex music row(s)`);
       const metrics = client.getRequestMetrics();
       this.reportProgress(`Holodex requests: ${metrics.requests}, retries: ${metrics.retries}, concurrency: ${this.concurrency}`);
+      this.reportProgress(`Holodex quota wait time: ${(client.getQuotaWaitMs() / 1000).toFixed(1)}s`);
       const importingAt = performance.now();
       this.reportProgress(`Holodex fetching: ${((fetchedAt - startedAt) / 1000).toFixed(1)}s; cleanup: ${((importingAt - fetchedAt) / 1000).toFixed(1)}s`);
       const result = this.database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: Boolean(input.replaceExisting) });
@@ -552,17 +559,34 @@ export class HolodexMusicService {
     client: HolodexApiClient
   ): Promise<{ refreshedChannels: number; classifiedChannels: number; updatedAt: string }> {
     const channels: HolodexChannelRecord[] = [];
-    for (let offset = 0; ; offset += HOLODEX_CHANNEL_PAGE_SIZE) {
-      const { channels: page, rawCount } = await client.fetchChannelsPageWithCount({
-        org: "Hololive",
-        type: "vtuber",
-        offset,
-        limit: HOLODEX_CHANNEL_PAGE_SIZE
-      });
-      channels.push(...page);
-      if (rawCount < HOLODEX_CHANNEL_PAGE_SIZE) {
-        break;
+    let pageSize = HOLODEX_RELEASE_CHANNEL_PAGE_SIZE;
+    const rawIds = new Set<string>();
+    for (let offset = 0; ;) {
+      let result;
+      try {
+        result = await client.fetchChannelsPageWithCount({ org: "Hololive", type: "vtuber", offset, limit: pageSize });
+      } catch (error) {
+        if (offset !== 0 || pageSize <= HOLODEX_CHANNEL_PAGE_SIZE || !(error instanceof Error) || !/\bHTTP (400|413|422)\b/.test(error.message)) throw error;
+        pageSize = HOLODEX_CHANNEL_PAGE_SIZE;
+        this.reportProgress("Holodex rejected larger channel pages; using 50-channel pages");
+        continue;
       }
+      const { channels: page, rawCount } = result;
+      if (rawCount > pageSize) throw new HolodexCatalogCoverageError("Holodex returned too many channels for a page");
+      for (const id of result.rawIds) {
+        if (rawIds.has(id)) throw new HolodexCatalogCoverageError("Holodex channel pagination repeated a channel");
+        rawIds.add(id);
+      }
+      channels.push(...page);
+      if (rawCount === 0) break;
+      // Older servers can silently clamp to the documented 50-channel limit.
+      // Continue at that raw offset, even when all previously known channels
+      // were already returned: later pages can contain newly added channels.
+      if (rawCount < pageSize) {
+        if (pageSize <= HOLODEX_CHANNEL_PAGE_SIZE || rawCount !== HOLODEX_CHANNEL_PAGE_SIZE) break;
+        pageSize = HOLODEX_CHANNEL_PAGE_SIZE;
+      }
+      offset += rawCount;
     }
 
     const fetchedChannelIds = new Set(channels.map((channel) => channel.id));

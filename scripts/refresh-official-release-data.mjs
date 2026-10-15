@@ -63,7 +63,7 @@ API keys:
   YOUTUBE_API_KEY or --youtube-key=...
 
 Rate-limit controls:
-  --page-size=500                         Full-metadata video page size (adapts to server caps).
+  --page-size=5000                        Full-metadata video page size (adapts to server caps).
   --page-limit=10
   --collab-page-limit=1
   --max-requests=76
@@ -394,7 +394,7 @@ async function main() {
   let officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
   const holodexApiKey = readArg("holodex-key", process.env.HOLODEX_API_KEY || "");
   const youtubeApiKey = readArg("youtube-key", process.env.YOUTUBE_API_KEY || "");
-  const pageSize = readNumberArg("page-size", 500);
+  const pageSize = readNumberArg("page-size", 5000);
   const pageLimit = readNumberArg("page-limit", null);
   const collabPageLimit = readNumberArg("collab-page-limit", 1);
   const maxRequestsPerWindow = readNumberArg("max-requests", 76);
@@ -450,6 +450,7 @@ async function main() {
   let videoStatsRefresh = null;
   let statsCoverage = null;
   let holodexCoverage = null;
+  let holodexRequestMetrics = null;
   let imageRefresh = null;
 
   if (refreshHolodex) {
@@ -483,6 +484,7 @@ async function main() {
         throw new Error(musicRefresh.run.error || "Holodex official data refresh failed");
       }
       holodexCoverage = service.getRefreshCoverage();
+      holodexRequestMetrics = service.getRefreshRequestMetrics();
       if (pageLimit == null && !holodexCoverage.complete) {
         throw new Error("Holodex catalog coverage is incomplete; refusing to publish the seed");
       }
@@ -572,6 +574,7 @@ async function main() {
           }
         : null,
       holodexCoverage,
+      holodexRequestMetrics,
       videoStatsRefresh,
       statsCoverage,
       statsRefreshComplete: refreshStats && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0,
