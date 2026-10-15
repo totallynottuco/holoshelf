@@ -10,6 +10,7 @@ interface YouTubeVideoStatsServiceOptions {
   apiKey?: string | null;
   fetcher?: typeof fetch;
   requestConcurrency?: number;
+  log?: (message: string) => void;
 }
 
 interface YouTubeVideosApiItem {
@@ -133,6 +134,7 @@ export class YouTubeVideoStatsService {
   private readonly fetcher: typeof fetch;
   private readonly apiKeyOverride: string | null;
   private readonly concurrency: number;
+  private readonly log: (message: string) => void;
 
   constructor(
     private readonly database: DatabaseService,
@@ -141,6 +143,7 @@ export class YouTubeVideoStatsService {
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.apiKeyOverride = options.apiKey?.trim() || null;
     this.concurrency = requestConcurrency(options.requestConcurrency);
+    this.log = options.log ?? (() => undefined);
   }
 
   async refreshViewCounts(input: {
@@ -167,6 +170,8 @@ export class YouTubeVideoStatsService {
     let updatedVideos = 0;
     let unavailableVideos = 0;
     let failedBatches = 0;
+    const failedBatchDetails: NonNullable<HololiveMusicVideoStatsRefreshResult["failedBatchDetails"]> = [];
+    let completedBatches = 0;
     let unavailableBackupCreated = false;
 
     // Checkpoint each bounded group instead of exporting the entire SQLite file
@@ -175,8 +180,12 @@ export class YouTubeVideoStatsService {
       const results = await mapConcurrent(group, this.concurrency, async (batch) => {
         try {
           return await this.fetchBatch(batch, apiKey, fetchedAt);
-        } catch {
+        } catch (error) {
           failedBatches += 1;
+          const reason = (error instanceof Error ? error.message : "Unknown YouTube stats failure")
+            .split(apiKey).join("[redacted]").slice(0, 300);
+          failedBatchDetails.push({ requestedVideos: batch.length, reason });
+          this.log(`YouTube stats batch failed (${batch.length} videos): ${reason}`);
           return null;
         }
       });
@@ -203,6 +212,9 @@ export class YouTubeVideoStatsService {
         unavailableBackupCreated = true;
         unavailableVideos += 1;
       }
+      completedBatches += group.length;
+      this.log(`YouTube stats: ${completedBatches}/${batches.length} batches, ${updatedVideos}/${videoIds.length} updated, `
+        + `${unavailableVideos} unavailable, ${failedBatches} failed batches`);
     }
 
     return {
@@ -211,6 +223,7 @@ export class YouTubeVideoStatsService {
       missingVideos: Math.max(0, videoIds.length - updatedVideos),
       unavailableVideos,
       failedBatches,
+      failedBatchDetails,
       batches: batches.length,
       fetchedAt
     };
@@ -303,22 +316,23 @@ export class YouTubeVideoStatsService {
     url.searchParams.set("id", youtubeVideoIds.join(","));
     url.searchParams.set("key", apiKey);
 
-    const response = await this.fetcher(url, { signal: AbortSignal.timeout(45_000) });
+    const response = await this.fetchStatsResponse(url);
     if (!response.ok) {
       throw new Error(`YouTube video stats request failed with HTTP ${response.status}`);
     }
 
     const body = (await response.json()) as YouTubeVideosApiResponse;
-    if (!Array.isArray(body.items)) {
+    if (!body || !Array.isArray(body.items)) {
       throw new Error("YouTube video stats response is missing its items array");
     }
     const returnedIds = new Set<string>();
+    const requestedIds = new Set(youtubeVideoIds);
     const unavailableVideos: YouTubeVideoStatsBatchResult["unavailableVideos"] = [];
     const stats = (body.items ?? [])
       .map((item) => {
-        const youtubeVideoId = item.id?.trim() ?? "";
-        if (!youtubeVideoId) {
-          return null;
+        const youtubeVideoId = typeof item?.id === "string" ? item.id.trim() : "";
+        if (!requestedIds.has(youtubeVideoId) || returnedIds.has(youtubeVideoId)) {
+          throw new Error("YouTube video stats response contains an unexpected or duplicate video ID");
         }
         returnedIds.add(youtubeVideoId);
 
@@ -328,9 +342,10 @@ export class YouTubeVideoStatsService {
           return null;
         }
 
-        const viewCount = Number.parseInt(item.statistics?.viewCount ?? "", 10);
-        if (!Number.isFinite(viewCount) || viewCount < 0) {
-          return null;
+        const rawViewCount = item.statistics?.viewCount;
+        const viewCount = Number(rawViewCount);
+        if (typeof rawViewCount !== "string" || !/^\d+$/.test(rawViewCount) || !Number.isSafeInteger(viewCount)) {
+          throw new Error(`YouTube video stats response has an invalid view count for ${youtubeVideoId}`);
         }
         return {
           youtubeVideoId,
@@ -352,6 +367,28 @@ export class YouTubeVideoStatsService {
     }
 
     return { stats, unavailableVideos };
+  }
+
+  private async fetchStatsResponse(url: URL): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetcher(url, { signal: AbortSignal.timeout(45_000) });
+      } catch (error) {
+        if (attempt >= 2) throw error;
+        this.log("Retrying a YouTube stats request after a network error");
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+        continue;
+      }
+      if (attempt >= 2 || (response.status !== 429 && response.status < 500)) return response;
+      const retryAfter = response.headers.get("Retry-After");
+      const retrySeconds = Number(retryAfter);
+      const delay = retryAfter && Number.isFinite(retrySeconds)
+        ? Math.min(5_000, Math.max(0, retrySeconds * 1000)) : 250 * 2 ** attempt;
+      await response.body?.cancel();
+      this.log(`Retrying a YouTube stats request after HTTP ${response.status}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
 
   private async fetchVideoMetadata(youtubeVideoId: string, apiKey: string): Promise<YouTubeVideosApiItem> {

@@ -65,4 +65,67 @@ describe("YouTube statistics refresh batching", () => {
     });
     await expect(service.refreshViewCounts()).rejects.toThrow("disk full");
   });
+
+  it.each(["123oops", "-1", "1.5", "", "9007199254740992", null])("fails malformed view count %j without storing partial results or removing videos", async (viewCount) => {
+    const upsert = vi.fn();
+    const unavailable = vi.fn();
+    const database = {
+      listHololiveMusicVideoIdsForStats: () => ["good", "invalid"],
+      getHololiveMusicSourceChannelMismatchReason: () => null,
+      upsertHololiveMusicVideoStats: upsert,
+      markHololiveMusicVideoUnavailable: unavailable
+    } as unknown as DatabaseService;
+    const service = new YouTubeVideoStatsService(database, {
+      apiKey: "test", fetcher: (async () => Response.json({ items: [
+        { id: "good", statistics: { viewCount: "10" } }, { id: "invalid", statistics: { viewCount } }
+      ] })) as typeof fetch
+    });
+    expect(await service.refreshViewCounts()).toMatchObject({ updatedVideos: 0, failedBatches: 1, unavailableVideos: 0 });
+    expect(upsert.mock.calls.flatMap(([rows]) => rows)).toEqual([]);
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  it.each([["song", "song"], ["song", "unexpected"]])("rejects duplicate or unexpected response IDs %j", async (...returned) => {
+    const unavailable = vi.fn();
+    const database = {
+      listHololiveMusicVideoIdsForStats: () => ["song"],
+      upsertHololiveMusicVideoStats: vi.fn(),
+      markHololiveMusicVideoUnavailable: unavailable
+    } as unknown as DatabaseService;
+    const service = new YouTubeVideoStatsService(database, {
+      apiKey: "test", fetcher: (async () => Response.json({ items: returned.map(id => ({ id, statistics: { viewCount: "10" } })) })) as typeof fetch
+    });
+    expect(await service.refreshViewCounts()).toMatchObject({ updatedVideos: 0, failedBatches: 1, unavailableVideos: 0 });
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  it("retries throttling and server failures before persisting the successful result", async () => {
+    const upsert = vi.fn();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 429, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(new Response("busy", { status: 503, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(Response.json({ items: [{ id: "song", statistics: { viewCount: "0" } }] }));
+    const database = {
+      listHololiveMusicVideoIdsForStats: () => ["song"],
+      getHololiveMusicSourceChannelMismatchReason: () => null,
+      upsertHololiveMusicVideoStats: upsert
+    } as unknown as DatabaseService;
+    const result = await new YouTubeVideoStatsService(database, { apiKey: "test", fetcher }).refreshViewCounts();
+    expect(result).toMatchObject({ updatedVideos: 1, failedBatches: 0 });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(upsert.mock.calls[0][0][0].viewCount).toBe(0);
+  });
+
+  it("reports permanent failures immediately and redacts credentials from diagnostics", async () => {
+    const log = vi.fn();
+    const database = {
+      listHololiveMusicVideoIdsForStats: () => ["song"],
+      upsertHololiveMusicVideoStats: vi.fn()
+    } as unknown as DatabaseService;
+    const fetcher = vi.fn().mockResolvedValue(new Response("forbidden", { status: 403 }));
+    const result = await new YouTubeVideoStatsService(database, { apiKey: "private-key", fetcher, log }).refreshViewCounts();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(result.failedBatchDetails?.[0].reason).toContain("HTTP 403");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private-key");
+  });
 });

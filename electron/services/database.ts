@@ -3255,6 +3255,9 @@ export class DatabaseService {
     const requestedIds = [
       ...new Set((input.youtubeVideoIds ?? []).map((videoId) => videoId.trim()).filter(Boolean))
     ];
+    if (input.youtubeVideoIds != null && requestedIds.length === 0) {
+      return [];
+    }
     const limit = Math.min(Math.max(Math.round(input.limit ?? 10_000), 1), 50_000);
 
     if (requestedIds.length > 0) {

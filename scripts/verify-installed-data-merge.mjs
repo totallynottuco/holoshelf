@@ -2,9 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import initSqlJs from "sql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const { verifyInstalledMusicStats } = require("../dist-electron/electron/services/musicStatsAudit.js");
 
 const args = new Map(
   process.argv.slice(2).map((entry) => {
@@ -124,6 +127,36 @@ function assertPersonalStatePreserved(before, after) {
   }
 }
 
+function verifyStats(SQL) {
+  const files = [
+    path.join(projectRoot, "resources", "seed", "holoshelf-template.sqlite"),
+    path.join(resourcesDirectory, "seed", "holoshelf-template.sqlite"),
+    databasePath
+  ];
+  const databases = [];
+  const reader = (database) => ({
+    select(sql) {
+      const result = database.exec(sql)[0];
+      return result ? result.values.map((row) => Object.fromEntries(result.columns.map((column, i) => [column, row[i]]))) : [];
+    }
+  });
+  try {
+    for (const file of files) databases.push(new SQL.Database(fs.readFileSync(file)));
+    const [project, installed, personal] = databases.map(reader);
+    for (const [label, target] of [["installed seed", installed], ["AppData", personal]]) {
+      const report = verifyInstalledMusicStats(project, target);
+      if (report.mismatchedVideoIds.length > 0) {
+        fail(`${label} has ${report.mismatchedVideoIds.length} missing, stale, or mismatched YouTube stat(s): `
+          + report.mismatchedVideoIds.slice(0, 10).join(", "));
+      }
+      console.log(`Verified ${label} YouTube stats: ${report.verifiedVideos} match or are newer; `
+        + `${report.excludedVideos} personally excluded, ${report.deduplicatedVideos} verified duplicate replacements, ${report.userOwnedVideos} user-owned`);
+    }
+  } finally {
+    for (const database of databases) database.close();
+  }
+}
+
 function readNewLog(startOffset) {
   if (!fs.existsSync(logPath)) {
     return "";
@@ -197,6 +230,7 @@ async function main() {
       }
 
       assertPersonalStatePreserved(before, after);
+      verifyStats(SQL);
       console.log(`Verified AppData official data ${after.version} at ${databasePath}`);
       console.log(`Verified library rows: music=${after.musicRows} stats=${after.statsRows}`);
       if (before) {

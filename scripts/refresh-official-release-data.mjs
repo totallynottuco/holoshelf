@@ -83,11 +83,14 @@ let DatabaseService;
 let HolodexMusicService;
 let YouTubeVideoStatsService;
 let ReleaseRequestCache;
+let listOfficialMusicVideoIds;
+let auditOfficialMusicStats;
 try {
   ({ DatabaseService } = require("../dist-electron/electron/services/database.js"));
   ({ HolodexMusicService } = require("../dist-electron/electron/services/holodexMusicService.js"));
   ({ YouTubeVideoStatsService } = require("../dist-electron/electron/services/youtubeVideoStatsService.js"));
   ({ ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js"));
+  ({ listOfficialMusicVideoIds, auditOfficialMusicStats } = require("../dist-electron/electron/services/musicStatsAudit.js"));
 } catch (error) {
   throw new Error(
     `Compiled Electron services are missing. Run "npm run build" before this script. Original error: ${
@@ -146,19 +149,7 @@ function resolveFromRoot(value) {
 }
 
 function officialMusicVideoIds(database) {
-  const officialIdolIds = database
-    .listHololiveIdols()
-    .filter((idol) => idol.source !== "custom")
-    .map((idol) => idol.id);
-  const videoIds = new Set();
-
-  for (const idolId of officialIdolIds) {
-    for (const row of database.listHololiveMusicRows({ idolId, limit: 5000 })) {
-      videoIds.add(row.youtubeVideoId);
-    }
-  }
-
-  return [...videoIds].sort();
+  return listOfficialMusicVideoIds(database);
 }
 
 function artifactSummary(database) {
@@ -374,12 +365,15 @@ async function refreshTalentCardImages(database, imagesDirectory, log) {
   return { cached, skipped, failed, total: idols.length };
 }
 
-function regenerateSeed(officialDataVersion, generatedAt) {
+function regenerateSeed(officialDataVersion, generatedAt, sourcePaths) {
   const result = spawnSync(process.execPath, [path.join(root, "scripts", "create-release-seed.mjs")], {
     cwd: root,
     stdio: "inherit",
     env: {
       ...process.env,
+      HOLOSHELF_SEED_SOURCE_DATABASE: sourcePaths.dbPath,
+      HOLOSHELF_SEED_SOURCE_IMAGES: sourcePaths.imagesDirectory,
+      HOLOSHELF_SEED_SOURCE_ARTIFACTS: sourcePaths.artifactDirectory,
       HOLOSHELF_OFFICIAL_DATA_VERSION: officialDataVersion,
       HOLOSHELF_OFFICIAL_DATA_MERGED_AT: generatedAt,
       HOLOSHELF_SEED_GENERATED_AT: generatedAt
@@ -454,6 +448,7 @@ async function main() {
   let channelRefresh = null;
   let musicRefresh = null;
   let videoStatsRefresh = null;
+  let statsCoverage = null;
   let imageRefresh = null;
 
   if (refreshHolodex) {
@@ -490,6 +485,11 @@ async function main() {
       log("Skipping Holodex refresh; stamping and seeding existing source database data");
     }
 
+    const repairedDuplicateRows = await measure("duplicateRepair", () => database.repairHololiveMusicDuplicateRows());
+    if (repairedDuplicateRows > 0) {
+      log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
+    }
+
     if (refreshStats) {
       const settingsYoutubeApiKey = database.getSettings()["sources.youtubeApiKey"]?.trim() ?? "";
       if (!youtubeApiKey && !settingsYoutubeApiKey) {
@@ -498,27 +498,35 @@ async function main() {
 
       const statsService = new YouTubeVideoStatsService(database, {
         apiKey: youtubeApiKey || null,
-        requestConcurrency: statsConcurrency
+        requestConcurrency: statsConcurrency,
+        log
       });
       const youtubeVideoIds = officialMusicVideoIds(database);
       log(`Refreshing YouTube stats for ${youtubeVideoIds.length} official video(s)`);
       videoStatsRefresh = await measure("youtubeStats", () => statsService.refreshViewCounts({
         youtubeVideoIds,
-        limit: videoStatsLimit
+        limit: videoStatsLimit ?? Math.max(youtubeVideoIds.length, 1)
       }));
       if (videoStatsRefresh.failedBatches > 0) {
         throw new Error(
-          `YouTube stats refresh failed for ${videoStatsRefresh.failedBatches}/${videoStatsRefresh.batches} batch(es)`
+          `YouTube stats refresh failed for ${videoStatsRefresh.failedBatches}/${videoStatsRefresh.batches} batch(es): `
+          + (videoStatsRefresh.failedBatchDetails ?? []).map((batch) => batch.reason).join("; ")
         );
+      }
+      statsCoverage = auditOfficialMusicStats(database, videoStatsRefresh.fetchedAt);
+      log(`YouTube stats verified: ${statsCoverage.freshVideos}/${statsCoverage.catalogVideos} current, `
+        + `${statsCoverage.missingVideos} missing, ${statsCoverage.staleVideos} stale; `
+        + `${videoStatsRefresh.unavailableVideos} unavailable video(s) removed`);
+      if (videoStatsRefresh.updatedVideos + videoStatsRefresh.unavailableVideos !== videoStatsRefresh.requestedVideos ||
+          (videoStatsLimit == null && (statsCoverage.missingVideos > 0 || statsCoverage.staleVideos > 0))) {
+        throw new Error("YouTube stats coverage is incomplete; refusing to publish the seed. "
+          + `Missing: ${statsCoverage.missingVideoIds.slice(0, 10).join(", ")}; stale: ${statsCoverage.staleVideoIds.slice(0, 10).join(", ")}`);
       }
     } else {
       log("Skipping YouTube stats refresh");
     }
 
-    const repairedDuplicateRows = await measure("duplicateRepair", () => database.repairHololiveMusicDuplicateRows());
-    if (repairedDuplicateRows > 0) {
-      log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
-    }
+    statsCoverage ??= auditOfficialMusicStats(database);
 
     if (refreshImages) {
       log("Refreshing high-resolution talent card images");
@@ -556,6 +564,8 @@ async function main() {
           }
         : null,
       videoStatsRefresh,
+      statsCoverage,
+      statsRefreshComplete: refreshStats && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0,
       imageRefresh,
       counts
     };
@@ -576,7 +586,7 @@ async function main() {
 
     if (writeSeed) {
       log("Regenerating bundled seed data");
-      await measure("seed", () => regenerateSeed(officialDataVersion, completedAt));
+      await measure("seed", () => regenerateSeed(officialDataVersion, completedAt, { dbPath, imagesDirectory, artifactDirectory }));
     }
 
     // Record final pipeline timings without re-exporting CSVs or regenerating the seed.

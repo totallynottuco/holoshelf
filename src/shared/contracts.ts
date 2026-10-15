@@ -782,6 +782,7 @@ export interface HololiveMusicVideoStatsRefreshResult {
   missingVideos: number;
   unavailableVideos: number;
   failedBatches: number;
+  failedBatchDetails?: Array<{ requestedVideos: number; reason: string }>;
   batches: number;
   fetchedAt: string;
 }

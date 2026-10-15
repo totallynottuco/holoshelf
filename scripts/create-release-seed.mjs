@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import initSqlJs from "sql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceDatabasePath = path.join(projectRoot, "data", "holoshelf.sqlite");
-const sourceImagesDirectory = path.join(projectRoot, "data", "images", "hololive");
-const sourceArtifactsDirectory = path.join(projectRoot, "data", "holodex-refresh", "latest");
+const sourceDatabasePath = path.resolve(projectRoot, process.env.HOLOSHELF_SEED_SOURCE_DATABASE || "data/holoshelf.sqlite");
+const sourceImagesDirectory = path.resolve(projectRoot, process.env.HOLOSHELF_SEED_SOURCE_IMAGES || "data/images/hololive");
+const sourceArtifactsDirectory = path.resolve(projectRoot, process.env.HOLOSHELF_SEED_SOURCE_ARTIFACTS || "data/holodex-refresh/latest");
 const seedRoot = path.join(projectRoot, "resources", "seed");
 const seedDatabasePath = path.join(seedRoot, "holoshelf-template.sqlite");
 const seedManifestPath = path.join(seedRoot, "official-data.json");
@@ -33,6 +33,9 @@ const SQL = await initSqlJs({
 });
 
 if (!fs.existsSync(sourceDatabasePath)) {
+  if (process.env.HOLOSHELF_SEED_SOURCE_DATABASE) {
+    throw new Error(`Explicit source database not found: ${sourceDatabasePath}`);
+  }
   if (fs.existsSync(seedDatabasePath)) {
     sanitizeSeedArtifactSummary();
     const summary = verifySeedDatabase();
