@@ -3065,7 +3065,7 @@ describe("DatabaseService", () => {
     const reine = data.idols.find((idol) => idol.id === "pavolia-reine");
     const kronii = data.idols.find((idol) => idol.id === "ouro-kronii");
 
-    expect(data.idols).toHaveLength(74);
+    expect(data.idols).toHaveLength(HOLOLIVE_IDOLS.length);
     expect(data.idols.every((idol) => idol.profileImageUrl)).toBe(true);
     expect(data.idols.every((idol) => idol.profileQuote)).toBe(true);
     expect(data.idols.every((idol) => idol.youtubeChannelUrl)).toBe(true);
@@ -5195,6 +5195,9 @@ describe("DatabaseService", () => {
       database,
       (async (url: string | URL | Request) => {
         if (String(url).startsWith("https://holodex.net/api/v2/channels?")) {
+          if (new URL(String(url)).searchParams.get("offset") !== "0") {
+            return new Response(JSON.stringify([]));
+          }
           return new Response(
             JSON.stringify([
               {
@@ -5218,7 +5221,8 @@ describe("DatabaseService", () => {
       }) as typeof fetch
     );
 
-    const result = await service.refreshChannels();
+    // Missing mocked roster channels use detail fallbacks; don't spend a real quota window in a unit test.
+    const result = await service.refreshChannels({ maxRequestsPerWindow: 999, requestWindowMs: 1000 });
     const health = database.getSourceHealth().find((entry) => entry.sourceId === "holodex");
 
     expect(result.refreshedChannels).toBe(1);
@@ -6916,6 +6920,77 @@ describe("DatabaseService", () => {
     expect(new Set(rows[0].featuredIdolIds)).toEqual(
       new Set(["hiodoshi-ao", "otonose-kanade", "ichijou-ririka", "juufuutei-raden", "todoroki-hajime"])
     );
+  });
+
+  it("links ASOBI members' solo songs and unit songs across profiles and talent filters", async () => {
+    const database = await createTempDatabase();
+    const members = HOLOLIVE_IDOLS.filter((idol) => idol.generation === "ASOBI★MAWARI-TAI!");
+    expect(members.map((idol) => idol.id)).toEqual([
+      "achichi-mela", "sorashina-sopia", "suzuna-tsuzuri", "hyakuto-kyoko"
+    ]);
+    const groupChannelId = "UCAHwWUotyS3l2qBetFDsjgQ";
+    database.refreshHolodexChannels([{
+      id: groupChannelId, name: "アソビ★まわり隊!", englishName: "ASOBI★MAWARI-TAI!",
+      type: "vtuber", org: "Hololive", group: "Official", photoUrl: "", twitter: "",
+      videoCount: null, subscriberCount: null, clipCount: null, publishedAt: "", inactive: false
+    }]);
+    const musicRows: HolodexArtifactBundle["rows"] = members.map((idol, index) => ({
+      youtubeVideoId: `asobi-cover-${index}`, youtubeUrl: `https://youtu.be/asobi-cover-${index}`,
+      title: `${idol.displayName} Cover`, status: "past", topicId: "Music_Cover",
+      channelId: idol.youtubeChannelId!, channelName: idol.displayName,
+      publishedAt: "2026-09-25T00:00:00.000Z"
+    }));
+    musicRows.push({
+      youtubeVideoId: "asobi-unit-song", youtubeUrl: "https://youtu.be/asobi-unit-song",
+      title: "騒げ★ぐるぐるTIME!", status: "past", topicId: "Original_Song",
+      channelId: groupChannelId, channelName: "アソビ★まわり隊!", publishedAt: "2026-09-25T00:00:00.000Z"
+    });
+    database.importHolodexMusicArtifacts({
+      rows: musicRows,
+      detailCache: Object.fromEntries(musicRows.map((row) => [row.youtubeVideoId, normalizeVideoDetail(row.youtubeVideoId, {
+        youtubeVideoId: row.youtubeVideoId, channelId: row.channelId, duration: 180,
+        songNames: [row.title], relationshipsLoaded: true
+      })])),
+      duplicateRemovals: []
+    }, "live");
+    for (const [index, idol] of members.entries()) {
+      const solo = database.listHololiveMusicRows({ youtubeVideoIds: [`asobi-cover-${index}`] })[0];
+      expect(solo.ownedIdolIds).toEqual([idol.id]);
+      expect(solo.featuredIdolIds).toEqual([]);
+      expect(database.listHololiveMusicLibrary({ talentId: idol.id }).rows).toHaveLength(2);
+      const profile = database.getHololiveIdolProfile(idol.id);
+      expect(profile.idol.unit).toBe("ASOBI★MAWARI-TAI!");
+      expect(profile.mainChannel?.kind).toBe("idol");
+      expect(profile.mediaGroups.find((group) => group.id === "covers")?.items).toHaveLength(1);
+      expect(profile.mediaGroups.find((group) => group.id === "featured-in")?.items).toHaveLength(1);
+    }
+    const groupSong = database.listHololiveMusicRows({ youtubeVideoIds: ["asobi-unit-song"] })[0];
+    expect(groupSong.ownedIdolIds).toEqual([]);
+    expect(new Set(groupSong.featuredIdolIds)).toEqual(new Set(members.map((idol) => idol.id)));
+  });
+
+  it("reclassifies an unchanged music catalog when the official roster fingerprint changes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-roster-upgrade-"));
+    const databasePath = path.join(dir, "test.sqlite");
+    const database = await createTempDatabaseAt(databasePath);
+    const mela = HOLOLIVE_IDOLS.find((idol) => idol.id === "achichi-mela")!;
+    seedHololiveBracketSong(database, {
+      idolId: mela.id, idolName: mela.displayName, channelId: mela.youtubeChannelId!,
+      topicId: "Music_Cover", suffix: "upgrade", viewCount: 1000
+    });
+    database.run("UPDATE hololive_music_videos SET owned_idol_ids_json='[]', participant_idol_ids_json='[]', participants_json='[]'");
+    const fingerprint = (database as unknown as { getStartupMaintenanceFingerprint(): string }).getStartupMaintenanceFingerprint();
+    const oldRosterFingerprint = fingerprint.replace(/^[a-f0-9]{64}:/, `${"0".repeat(64)}:`);
+    expect(oldRosterFingerprint).not.toBe(fingerprint);
+    database.setSetting("internal.startupMaintenanceFingerprint", oldRosterFingerprint);
+    database.setHololiveMusicMarker({ youtubeVideoId: `${mela.id}-upgrade`, marker: "favorite" });
+    database.setSetting("roster-upgrade.preference", "preserved");
+    database.flush();
+    const reopened = await createTempDatabaseAt(databasePath);
+    const song = reopened.listHololiveMusicRows({ youtubeVideoIds: [`${mela.id}-upgrade`] })[0];
+    expect(song.ownedIdolIds).toEqual([mela.id]);
+    expect(song.marker).toBe("favorite");
+    expect(reopened.getSettings()["roster-upgrade.preference"]).toBe("preserved");
   });
 
   it("uses provided-to-YouTube original channel as the topic upload owner", async () => {

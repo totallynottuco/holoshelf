@@ -855,5 +855,53 @@ export const HOLOLIVE_IDOL_PROFILE_OVERRIDES: Record<string, HololiveIdolProfile
     "debutDate": "September 9, 2023",
     "height": "171 cm",
     "unit": "ReGLOSS"
+  },
+  "achichi-mela": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Achichi-Mela_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Achichi-Mela_pr-img_01.webp",
+    "profileQuote": "“Fire safety first, ya hear! I'm the salamander firefighter, ya hear!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UC8eitCE9Z6EwUCs-VUi1blg",
+    "xHandle": "@achichi_mela",
+    "xUrl": "https://x.com/achichi_mela",
+    "birthday": "April 16",
+    "debutDate": "September 24, 2026",
+    "height": "149 cm",
+    "unit": "ASOBI★MAWARI-TAI!"
+  },
+  "sorashina-sopia": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Sorashina-Sopia_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Sorashina-Sopia_pr-img_01.webp",
+    "profileQuote": "“My dreams are like the Big Bang! I take in knowledge like a black hole! I'm going to witness it all with my own eyes!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCROQtXcp2loQEmvpe5rhJzQ",
+    "xHandle": "@sorashina_sopia",
+    "xUrl": "https://x.com/sorashina_sopia",
+    "birthday": "June 13",
+    "debutDate": "September 24, 2026",
+    "height": "153 cm",
+    "unit": "ASOBI★MAWARI-TAI!"
+  },
+  "suzuna-tsuzuri": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Suzuna-Tsuzuri_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Suzuna-Tsuzuri_pr-img_01.webp",
+    "profileQuote": "“The next target... is you! Correct?”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCy9mgxB8pn2C4aNK_MPthDQ",
+    "xHandle": "@suzuna_tsuzuri",
+    "xUrl": "https://x.com/suzuna_tsuzuri",
+    "birthday": "June 28",
+    "debutDate": "September 25, 2026",
+    "height": "155 cm",
+    "unit": "ASOBI★MAWARI-TAI!"
+  },
+  "hyakuto-kyoko": {
+    "profileImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Hyakuto-Kyoko_pr-img_01.webp",
+    "cardImageUrl": "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Hyakuto-Kyoko_pr-img_01.webp",
+    "profileQuote": "“Something wrong? Why the long face? Can I turn that frown upside down?!”",
+    "youtubeChannelUrl": "https://www.youtube.com/channel/UCSjQDxud2HkAO2DVD3lwxmw",
+    "xHandle": "@hyakuto_kyoko",
+    "xUrl": "https://x.com/hyakuto_kyoko",
+    "birthday": "May 8",
+    "debutDate": "September 25, 2026",
+    "height": "162 cm",
+    "unit": "ASOBI★MAWARI-TAI!"
   }
 };

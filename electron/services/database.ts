@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createRollingDatabaseBackup,
   createTimestampedDatabaseBackup,
@@ -201,7 +201,8 @@ const HOLOLIVE_UNIT_CHANNEL_IDOL_IDS: Record<string, string[]> = {
     "rindo-chihaya",
     "kikirara-vivi"
   ],
-  "UCnVbtCwr-5LXxUlGxsgD7sQ": ["hoshimachi-suisei"]
+  "UCnVbtCwr-5LXxUlGxsgD7sQ": ["hoshimachi-suisei"],
+  "UCAHwWUotyS3l2qBetFDsjgQ": ["achichi-mela", "sorashina-sopia", "suzuna-tsuzuri", "hyakuto-kyoko"]
 };
 const HOLOLIVE_UNIT_ALIAS_IDOL_IDS: Record<string, string[]> = {
   nepolabo: ["yukihana-lamy", "momosuzu-nene", "shishiro-botan", "omaru-polka"],
@@ -234,7 +235,11 @@ const HOLOLIVE_PERFORMER_ALIAS_IDOL_IDS: Record<string, string[]> = {
   "兎田ぺこら": ["usada-pekora"],
   "不知火フレア": ["shiranui-flare"],
   "白銀ノエル": ["shirogane-noel"],
-  "宝鐘マリン": ["houshou-marine"]
+  "宝鐘マリン": ["houshou-marine"],
+  "熱千めら": ["achichi-mela"],
+  "宙科そぴあ": ["sorashina-sopia"],
+  "鈴鳴つづり": ["suzuna-tsuzuri"],
+  "百灯キョーコ": ["hyakuto-kyoko"]
 };
 
 interface HololiveChannelContext {
@@ -338,6 +343,11 @@ interface HololiveBracketCandidateSelectionResult {
 
 const STARTUP_MAINTENANCE_SETTING = "internal.startupMaintenanceVersion";
 const STARTUP_MAINTENANCE_VERSION = "2";
+const OFFICIAL_ROSTER_CLASSIFICATION_FINGERPRINT = createHash("sha256")
+  .update(JSON.stringify(HOLOLIVE_IDOLS.map(({ id, displayName, generation, youtubeChannelId }) => (
+    [id, displayName, generation, youtubeChannelId]
+  ))))
+  .digest("hex");
 const STARTUP_MAINTENANCE_FINGERPRINT_SETTING = "internal.startupMaintenanceFingerprint";
 
 const MIGRATIONS = [
@@ -10454,7 +10464,7 @@ export class DatabaseService {
   }
 
   private getStartupMaintenanceFingerprint(): string {
-    return String(
+    const catalogFingerprint = String(
       this.select<{ fingerprint: string }>(
         `SELECT printf('%d:%d:%s:%d:%d:%s:%d:%d:%d',
            (SELECT COUNT(*) FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'),
@@ -10475,6 +10485,8 @@ export class DatabaseService {
          ) AS fingerprint`
       )[0]?.fingerprint ?? ""
     );
+    // A new member can change ownership and group credits without changing any song rows.
+    return `${OFFICIAL_ROSTER_CLASSIFICATION_FINGERPRINT}:${catalogFingerprint}`;
   }
 
   private getSettingValue(key: string): string | null {

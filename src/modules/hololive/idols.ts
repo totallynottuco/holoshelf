@@ -733,6 +733,50 @@ const HOLOLIVE_IDOL_ROSTER: OfficialHololiveIdolSeed[] = [
     sortOrder: 64
   },
   {
+    id: "achichi-mela",
+    slug: "achichi-mela",
+    displayName: "Achichi Mela",
+    branch: "Japan",
+    generation: "ASOBI★MAWARI-TAI!",
+    status: "active",
+    officialUrl: "https://hololive.hololivepro.com/en/talents/achichi-mela/",
+    iconUrl: "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Achichi-Mela_list_thumb.png",
+    sortOrder: 74
+  },
+  {
+    id: "sorashina-sopia",
+    slug: "sorashina-sopia",
+    displayName: "Sorashina Sopia",
+    branch: "Japan",
+    generation: "ASOBI★MAWARI-TAI!",
+    status: "active",
+    officialUrl: "https://hololive.hololivepro.com/en/talents/sorashina-sopia/",
+    iconUrl: "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Sorashina-Sopia_list_thumb.png",
+    sortOrder: 75
+  },
+  {
+    id: "suzuna-tsuzuri",
+    slug: "suzuna-tsuzuri",
+    displayName: "Suzuna Tsuzuri",
+    branch: "Japan",
+    generation: "ASOBI★MAWARI-TAI!",
+    status: "active",
+    officialUrl: "https://hololive.hololivepro.com/en/talents/suzuna-tsuzuri/",
+    iconUrl: "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Suzuna-Tsuzuri_list_thumb.png",
+    sortOrder: 76
+  },
+  {
+    id: "hyakuto-kyoko",
+    slug: "hyakuto-kyoko",
+    displayName: "Hyakuto Kyoko",
+    branch: "Japan",
+    generation: "ASOBI★MAWARI-TAI!",
+    status: "active",
+    officialUrl: "https://hololive.hololivepro.com/en/talents/hyakuto-kyoko/",
+    iconUrl: "https://hololive.hololivepro.com/wp-content/uploads/2023/09/Hyakuto-Kyoko_list_thumb.png",
+    sortOrder: 77
+  },
+  {
     id: "minato-aqua",
     slug: "minato-aqua",
     displayName: "Minato Aqua",

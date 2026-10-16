@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { HOLOLIVE_IDOLS } from "../../src/modules/hololive/idols";
 
 async function dragCenterTo(
   page: Page,
@@ -220,7 +221,7 @@ test("@smoke renders the Hololive tier list route", async ({ page }) => {
   await expect(page.locator(".hololive-toolbar")).toHaveCount(0);
   await expect(page.locator(".hololive-board-tab.active")).toContainText("tier list 1");
   await expect(page.locator(".hololive-tier-row")).toHaveCount(6);
-  await expect(page.locator(".hololive-idol-tile")).toHaveCount(74);
+  await expect(page.locator(".hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length);
   await expect(page.locator(".hololive-pool")).toContainText("Unranked");
   await expect(page.locator('.hololive-tier-label input[type="text"]').first()).toHaveValue("S");
   await expect(page.locator(".hololive-color-notch .hololive-color-input").first()).toHaveValue("#2f8fd7");
@@ -519,7 +520,7 @@ test("adds a custom talent from a channel handle", async ({ page }) => {
   await expect(page.locator(".hololive-action-toast")).toContainText("view counts");
 
   await page.getByRole("link", { name: "Tier List" }).click();
-  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(75);
+  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length + 1);
   await expect(page.locator('.hololive-pool .hololive-idol-tile[data-idol-id="custom-soraduki-tyra"]')).toBeVisible();
 });
 
@@ -1590,6 +1591,21 @@ test("sizes bracket connector overlay to the active bracket", async ({ page }) =
   expect(metrics!.treeScrollWidth).toBeLessThanOrEqual(metrics!.treeExpectedWidth + 2);
 });
 
+test("@smoke opens profiles for all ASOBI MAWARI-TAI members", async ({ page }) => {
+  for (const idol of HOLOLIVE_IDOLS.filter((candidate) => candidate.generation === "ASOBI★MAWARI-TAI!")) {
+    const tile = page.locator(`.hololive-pool .hololive-idol-tile[data-idol-id="${idol.id}"]`);
+    await expect(tile).toBeVisible();
+    await tile.click();
+    const shelf = page.locator(".hololive-profile-shelf");
+    await expect(shelf).toContainText(idol.displayName);
+    await expect(shelf).toContainText("ASOBI★MAWARI-TAI!");
+    await expect(shelf).toContainText(idol.birthday!);
+    await expect(shelf).toContainText(idol.debutDate!);
+    await expect(shelf.locator(".hololive-profile-quote")).toContainText(idol.profileQuote!);
+    await page.getByRole("button", { name: "Close profile", exact: true }).click();
+  }
+});
+
 test("opens a Hololive idol profile shelf from clicking an idol tile", async ({ page }) => {
   const tokinoTile = page.locator('.hololive-pool .hololive-idol-tile[data-idol-id="tokino-sora"]').first();
 
@@ -2289,7 +2305,7 @@ test("@smoke drags idols into a tier and clears the board", async ({ page }) => 
   expect(Math.abs((rowAfter?.height ?? 0) - ((placedTileBox?.height ?? 0) + 12))).toBeLessThanOrEqual(1);
   await expect(firstTier.locator(".hololive-idol-tile")).toHaveCount(1);
   await expect(firstTier.locator(".hololive-idol-tile").first()).toHaveAttribute("data-idol-id", "tokino-sora");
-  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(73);
+  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length - 1);
   await expect(page.locator(".hololive-idol-tile:disabled")).toHaveCount(0);
   await expect(page.locator(".drop-over")).toHaveCount(0);
 
@@ -2298,7 +2314,7 @@ test("@smoke drags idols into a tier and clears the board", async ({ page }) => 
   await clearButton.click();
 
   await expect(firstTier.locator(".hololive-idol-tile")).toHaveCount(0);
-  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(74);
+  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length);
   await expect(page.locator(".hololive-pool .hololive-idol-tile").first()).toHaveAttribute("data-idol-id", "tokino-sora");
 });
 
@@ -2306,7 +2322,7 @@ test("slides neighboring idols aside while dragging", async ({ page }) => {
   await page.getByRole("button", { name: /Clear/ }).click();
 
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
 
   const sourceBox = await poolTiles.first().boundingBox();
   const targetBox = await poolTiles.nth(5).boundingBox();
@@ -2349,7 +2365,7 @@ test("shows a translucent placement preview while dragging an idol", async ({ pa
   await page.getByRole("button", { name: /Clear/ }).click();
 
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
 
   const sourceBox = await poolTiles.first().boundingBox();
   const targetBox = await poolTiles.nth(5).boundingBox();
@@ -2402,12 +2418,12 @@ test("drags within the unranked shelf without blanking the shelf", async ({ page
   await page.getByRole("button", { name: /Clear/ }).click();
 
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
 
   await expect(poolTiles.first()).toHaveAttribute("data-idol-id", "tokino-sora");
   await dragCenterTo(page, poolTiles.first(), poolTiles.nth(4), { x: 4, y: 28 });
 
-  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(74);
+  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length);
   await expect(page.locator(".hololive-tier-row .hololive-idol-tile")).toHaveCount(0);
   await expect(page.locator(".hololive-pool .hololive-idol-tile").first()).toHaveAttribute("data-idol-id", "roboco-san");
   await expect(page.locator(".hololive-pool .hololive-idol-tile").nth(3)).toHaveAttribute("data-idol-id", "tokino-sora");
@@ -2418,7 +2434,7 @@ test("places idols before and after target icons without snap-back", async ({ pa
   await page.getByRole("button", { name: /Clear/ }).click();
 
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
 
   await dragCenterTo(page, poolTiles.first(), poolTiles.nth(4), { x: 4, y: 32 });
   await expect(poolTiles.nth(3)).toHaveAttribute("data-idol-id", "tokino-sora");
@@ -2444,7 +2460,7 @@ test("drags idols back from a tier into a precise pool position", async ({ page 
 
   await dragCenterTo(page, firstTier.locator(".hololive-idol-tile").first(), poolDropzone, { x: 4, y: 36 });
   await expect(firstTier.locator(".hololive-idol-tile")).toHaveCount(0);
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
   await expect(poolTiles.first()).toHaveAttribute("data-idol-id", "tokino-sora");
 });
 
@@ -2454,7 +2470,7 @@ test("survives repeated icon repositioning without renderer errors or blanking",
 
   await page.getByRole("button", { name: /Clear/ }).click();
   const poolTiles = page.locator(".hololive-pool .hololive-idol-tile");
-  await expect(poolTiles).toHaveCount(74);
+  await expect(poolTiles).toHaveCount(HOLOLIVE_IDOLS.length);
 
   const sourceBox = await poolTiles.first().boundingBox();
   expect(sourceBox).not.toBeNull();
@@ -2472,7 +2488,7 @@ test("survives repeated icon repositioning without renderer errors or blanking",
 
   await expect(page.locator(".hololive-page.hololive-tier-layout")).toBeVisible();
   await expect(page.locator(".hololive-page > .hololive-tier-layout")).toHaveCount(0);
-  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(74);
+  await expect(page.locator(".hololive-pool .hololive-idol-tile")).toHaveCount(HOLOLIVE_IDOLS.length);
   expect(pageErrors).toEqual([]);
 });
 

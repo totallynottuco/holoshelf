@@ -1,110 +1,44 @@
 {
-  "startedAt": "2026-10-15T22:19:47.825Z",
-  "completedAt": "2026-10-15T22:20:28.954Z",
+  "startedAt": "2026-10-16T01:50:10.147Z",
+  "completedAt": "2026-10-16T01:50:10.436Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-10-15T221953Z",
+  "officialDataVersion": "2026-10-16T015010Z",
   "replaceExisting": true,
-  "refreshHolodex": true,
+  "refreshHolodex": false,
   "refreshChannels": true,
   "includeCollabs": true,
-  "refreshStats": true,
-  "refreshImages": true,
+  "refreshStats": false,
+  "refreshImages": false,
   "concurrency": 4,
   "statsConcurrency": 4,
-  "resumeCache": {
-    "hits": 0,
-    "writes": 76,
-    "startedAt": 1792102793359
-  },
+  "resumeCache": null,
   "timingsMs": {
-    "databaseInit": 5531,
-    "channels": 1142,
-    "music": 31389,
-    "duplicateRepair": 101,
-    "youtubeStats": 2816,
-    "duplicateRepairAfterStats": 121,
-    "images": 12,
-    "artifacts": 106,
-    "seed": 451
+    "databaseInit": 163,
+    "duplicateRepair": 115,
+    "artifacts": 125,
+    "seed": 473
   },
-  "channelRefresh": {
-    "refreshedChannels": 90,
-    "classifiedChannels": 90,
-    "updatedAt": "2026-10-15T22:19:53.969Z"
-  },
-  "musicRefresh": {
-    "sourceRows": 3132,
-    "importedRows": 3046,
-    "filteredRows": 86,
-    "duplicateRows": 1245,
-    "run": {
-      "id": "f9019678-3a1c-469f-8619-5bf2a1bf0d5e",
-      "source": "live",
-      "status": "completed",
-      "startedAt": "2026-10-15T22:20:18.597Z",
-      "completedAt": "2026-10-15T22:20:25.853Z",
-      "fetchedRows": 3132,
-      "keptRows": 3046,
-      "filteredRows": 86,
-      "duplicateRows": 1245,
-      "error": null
-    }
-  },
-  "holodexCoverage": {
-    "topics": {
-      "Music_Cover": {
-        "total": 2627,
-        "fetched": 2627,
-        "pages": 1,
-        "pageSize": 2627,
-        "complete": true
-      },
-      "Original_Song": {
-        "total": 3938,
-        "fetched": 3938,
-        "pages": 1,
-        "pageSize": 3938,
-        "complete": true
-      }
-    },
-    "complete": true
-  },
-  "holodexRequestMetrics": {
-    "requests": 76,
-    "retries": 0,
-    "quotaWaitMs": 0
-  },
-  "videoStatsRefresh": {
-    "requestedVideos": 3046,
-    "updatedVideos": 3046,
-    "missingVideos": 0,
-    "unavailableVideos": 0,
-    "failedBatches": 0,
-    "failedBatchDetails": [],
-    "batches": 61,
-    "fetchedAt": "2026-10-15T22:20:26.005Z"
-  },
+  "channelRefresh": null,
+  "musicRefresh": null,
+  "holodexCoverage": null,
+  "holodexRequestMetrics": null,
+  "videoStatsRefresh": null,
   "statsCoverage": {
     "catalogVideos": 3027,
     "withStats": 3027,
-    "freshVideos": 3027,
+    "freshVideos": null,
     "missingVideos": 0,
     "staleVideos": 0,
     "missingVideoIds": [],
     "staleVideoIds": []
   },
-  "statsRefreshComplete": true,
-  "imageRefresh": {
-    "cached": 0,
-    "skipped": 74,
-    "failed": 0,
-    "total": 74
-  },
+  "statsRefreshComplete": false,
+  "imageRefresh": null,
   "counts": {
     "totalMusicRows": 3027,
     "totalChannels": 188,
-    "officialIdols": 74,
+    "officialIdols": 78,
     "customIdols": 0,
     "statsRows": 3027,
     "detailCacheRows": 3027,
