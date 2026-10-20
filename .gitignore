@@ -10,3 +10,6 @@ data/
 .env.*
 *-api-key.txt
 *.apikey
+secrets/
+.secrets/
+.release-secrets.json

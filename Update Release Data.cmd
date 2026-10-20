@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\release-data-wizard.ps1" %*
+node "%~dp0scripts\release-data-wizard.mjs" %*
 set "EXITCODE=%ERRORLEVEL%"
 echo.
 if "%EXITCODE%"=="0" echo Release data workflow completed successfully.

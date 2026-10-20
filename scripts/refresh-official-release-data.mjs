@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
+import { loadReleaseCredentials } from "./release-credentials.mjs";
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +62,7 @@ Common options:
 API keys:
   HOLODEX_API_KEY or --holodex-key=...
   YOUTUBE_API_KEY or --youtube-key=...
+  Otherwise loaded from secrets/api-keys.txt or the folder in .release-secrets.json.
 
 Rate-limit controls:
   --page-size=5000                        Full-metadata video page size (adapts to server caps).
@@ -392,8 +394,16 @@ async function main() {
   const artifactDirectory = resolveFromRoot(readArg("artifacts", "data/holodex-refresh/latest"));
   const imagesDirectory = resolveFromRoot(readArg("images", defaultImagesDirectory()));
   let officialDataVersion = readArg("version", process.env.HOLOSHELF_OFFICIAL_DATA_VERSION || makeOfficialDataVersion());
-  const holodexApiKey = readArg("holodex-key", process.env.HOLODEX_API_KEY || "");
-  const youtubeApiKey = readArg("youtube-key", process.env.YOUTUBE_API_KEY || "");
+  const credentials = hasFlag("skip-holodex") && hasFlag("skip-stats") ? null : loadReleaseCredentials({
+    projectRoot: root,
+    env: {
+      ...process.env,
+      HOLODEX_API_KEY: readArg("holodex-key", process.env.HOLODEX_API_KEY || ""),
+      YOUTUBE_API_KEY: readArg("youtube-key", process.env.YOUTUBE_API_KEY || "")
+    }
+  });
+  const holodexApiKey = credentials?.holodexKey || "";
+  const youtubeApiKey = credentials?.youtubeKey || "";
   const pageSize = readNumberArg("page-size", 5000);
   const pageLimit = readNumberArg("page-limit", null);
   const collabPageLimit = readNumberArg("collab-page-limit", 1);

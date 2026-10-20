@@ -6,7 +6,7 @@ export default defineConfig({
     globals: true,
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    include: ["src/**/*.test.ts", "electron/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "electron/**/*.test.ts", "scripts/**/*.test.mjs"],
     coverage: {
       reporter: ["text", "html"]
     }

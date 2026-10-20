@@ -50,7 +50,12 @@ function isScannableTextFile(relativePath) {
 
 function scanTrackedTextFiles() {
   const matches = [];
-  for (const relativePath of gitTrackedFiles().filter(isScannableTextFile)) {
+  for (const relativePath of gitTrackedFiles()) {
+    if (/(^|\/)(?:\.?secrets)(\/|$)|(^|\/)\.release-secrets\.json$/i.test(relativePath.replaceAll("\\", "/"))) {
+      matches.push(`${relativePath} (local secrets path)`);
+      continue;
+    }
+    if (!isScannableTextFile(relativePath)) continue;
     const absolutePath = path.join(projectRoot, relativePath);
     const text = fs.readFileSync(absolutePath, "utf8");
     for (const { name, pattern } of forbiddenTextPatterns) {

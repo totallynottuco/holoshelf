@@ -10,7 +10,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 function Show-Help {
   Write-Host "Holoshelf release data updater"
   Write-Host ""
-  Write-Host "This wizard prompts for API keys, refreshes the release source database,"
+  Write-Host "This wizard loads local API keys automatically, refreshes the release source database,"
   Write-Host "regenerates resources\seed, and can apply data directly to your installed app."
   Write-Host "A full app rebuild/install is also available when updating app code."
   Write-Host ""
@@ -135,16 +135,16 @@ function Test-VersionInstalled {
 }
 
 function Read-HolodexKey {
-  if ($env:HOLODEX_API_KEY -and (Read-YesNo "Use HOLODEX_API_KEY already set in this shell?" $true)) {
-    return $env:HOLODEX_API_KEY
+  if (-not [string]::IsNullOrWhiteSpace($env:HOLODEX_API_KEY)) {
+    return $env:HOLODEX_API_KEY.Trim()
   }
 
   return (Read-SecretText -Prompt "Holodex API key (optional, press Enter to skip)")
 }
 
 function Read-YoutubeKey {
-  if ($env:YOUTUBE_API_KEY -and (Read-YesNo "Use YOUTUBE_API_KEY already set in this shell?" $true)) {
-    return $env:YOUTUBE_API_KEY
+  if (-not [string]::IsNullOrWhiteSpace($env:YOUTUBE_API_KEY)) {
+    return $env:YOUTUBE_API_KEY.Trim()
   }
 
   return (Read-SecretText -Prompt "YouTube Data API key (press Enter to skip stats)")
