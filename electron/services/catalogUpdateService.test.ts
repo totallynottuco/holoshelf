@@ -6,7 +6,7 @@ import {gzipSync} from "node:zlib";
 import initSqlJs from "sql.js";
 import {CatalogUpdateService} from "./catalogUpdateService";
 import {catalogHash} from "./catalogUpdatePackage";
-import {parseCatalogUpdateManifest, type CatalogUpdateManifest} from "../../src/shared/catalogUpdate";
+import {CATALOG_MIN_APP_VERSION, parseCatalogUpdateManifest, type CatalogUpdateManifest} from "../../src/shared/catalogUpdate";
 import type {DatabaseService} from "./database";
 import type {AppPathSet} from "./appPaths";
 
@@ -32,7 +32,7 @@ beforeAll(async () => {
 });
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, {recursive: true, force: true}); });
 
-function fixture(next = manifest, body = compressed) {
+function fixture(next = manifest, body = compressed, appVersion = "1.1.90") {
   const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-update-test-")); directories.push(dataDirectory);
   const paths = {dataDirectory, hololiveImageDirectory: path.join(dataDirectory, "images"), seedDirectory: null} as AppPathSet;
   const settings: Record<string,string> = {"hololive.officialDataVersion": "2026-10-15T120000Z"};
@@ -41,11 +41,30 @@ function fixture(next = manifest, body = compressed) {
   const onApplied = vi.fn();
   const fetcher = vi.fn(async (url: unknown) => String(url).endsWith(".json") ? Response.json(next) : new Response(body)) as unknown as typeof fetch;
   const log = vi.fn();
-  const service = new CatalogUpdateService({database, paths, appVersion: "1.1.90", fetcher, merge, onApplied, log});
+  const service = new CatalogUpdateService({database, paths, appVersion, fetcher, merge, onApplied, log});
   return {service, fetcher, merge, onApplied, settings, database, paths, log};
 }
 
 describe("silent catalog updates", () => {
+  it.each(["1.1.90", "1.1.91", "1.1.92", "1.1.93"])("blocks new recording identities on legacy client %s before downloading or merging", async appVersion => {
+    expect(CATALOG_MIN_APP_VERSION).toBe("1.1.94");
+    const next = {...manifest, minAppVersion: CATALOG_MIN_APP_VERSION};
+    const f = fixture(next, compressed, appVersion);
+    expect(await f.service.checkForUpdates()).toBe("requires-app-update");
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
+    expect(f.merge).not.toHaveBeenCalled();
+    expect(f.onApplied).not.toHaveBeenCalled();
+    expect(f.settings["hololive.officialDataVersion"]).toBe("2026-10-15T120000Z");
+  });
+
+  it("allows the compatible client to receive the current recording-aware catalog silently", async () => {
+    const f = fixture({...manifest, minAppVersion: CATALOG_MIN_APP_VERSION}, compressed, "1.1.94");
+    expect(await f.service.checkForUpdates()).toBe("merged");
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    expect(f.merge).toHaveBeenCalledOnce();
+    expect(f.onApplied).toHaveBeenCalledExactlyOnceWith(version);
+  });
+
   it("validates and stages the complete seed, coalesces checks, and emits only a catalog event", async () => {
     const f = fixture();
     expect(await Promise.all([f.service.checkForUpdates(), f.service.checkForUpdates()]), JSON.stringify(f.log.mock.calls)).toEqual(["merged", "merged"]);

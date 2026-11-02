@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Songs and view counts can now update quietly in the background while preserving your personal library.\n\nThis one-time app update enables future catalog updates without another installer or update popup. It also includes faster startup, Holodex refreshes, and YouTube statistics updates."
+      "releaseNotes": "Improves song imports, duplicate filtering, and YouTube availability checks.\n\n- Keeps the best official upload while preserving distinct recordings and multi-song performances.\n- Prevents private, unfinished, and unavailable videos from entering the playable library.\n- Respects configured playback regions and keeps unavailable entries eligible for later verification.\n- Preserves Favorites, ordering, playlists, ratings, notes, and personal exclusions during updates.\n\nSongs and statistics continue to update silently in the background. New catalog updates require Holoshelf 1.1.94 so older clients cannot undo these fixes."
     },
     "win": {
       "icon": "ico.ico",
