@@ -160,8 +160,8 @@ function artifactSummary(database) {
     totalChannels: database.select("SELECT COUNT(*) AS count FROM hololive_channels")[0]?.count ?? 0,
     officialIdols: database.select("SELECT COUNT(*) AS count FROM hololive_idols WHERE source = 'official'")[0]?.count ?? 0,
     customIdols: database.select("SELECT COUNT(*) AS count FROM hololive_idols WHERE source = 'custom'")[0]?.count ?? 0,
-    statsRows: database.select("SELECT COUNT(*) AS count FROM hololive_music_video_stats")[0]?.count ?? 0,
-    detailCacheRows: database.select("SELECT COUNT(*) AS count FROM hololive_music_detail_cache")[0]?.count ?? 0,
+    statsRows: database.select("SELECT COUNT(*) AS count FROM hololive_music_video_stats WHERE youtube_video_id IN (SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1)")[0]?.count ?? 0,
+    detailCacheRows: database.select("SELECT COUNT(*) AS count FROM hololive_music_detail_cache WHERE youtube_video_id IN (SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1)")[0]?.count ?? 0,
     duplicateRemovalRows:
       database.select("SELECT COUNT(*) AS count FROM hololive_music_duplicate_removals")[0]?.count ?? 0
   };
@@ -181,6 +181,7 @@ function exportArtifacts(database, artifactDirectory, summary) {
               owned_idol_ids_json, featured_idol_ids_json, participants_json,
               participant_idol_ids_json, updated_at
        FROM hololive_music_videos
+       WHERE COALESCE(official_catalog_active, 1) = 1
        ORDER BY COALESCE(published_at, ''), youtube_video_id`
     )
   );
@@ -189,6 +190,7 @@ function exportArtifacts(database, artifactDirectory, summary) {
     database.select(
       `SELECT youtube_video_id, view_count, fetched_at
        FROM hololive_music_video_stats
+       WHERE youtube_video_id IN (SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1)
        ORDER BY youtube_video_id`
     )
   );
@@ -199,6 +201,7 @@ function exportArtifacts(database, artifactDirectory, summary) {
               provided_to_youtube, description, song_names_json, mentions_json, collab_channel_ids_json,
               relationships_loaded, updated_at
        FROM hololive_music_detail_cache
+       WHERE youtube_video_id IN (SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1)
        ORDER BY youtube_video_id`
     )
   );
@@ -462,13 +465,14 @@ async function main() {
   let holodexCoverage = null;
   let holodexRequestMetrics = null;
   let imageRefresh = null;
+  let verifiedAvailability = null;
 
   if (refreshHolodex) {
       const service = new HolodexMusicService(
         database,
         globalThis.fetch.bind(globalThis),
         (message) => log(message),
-        { apiKey: holodexApiKey, requestConcurrency: concurrency, responseCache }
+        { apiKey: holodexApiKey, youtubeApiKey, requestConcurrency: concurrency, responseCache }
       );
 
       if (refreshChannels) {
@@ -495,6 +499,7 @@ async function main() {
       }
       holodexCoverage = service.getRefreshCoverage();
       holodexRequestMetrics = service.getRefreshRequestMetrics();
+      verifiedAvailability = service.getVerifiedAvailability();
       if (pageLimit == null && !holodexCoverage.complete) {
         throw new Error("Holodex catalog coverage is incomplete; refusing to publish the seed");
       }
@@ -523,7 +528,7 @@ async function main() {
       videoStatsRefresh = await measure("youtubeStats", () => statsService.refreshViewCounts({
         youtubeVideoIds,
         limit: videoStatsLimit ?? Math.max(youtubeVideoIds.length, 1)
-      }));
+      }, verifiedAvailability));
       if (videoStatsRefresh.failedBatches > 0) {
         throw new Error(
           `YouTube stats refresh failed for ${videoStatsRefresh.failedBatches}/${videoStatsRefresh.batches} batch(es): `
@@ -536,7 +541,7 @@ async function main() {
       statsCoverage = auditOfficialMusicStats(database, videoStatsRefresh.fetchedAt);
       log(`YouTube stats verified: ${statsCoverage.freshVideos}/${statsCoverage.catalogVideos} current, `
         + `${statsCoverage.missingVideos} missing, ${statsCoverage.staleVideos} stale; `
-        + `${videoStatsRefresh.unavailableVideos} unavailable video(s) removed`);
+        + `${videoStatsRefresh.unavailableVideos} unavailable video(s) deferred`);
       if (videoStatsRefresh.updatedVideos + videoStatsRefresh.unavailableVideos !== videoStatsRefresh.requestedVideos ||
           (videoStatsLimit == null && (statsCoverage.missingVideos > 0 || statsCoverage.staleVideos > 0))) {
         throw new Error("YouTube stats coverage is incomplete; refusing to publish the seed. "
@@ -587,6 +592,10 @@ async function main() {
       holodexRequestMetrics,
       videoStatsRefresh,
       statsCoverage,
+      videoAvailabilityVerification: videoStatsRefresh && statsCoverage ? {
+        schema: 1, checkedAt: videoStatsRefresh.fetchedAt,
+        checkedVideos: videoStatsRefresh.requestedVideos, retainedVideos: statsCoverage.catalogVideos
+      } : null,
       statsRefreshComplete: refreshStats && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0,
       imageRefresh,
       counts

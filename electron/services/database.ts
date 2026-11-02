@@ -138,6 +138,7 @@ import {
   buildDuplicateTitleCore,
   getRowCleanupReason,
   hasCompatibleHolodexTopicDuplicateDuration,
+  isHololiveOfficialAudioMirror,
   parseProvidedToYoutubeArtistCredits
 } from "../../src/modules/hololive/music/cleanup";
 import { EXCLUDED_HOLODEX_CHANNEL_IDS, isExcludedHolodexChannelId } from "../../src/modules/hololive/music/types";
@@ -153,6 +154,7 @@ import {
 const DEFAULT_HOLOLIVE_TILE_SIZE = 64;
 const HOLOLIVE_ACTIVE_BOARD_SETTING_KEY = "hololive.activeBoardId";
 const HOLOLIVE_FAVORITES_PLAYLIST_ID = "system:favorites";
+const HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX = "internal.musicAvailabilityDeferred.";
 const HOLOLIVE_IMAGE_CACHE_VERSION = 6;
 const HOLOLIVE_CARD_IMAGE_CACHE_VERSION = 2;
 const HOLOLIVE_UNDO_TTL_MS = 10 * 60 * 1000;
@@ -1968,20 +1970,20 @@ export class DatabaseService {
     this.purgeRejectedHolodexMusicRows();
   }
 
-  repairHololiveMusicDuplicateRows(runId: string | null = null): number {
+  repairHololiveMusicDuplicateRows(runId: string | null = null, verifiedVideoIds: ReadonlySet<string> = new Set<string>()): number {
     let repairedRows = 0;
     const repairStartedAt = new Date().toISOString();
     const repair = () => {
       this.upsertKnownHololiveDuplicateReplacementRows(runId);
-      repairedRows += this.applyStoredHololiveDuplicateRemovalRows(runId);
+      repairedRows += this.applyStoredHololiveDuplicateRemovalRows(runId, verifiedVideoIds);
       repairedRows += this.purgeCanonicalTopicDuplicateRows(runId);
       repairedRows += this.purgeCrossOwnerTopicDuplicateRows(runId);
       repairedRows += this.purgeCanonicalVariantDuplicateRows(runId);
       repairedRows += this.purgeSupersededDirectUploadRows(runId);
       if (repairedRows > 0) {
-        this.transferHololiveMusicMarkersFromDuplicateRemovals(runId, repairStartedAt);
+        this.transferHololiveMusicMarkersFromDuplicateRemovals(runId, repairStartedAt, verifiedVideoIds);
       }
-      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId, repairStartedAt);
+      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId, repairStartedAt, verifiedVideoIds);
     };
 
     if (this.inTransaction) {
@@ -1993,10 +1995,25 @@ export class DatabaseService {
     return repairedRows;
   }
 
+  repairVerifiedHololiveMusicAudioMirrors(youtubeVideoIds: string[]): number {
+    const verifiedVideoIds = new Set(youtubeVideoIds.map((id) => id.trim()).filter(Boolean));
+    if (verifiedVideoIds.size < 2) return 0;
+    let repairedRows = 0;
+    // The narrow purge transfers only each verified pair's references and markers before deleting its mirror.
+    const repair = () => { repairedRows = this.purgeOfficialAudioMirrorRows(null, verifiedVideoIds); };
+    if (this.inTransaction) repair();
+    else this.transaction(repair);
+    return repairedRows;
+  }
+
   importHolodexMusicArtifacts(
     bundle: HolodexArtifactBundle,
     source: HololiveMusicRefreshRun["source"] = "artifact",
-    options: { replaceExisting?: boolean } = {}
+    options: {
+      replaceExisting?: boolean;
+      deferredVideos?: Array<{ youtubeVideoId: string; reason?: string | null }>;
+      verifiedVideoIds?: string[];
+    } = {}
   ): HololiveMusicImportResult {
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
@@ -2004,14 +2021,31 @@ export class DatabaseService {
     let matchedDetailCount = 0;
     let matchedDuplicateCount = 0;
     let canonicalDuplicateCount = 0;
+    let importedRows = 0;
+    const verifiedVideoIds = new Set((options.verifiedVideoIds ?? []).map((id) => id.trim()).filter(Boolean));
 
     if (options.replaceExisting) {
       this.createBackup("holodex-replace-refresh");
     }
 
     this.transaction(() => {
+      const deferredIds = [...new Set((options.deferredVideos ?? []).map((entry) => entry.youtubeVideoId.trim()).filter(Boolean))];
+      const preservedDeferredIds = this.select<{ youtube_video_id: string }>(
+        `SELECT v.youtube_video_id
+         FROM hololive_music_videos v
+         WHERE NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)
+           AND (EXISTS (
+             SELECT 1 FROM settings deferred WHERE deferred.key = ? || v.youtube_video_id
+           ) ${deferredIds.length ? `OR v.youtube_video_id IN (${deferredIds.map(() => "?").join(", ")})` : ""})`,
+        [HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX, ...deferredIds]
+      ).map((row) => row.youtube_video_id);
+      for (const id of preservedDeferredIds) {
+        this.deferHololiveMusicVideo({ youtubeVideoId: id, createBackup: false });
+        // A freshly checked source candidate may already be inactive from an earlier catalog snapshot.
+        this.persistSettingValue(`${HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX}${id}`, "1");
+      }
       if (options.replaceExisting) {
-        this.clearHolodexMusicData();
+        this.clearHolodexMusicData(preservedDeferredIds);
       }
       this.deleteExcludedHolodexChannelData();
       this.seedHololiveMainChannels(startedAt);
@@ -2058,19 +2092,24 @@ export class DatabaseService {
       this.upsertHolodexDuplicateRemovals(matchedDuplicateRemovals, runId);
       this.upsertHolodexMusicRows(matchedRows, matchedDetails, channelContext, runId);
       this.upsertKnownHololiveDuplicateReplacementRows(runId);
-      canonicalDuplicateCount = this.applyStoredHololiveDuplicateRemovalRows(runId);
+      canonicalDuplicateCount = this.applyStoredHololiveDuplicateRemovalRows(runId, verifiedVideoIds);
       canonicalDuplicateCount += this.purgeCanonicalTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCrossOwnerTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCanonicalVariantDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeSupersededDirectUploadRows(runId);
+      canonicalDuplicateCount += this.purgeOfficialAudioMirrorRows(runId, verifiedVideoIds);
       matchedDuplicateCount += canonicalDuplicateCount;
-      matchedDetailCount = Math.max(0, matchedDetailCount - canonicalDuplicateCount);
-      this.transferHololiveMusicMarkersFromDuplicateRemovals(runId);
-      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId);
+      const survivingIds = new Set(this.select<{ youtube_video_id: string }>(
+        "SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1"
+      ).map(row => row.youtube_video_id));
+      importedRows = matchedRows.filter(row => survivingIds.has(row.youtubeVideoId)).length;
+      matchedDetailCount = Object.keys(matchedDetails).filter(id => survivingIds.has(id)).length;
+      this.transferHololiveMusicMarkersFromDuplicateRemovals(runId, null, verifiedVideoIds);
+      this.transferHololiveMusicReferencesFromDuplicateRemovals(runId, null, verifiedVideoIds);
       this.finishHololiveMusicRefreshRun(runId, {
         status: "completed",
-        keptRows: matchedRows.length - canonicalDuplicateCount,
-        filteredRows: bundle.rows.length - matchedRows.length + canonicalDuplicateCount,
+        keptRows: importedRows,
+        filteredRows: bundle.rows.length - importedRows,
         duplicateRows: matchedDuplicateCount,
         error: null
       });
@@ -2086,7 +2125,7 @@ export class DatabaseService {
       run,
       sourceRows: bundle.rows.length,
       idolMatchedRows: matchedRows.length,
-      importedRows: matchedRows.length - canonicalDuplicateCount,
+      importedRows,
       detailCacheRows: matchedDetailCount,
       duplicateRows: matchedDuplicateCount
     };
@@ -2125,7 +2164,40 @@ export class DatabaseService {
     };
   }
 
-  clearHolodexMusicData(): void {
+  clearHolodexMusicData(preserveVideoIds: string[] = []): void {
+    const personalIds = this.select<{ youtube_video_id: string }>(
+      `SELECT v.youtube_video_id FROM hololive_music_videos v
+       WHERE COALESCE(v.source_kind, 'official') != 'user' AND (
+         EXISTS (SELECT 1 FROM hololive_music_marker_keys m
+                 WHERE m.marker_key = 'video:' || v.youtube_video_id OR m.marker_key = NULLIF(v.canonical_performance_key, ''))
+         OR EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_music_playlist_items p WHERE p.youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_music_queue_items q WHERE q.youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_music_player_state p WHERE p.current_youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_bracket_entries b WHERE b.youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_bracket_archive_entries b WHERE b.youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM hololive_bracket_archive_matches b
+                    WHERE b.entry_a_youtube_video_id = v.youtube_video_id OR b.entry_b_youtube_video_id = v.youtube_video_id
+                       OR b.winner_youtube_video_id = v.youtube_video_id OR b.loser_youtube_video_id = v.youtube_video_id)
+         OR EXISTS (SELECT 1 FROM tracked_entries t WHERE t.item_id = v.item_id AND (
+                    t.status != 'planned' OR t.rating IS NOT NULL OR NULLIF(TRIM(COALESCE(t.notes, '')), '') IS NOT NULL
+                    OR t.started_at IS NOT NULL OR t.completed_at IS NOT NULL))
+         OR EXISTS (SELECT 1 FROM list_items l WHERE l.item_id = v.item_id)
+       )`
+    ).map(row => row.youtube_video_id);
+    const preservedIds = [...new Set([...preserveVideoIds, ...personalIds].map((id) => id.trim()).filter(Boolean))];
+    const protectedMusicWhere = `COALESCE(source_kind, 'official') = 'user'${
+      preservedIds.length ? ` OR youtube_video_id IN (${preservedIds.map(() => "?").join(", ")})` : ""
+    }`;
+    const protectedItemIds = new Set(this.select<{ item_id: string }>(
+      `SELECT item_id FROM hololive_music_videos WHERE ${protectedMusicWhere}`,
+      preservedIds
+    ).map((row) => row.item_id));
+    if (preservedIds.length > 0) {
+      // Only rows included in the incoming valid catalog are reactivated by upsertHolodexMusicRows.
+      this.run(`UPDATE hololive_music_videos SET official_catalog_active = 0
+        WHERE COALESCE(source_kind, 'official') != 'user' AND youtube_video_id IN (${preservedIds.map(() => "?").join(", ")})`, preservedIds);
+    }
     const itemRows = this.select<{ item_id: string }>(
       `SELECT item_id FROM hololive_music_videos
        WHERE COALESCE(source_kind, 'official') != 'user'
@@ -2135,7 +2207,7 @@ export class DatabaseService {
        LEFT JOIN hololive_music_videos v ON v.item_id = r.item_id
        WHERE r.source_id = 'holodex'
          AND COALESCE(v.source_kind, 'official') != 'user'`
-    );
+    ).filter((row) => !protectedItemIds.has(row.item_id));
     if (itemRows.length > 0) {
       this.run(
         `DELETE FROM catalog_items WHERE id IN (${itemRows.map(() => "?").join(", ")})`,
@@ -2147,31 +2219,40 @@ export class DatabaseService {
       `DELETE FROM source_refs
        WHERE source_id = 'holodex'
          AND item_id NOT IN (
-           SELECT item_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'
-         )`
+           SELECT item_id FROM hololive_music_videos WHERE ${protectedMusicWhere}
+         )`,
+      preservedIds
     );
-    this.run("DELETE FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'");
+    this.run(
+      `DELETE FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user'${
+        preservedIds.length ? ` AND youtube_video_id NOT IN (${preservedIds.map(() => "?").join(", ")})` : ""
+      }`,
+      preservedIds
+    );
     this.run(
       `DELETE FROM hololive_music_detail_cache
        WHERE youtube_video_id NOT IN (
-         SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'
+         SELECT youtube_video_id FROM hololive_music_videos
        )`
     );
     this.run(
       `DELETE FROM hololive_music_duplicate_removals
        WHERE removed_youtube_video_id NOT IN (
-         SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'
+         SELECT youtube_video_id FROM hololive_music_videos
        )
          AND COALESCE(kept_youtube_video_id, '') NOT IN (
-           SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'
+           SELECT youtube_video_id FROM hololive_music_videos
          )`
     );
-    this.run("DELETE FROM hololive_music_refresh_runs WHERE source IN ('artifact', 'live')");
+    this.run(
+      `DELETE FROM hololive_music_refresh_runs WHERE source IN ('artifact', 'live')
+       AND id NOT IN (SELECT source_run_id FROM hololive_music_videos WHERE source_run_id IS NOT NULL)`
+    );
     this.run(
       `DELETE FROM item_tags
        WHERE item_id LIKE 'holodex:%'
          AND item_id NOT IN (
-           SELECT item_id FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') = 'user'
+           SELECT item_id FROM hololive_music_videos
          )`
     );
   }
@@ -2626,6 +2707,71 @@ export class DatabaseService {
     };
   }
 
+  deferHololiveMusicVideo(input: {
+    youtubeVideoId: string;
+    reason?: string | null;
+    createBackup?: boolean | null;
+  }): boolean {
+    const youtubeVideoId = input.youtubeVideoId.trim();
+    if (!youtubeVideoId) {
+      throw new Error("A YouTube video ID is required");
+    }
+    const row = this.select<{ official_catalog_active: number }>(
+      "SELECT official_catalog_active FROM hololive_music_videos WHERE youtube_video_id = ?",
+      [youtubeVideoId]
+    )[0];
+    if (!row || row.official_catalog_active === 0 || this.getHololiveMusicExclusionSet().has(youtubeVideoId)) {
+      return false;
+    }
+    if (input.createBackup !== false) {
+      this.createBackup("hololive-music-deferred");
+    }
+    const defer = () => {
+      this.run(
+        "UPDATE hololive_music_videos SET official_catalog_active = 0, updated_at = ? WHERE youtube_video_id = ?",
+        [new Date().toISOString(), youtubeVideoId]
+      );
+      // Distinguish a retryable availability check from an obsolete catalog row.
+      this.persistSettingValue(`${HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX}${youtubeVideoId}`, "1");
+    };
+    if (this.inTransaction) defer();
+    else this.transaction(defer);
+    return true;
+  }
+
+  restoreHololiveMusicVideoAvailability(youtubeVideoId: string): boolean {
+    const id = youtubeVideoId.trim();
+    if (!id) {
+      throw new Error("A YouTube video ID is required");
+    }
+    const key = `${HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX}${id}`;
+    if (!this.getSettingValue(key) || this.getHololiveMusicExclusionSet().has(id)) {
+      return false;
+    }
+    const row = this.select<{ official_catalog_active: number; source_kind: string; title: string; status: string; topic_id: HololiveMusicTopic; youtube_url: string; channel_name: string; published_at: string }>(
+      "SELECT official_catalog_active, source_kind, title, status, topic_id, youtube_url, channel_name, published_at FROM hololive_music_videos WHERE youtube_video_id = ?",
+      [id]
+    )[0];
+    if (!row) return false;
+    if (row.source_kind !== "user" && getRowCleanupReason({
+      youtubeVideoId: id, youtubeUrl: row.youtube_url, title: row.title, status: row.status,
+      topicId: row.topic_id, channelName: row.channel_name, publishedAt: row.published_at
+    }, {}, this.listHolodexDetailCache([id]))) return false;
+    const changed = row.official_catalog_active === 0;
+    const restore = () => {
+      if (changed) {
+        this.run(
+          "UPDATE hololive_music_videos SET official_catalog_active = 1, updated_at = ? WHERE youtube_video_id = ?",
+          [new Date().toISOString(), id]
+        );
+      }
+      this.run("DELETE FROM settings WHERE key = ?", [key]);
+    };
+    if (this.inTransaction) restore();
+    else this.transaction(restore);
+    return changed;
+  }
+
   markHololiveMusicVideoUnavailable(input: {
     youtubeVideoId: string;
     title?: string | null;
@@ -2646,16 +2792,7 @@ export class DatabaseService {
        WHERE youtube_video_id = ?`,
       [youtubeVideoId]
     )[0];
-    const titleSnapshot = input.title?.trim() || row?.title || null;
-    const sourceUrlSnapshot = input.sourceUrl?.trim() || row?.youtube_url || null;
-
     if (!row) {
-      this.upsertHololiveMusicExclusion({
-        youtubeVideoId,
-        titleSnapshot,
-        sourceUrlSnapshot,
-        createdAt: new Date().toISOString()
-      });
       return {
         removedYoutubeVideoId: youtubeVideoId,
         replacementYoutubeVideoId: null,
@@ -2671,31 +2808,10 @@ export class DatabaseService {
       this.createBackup("hololive-music-unavailable");
     }
     this.transaction(() => {
-      this.upsertHololiveMusicExclusion({
-        youtubeVideoId,
-        titleSnapshot,
-        sourceUrlSnapshot,
-        createdAt: new Date().toISOString()
-      });
-
+      this.deferHololiveMusicVideo({ ...input, createBackup: false });
       if (replacementYoutubeVideoId) {
         this.transferHololiveMusicReferencesBetweenVideos(youtubeVideoId, replacementYoutubeVideoId);
         this.transferHololiveMusicMarkersBetweenVideos(youtubeVideoId, replacementYoutubeVideoId);
-        this.deleteHololiveMusicVideoData(youtubeVideoId, { deleteStats: true });
-      } else {
-        this.run("DELETE FROM hololive_music_playlist_items WHERE youtube_video_id = ?", [youtubeVideoId]);
-        this.run("DELETE FROM hololive_music_queue_items WHERE youtube_video_id = ?", [youtubeVideoId]);
-        const state = this.ensureHololiveMusicPlayerState();
-        if (state.currentYoutubeVideoId === youtubeVideoId) {
-          this.setHololiveMusicPlayerStateRow({
-            playbackSourceType: "library",
-            currentQueueItemId: null,
-            currentPlaylistId: null,
-            currentPlaylistItemId: null,
-            currentYoutubeVideoId: null
-          });
-        }
-        this.deleteHololiveMusicVideoData(youtubeVideoId, { deleteMarker: true, deleteStats: true });
       }
     });
 
@@ -3016,6 +3132,7 @@ export class DatabaseService {
        FROM hololive_music_videos v
        WHERE v.youtube_video_id != ?
          AND v.topic_id = ?
+         AND COALESCE(v.official_catalog_active, 1) = 1
          AND NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)
          AND (
            (? != '' AND v.canonical_performance_key = ?)
@@ -3155,11 +3272,12 @@ export class DatabaseService {
       marker: HololiveMusicMarker;
       created_at: string;
       updated_at: string;
+      favorite_position: number | null;
     }>(
-      `SELECT marker, created_at, updated_at
+      `SELECT marker, created_at, updated_at, favorite_position
        FROM hololive_music_marker_keys
        WHERE marker_key IN (${removedMarkerKeys.map(() => "?").join(", ")})
-       ORDER BY updated_at DESC
+       ORDER BY updated_at DESC, (favorite_position IS NOT NULL) DESC
        LIMIT 1`,
       removedMarkerKeys
     )[0];
@@ -3170,8 +3288,8 @@ export class DatabaseService {
     const transferMarkers = () => {
       for (const markerKey of this.getHololiveMusicMarkerKeysForVideo(keptId)) {
         this.run(
-          `INSERT INTO hololive_music_marker_keys (marker_key, marker, created_at, updated_at)
-           VALUES (?, ?, ?, ?)
+          `INSERT INTO hololive_music_marker_keys (marker_key, marker, created_at, updated_at, favorite_position)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(marker_key) DO UPDATE SET
              marker = CASE
                WHEN excluded.updated_at >= hololive_music_marker_keys.updated_at THEN excluded.marker
@@ -3180,11 +3298,15 @@ export class DatabaseService {
              updated_at = CASE
                WHEN excluded.updated_at >= hololive_music_marker_keys.updated_at THEN excluded.updated_at
                ELSE hololive_music_marker_keys.updated_at
+             END,
+             favorite_position = CASE
+               WHEN excluded.updated_at >= hololive_music_marker_keys.updated_at
+                 THEN COALESCE(excluded.favorite_position, hololive_music_marker_keys.favorite_position)
+               ELSE hololive_music_marker_keys.favorite_position
              END`,
-          [markerKey, markerRow.marker, markerRow.created_at, markerRow.updated_at]
+          [markerKey, markerRow.marker, markerRow.created_at, markerRow.updated_at, markerRow.favorite_position]
         );
       }
-      this.run("DELETE FROM hololive_music_marker_keys WHERE marker_key = ?", [`video:${removedId}`]);
     };
 
     if (this.inTransaction) {
@@ -3200,7 +3322,8 @@ export class DatabaseService {
       totalRows: this.scalarCount(
         `SELECT COUNT(*)
          FROM hololive_music_videos v
-         WHERE NOT EXISTS (
+         WHERE COALESCE(v.official_catalog_active, 1) = 1
+         AND NOT EXISTS (
            SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id
          )`
       )
@@ -3259,7 +3382,9 @@ export class DatabaseService {
   } = {}): string[] {
     const where: string[] = [
       "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)",
-      "COALESCE(v.official_catalog_active, 1) = 1"
+      `(COALESCE(v.official_catalog_active, 1) = 1 OR EXISTS (
+        SELECT 1 FROM settings deferred WHERE deferred.key = '${HOLOLIVE_MUSIC_AVAILABILITY_DEFERRED_PREFIX}' || v.youtube_video_id
+      ))`
     ];
     const params: unknown[] = [];
     const requestedIds = [
@@ -3370,7 +3495,8 @@ export class DatabaseService {
     limit?: number | null;
   } = {}): HololiveMusicLibraryResponse {
     const where: string[] = [
-      "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)"
+      "NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)",
+      "COALESCE(v.official_catalog_active, 1) = 1"
     ];
     const params: unknown[] = [];
     const limit = Math.min(Math.max(Math.round(filters.limit ?? 50), 1), 100);
@@ -11856,7 +11982,8 @@ export class DatabaseService {
       `SELECT youtube_video_id, title, song_name, published_at
        FROM hololive_music_videos
        WHERE youtube_video_id IN (${videoIds.map(() => "?").join(", ")})
-         AND COALESCE(source_kind, 'official') != 'user'`,
+         AND COALESCE(source_kind, 'official') != 'user'
+         AND COALESCE(official_catalog_active, 1) = 1`,
       videoIds
     );
     const rowsById = new Map(rows.map((row) => [row.youtube_video_id, row]));
@@ -11884,7 +12011,7 @@ export class DatabaseService {
     this.upsertHolodexDuplicateRemovals(removals, runId);
   }
 
-  private applyStoredHololiveDuplicateRemovalRows(runId: string | null): number {
+  private applyStoredHololiveDuplicateRemovalRows(runId: string | null, verifiedVideoIds: ReadonlySet<string> = new Set<string>()): number {
     const rows = this.select<{
       removed_youtube_video_id: string;
       removed_title: string;
@@ -11901,9 +12028,11 @@ export class DatabaseService {
        INNER JOIN hololive_music_videos removed
          ON removed.youtube_video_id = r.removed_youtube_video_id
         AND COALESCE(removed.source_kind, 'official') != 'user'
+        AND (COALESCE(removed.official_catalog_active, 1) = 1 OR r.reason = 'official_audio_duplicate_of_mv')
        INNER JOIN hololive_music_videos kept
          ON kept.youtube_video_id = r.kept_youtube_video_id
         AND COALESCE(kept.source_kind, 'official') != 'user'
+        AND COALESCE(kept.official_catalog_active, 1) = 1
        WHERE COALESCE(r.kept_youtube_video_id, '') != ''
          AND r.removed_youtube_video_id != r.kept_youtube_video_id
        ORDER BY r.removed_youtube_video_id`
@@ -11912,7 +12041,10 @@ export class DatabaseService {
       return 0;
     }
 
-    const removals: HolodexDuplicateRemoval[] = rows.map((row) => ({
+    const removals: HolodexDuplicateRemoval[] = rows.filter((row) =>
+      row.reason !== "official_audio_duplicate_of_mv" ||
+      (verifiedVideoIds.has(row.removed_youtube_video_id) && verifiedVideoIds.has(row.kept_youtube_video_id ?? ""))
+    ).map((row) => ({
       removedYoutubeVideoId: row.removed_youtube_video_id,
       removedTitle: row.removed_title,
       keptYoutubeVideoId: row.kept_youtube_video_id ?? "",
@@ -11924,7 +12056,13 @@ export class DatabaseService {
     }));
 
     for (const removal of removals) {
-      this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+      if (removal.reason === "official_audio_duplicate_of_mv") {
+        this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+        this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+        this.retireVerifiedHololiveMusicAudioMirror(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      } else {
+        this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+      }
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
@@ -12132,11 +12270,13 @@ export class DatabaseService {
        FROM hololive_music_videos
        WHERE canonical_performance_key != ''
          AND COALESCE(source_kind, 'official') != 'user'
+         AND COALESCE(official_catalog_active, 1) = 1
          AND canonical_performance_key IN (
            SELECT canonical_performance_key
            FROM hololive_music_videos
            WHERE canonical_performance_key != ''
              AND COALESCE(source_kind, 'official') != 'user'
+         AND COALESCE(official_catalog_active, 1) = 1
            GROUP BY canonical_performance_key
            HAVING SUM(CASE WHEN provided_to_youtube = 1 THEN 1 ELSE 0 END) > 0
               AND SUM(CASE WHEN provided_to_youtube = 0 THEN 1 ELSE 0 END) > 0
@@ -12186,6 +12326,82 @@ export class DatabaseService {
     return removals.length;
   }
 
+  private retireVerifiedHololiveMusicAudioMirror(removedYoutubeVideoId: string, keptYoutubeVideoId: string): void {
+    type TrackedState = { item_id: string; status: string; rating: number | null; notes: string | null;
+      started_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
+    const tracked = (id: string) => this.select<TrackedState>(
+      `SELECT t.* FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id = t.item_id WHERE v.youtube_video_id = ?`, [id]
+    )[0];
+    const meaningful = (row: TrackedState | undefined) => Boolean(row && (row.status !== "planned" || row.rating !== null ||
+      row.notes?.trim() || row.started_at !== null || row.completed_at !== null));
+    const removed = tracked(removedYoutubeVideoId);
+    const kept = tracked(keptYoutubeVideoId);
+    let preserveRemoved = false;
+    if (meaningful(removed)) {
+      if (!meaningful(kept) && removed && kept) {
+        this.run(`UPDATE tracked_entries SET status = ?, rating = ?, notes = ?, started_at = ?, completed_at = ?,
+          created_at = ?, updated_at = ? WHERE item_id = ?`, [removed.status, removed.rating, removed.notes,
+          removed.started_at, removed.completed_at, removed.created_at, removed.updated_at, kept.item_id]);
+      } else {
+        // Distinct personal notes or ratings must survive even when the official catalog chooses one video.
+        preserveRemoved = true;
+      }
+    }
+    const removedItemId = this.select<{ item_id: string }>(
+      "SELECT item_id FROM hololive_music_videos WHERE youtube_video_id = ?", [removedYoutubeVideoId]
+    )[0]?.item_id;
+    if (removedItemId && this.select("SELECT 1 FROM list_items WHERE item_id = ? LIMIT 1", [removedItemId]).length > 0) {
+      preserveRemoved = true;
+    }
+    if (preserveRemoved) {
+      this.run("UPDATE hololive_music_videos SET official_catalog_active = 0, updated_at = ? WHERE youtube_video_id = ?",
+        [new Date().toISOString(), removedYoutubeVideoId]);
+    } else {
+      this.deleteHololiveMusicVideoData(removedYoutubeVideoId, { deleteStats: true });
+    }
+  }
+
+  private purgeOfficialAudioMirrorRows(runId: string | null, verifiedVideoIds: ReadonlySet<string>): number {
+    if (verifiedVideoIds.size < 2) return 0;
+    const rows = this.select<HololiveStoredMusicDuplicateRow>(
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
+              v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds,
+              v.published_at, v.participants_json, v.owned_idol_ids_json, v.featured_idol_ids_json, stats.view_count
+       FROM hololive_music_videos v LEFT JOIN hololive_music_video_stats stats USING(youtube_video_id)
+       WHERE COALESCE(v.source_kind, 'official') != 'user' AND COALESCE(v.official_catalog_active, 1) = 1
+         AND v.provided_to_youtube = 0 AND v.canonical_song_key != ''`
+    ).filter((row) => verifiedVideoIds.has(row.youtube_video_id));
+    const groups = new Map<string, HololiveStoredMusicDuplicateRow[]>();
+    for (const row of rows) {
+      const key = JSON.stringify([row.channel_id, row.topic_id, row.canonical_song_key]);
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+    const candidate = (row: HololiveStoredMusicDuplicateRow) => ({
+      youtubeVideoId: row.youtube_video_id, title: row.title, songName: row.song_name,
+      topicId: row.topic_id, channelId: row.channel_id, providedToYoutube: Boolean(row.provided_to_youtube),
+      durationSeconds: row.duration_seconds, participantIds: [...this.getStoredHololiveDuplicateParticipantSignals(row)]
+    });
+    const removals: HolodexDuplicateRemoval[] = [];
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      for (const audio of group) {
+        const kept = group.filter((row) => isHololiveOfficialAudioMirror(candidate(audio), candidate(row)))
+          .sort((left, right) => this.compareHololiveMusicDisplayRow(right, left))[0];
+        if (!kept) continue;
+        this.transferHololiveMusicReferencesBetweenVideos(audio.youtube_video_id, kept.youtube_video_id);
+        this.transferHololiveMusicMarkersBetweenVideos(audio.youtube_video_id, kept.youtube_video_id);
+        this.retireVerifiedHololiveMusicAudioMirror(audio.youtube_video_id, kept.youtube_video_id);
+        removals.push({
+          removedYoutubeVideoId: audio.youtube_video_id, removedTitle: audio.title,
+          keptYoutubeVideoId: kept.youtube_video_id, keptTitle: kept.title, reason: "official_audio_duplicate_of_mv",
+          songName: kept.song_name || kept.title, removedPublishedAt: audio.published_at || "", keptPublishedAt: kept.published_at || ""
+        });
+      }
+    }
+    this.upsertHolodexDuplicateRemovals(removals, runId);
+    return removals.length;
+  }
+
   private purgeCrossOwnerTopicDuplicateRows(runId: string | null): number {
     const rows = this.select<HololiveStoredMusicDuplicateRow>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
@@ -12196,6 +12412,7 @@ export class DatabaseService {
          ON stats.youtube_video_id = v.youtube_video_id
        WHERE v.canonical_song_key != ''
          AND COALESCE(v.source_kind, 'official') != 'user'
+         AND COALESCE(v.official_catalog_active, 1) = 1
        ORDER BY v.topic_id, v.canonical_song_key, v.provided_to_youtube, v.youtube_video_id`
     );
     if (rows.length === 0) {
@@ -12346,6 +12563,7 @@ export class DatabaseService {
          ON stats.youtube_video_id = v.youtube_video_id
        WHERE v.canonical_song_key != ''
          AND COALESCE(v.source_kind, 'official') != 'user'
+         AND COALESCE(v.official_catalog_active, 1) = 1
        ORDER BY v.canonical_song_key, v.canonical_performance_key, v.youtube_video_id`
     );
     if (rows.length === 0) {
@@ -12470,6 +12688,7 @@ export class DatabaseService {
          ON details.youtube_video_id = v.youtube_video_id
        WHERE v.provided_to_youtube = 0
          AND COALESCE(v.source_kind, 'official') != 'user'
+         AND COALESCE(v.official_catalog_active, 1) = 1
        ORDER BY v.topic_id, v.channel_id, v.published_at, v.youtube_video_id`
     );
     if (rows.length < 2) {
@@ -12604,27 +12823,31 @@ export class DatabaseService {
 
   private selectHololiveMusicDuplicateRemovalsForTransfer(
     runId: string | null,
-    updatedSince: string | null = null
+    updatedSince: string | null = null,
+    verifiedVideoIds: ReadonlySet<string> = new Set<string>()
   ): Array<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null }> {
     const sourceFilter = runId ? "source_run_id = ?" : "source_run_id IS NULL AND updated_at >= ?";
     return this.select<{
       removed_youtube_video_id: string;
       kept_youtube_video_id: string | null;
+      reason: string;
     }>(
-      `SELECT removed_youtube_video_id, kept_youtube_video_id
+      `SELECT removed_youtube_video_id, kept_youtube_video_id, reason
        FROM hololive_music_duplicate_removals
        WHERE ${sourceFilter}
          AND kept_youtube_video_id IS NOT NULL
          AND kept_youtube_video_id != ''`,
       [runId ?? updatedSince ?? ""]
-    );
+    ).filter((row) => row.reason !== "official_audio_duplicate_of_mv" ||
+      (verifiedVideoIds.has(row.removed_youtube_video_id) && verifiedVideoIds.has(row.kept_youtube_video_id ?? "")));
   }
 
   private transferHololiveMusicReferencesFromDuplicateRemovals(
     runId: string | null,
-    updatedSince: string | null = null
+    updatedSince: string | null = null,
+    verifiedVideoIds: ReadonlySet<string> = new Set<string>()
   ): void {
-    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince);
+    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince, verifiedVideoIds);
     if (removals.length === 0) {
       return;
     }
@@ -12722,9 +12945,10 @@ export class DatabaseService {
 
   private transferHololiveMusicMarkersFromDuplicateRemovals(
     runId: string | null,
-    updatedSince: string | null = null
+    updatedSince: string | null = null,
+    verifiedVideoIds: ReadonlySet<string> = new Set<string>()
   ): void {
-    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince);
+    const removals = this.selectHololiveMusicDuplicateRemovalsForTransfer(runId, updatedSince, verifiedVideoIds);
     if (removals.length === 0) {
       return;
     }

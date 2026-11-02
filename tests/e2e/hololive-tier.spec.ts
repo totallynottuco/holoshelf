@@ -554,6 +554,14 @@ test("@smoke requires complete custom song metadata before import save", async (
   await sheet.getByLabel("Published").fill("2026-07-01");
   await expect(saveButton).toBeEnabled();
 
+  // Manually completed fields cannot bypass a known missing availability-verification key.
+  await sheet.getByRole("button", { name: "Load", exact: true }).click();
+  await expect(sheet.getByText("Key required", { exact: true })).toBeVisible();
+  await expect(sheet.getByRole("status")).toContainText("Add it in Settings");
+  await expect(saveButton).toBeDisabled();
+  await expect(saveButton).toHaveAttribute("title", /YouTube API key/);
+  await expect(page.locator(".hololive-action-toast")).not.toContainText("Manual import ready");
+
   await sheet.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Import Song" }).click();
   const apiSheet = page.locator(".hololive-custom-song-sheet");

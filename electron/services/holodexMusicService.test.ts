@@ -11,6 +11,19 @@ const item = (id: string, uploader = "official-1") => ({
   channel: channel(uploader), songs: [{ name: `Song ${id}` }], mentions: []
 });
 
+async function verifyFixtureVideoAvailability(youtubeVideoIds: string[]) {
+  const checkedAt = "2026-11-01T00:00:00.000Z";
+  return {
+    checkedAt, requestedVideos: youtubeVideoIds.length, availableVideoIds: youtubeVideoIds,
+    deferredVideos: [], unavailableVideos: [],
+    stats: youtubeVideoIds.map((youtubeVideoId) => ({
+      youtubeVideoId, viewCount: 0, fetchedAt: checkedAt,
+      youtubeChannelId: null, youtubeChannelName: null, durationSeconds: null, title: null,
+      status: "past" as const
+    }))
+  };
+}
+
 function fixture() {
   const imported = vi.fn((bundle: HolodexArtifactBundle) => ({ importedRows: bundle.rows.length, run: { status: "completed" } }));
   const failed = vi.fn(() => ({ run: { status: "failed" } }));
@@ -26,7 +39,11 @@ function fixture() {
       { idolId: "custom", youtubeChannelId: "custom-channel" }
     ],
     listHolodexDetailCache: () => ({}),
+    getHololiveMusicSourceChannelMismatchReason: () => null,
     importHolodexMusicArtifacts: imported,
+    select: () => (imported.mock.calls.at(-1)?.[0].rows ?? []).map(row => ({ youtube_video_id: row.youtubeVideoId })),
+    upsertHololiveMusicVideoStats: vi.fn(),
+    restoreHololiveMusicVideoAvailability: vi.fn(() => false),
     recordFailedHolodexRefresh: failed
   } as unknown as DatabaseService;
   return { database, imported, failed };
@@ -48,7 +65,7 @@ describe("parallel Holodex refresh", () => {
           ...item(`${topic}-${offset+i}`), topic_id: topic,
           description: `fresh description ${offset+i}`, mentions: [channel('official-2')]
         }))});
-      }) as typeof fetch);
+      }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
       const result = await service.refreshLive({pageSize, includeChannels:false, includeCustomTalents:false, maxRequestsPerWindow:10000});
       expect(result.run.status).toBe('completed');
       expect(service.getRefreshCoverage().complete).toBe(true);
@@ -80,7 +97,7 @@ describe("parallel Holodex refresh", () => {
       return Response.json({total:failure==='changed-total' && offset>0 ? 4 : 3, items:
         offset>0 && failure==='truncated' ? [] : [{...item(failure==='duplicate' ? 'same' : `song-${offset}`),
           topic_id:failure==='wrong-topic' ? 'singing' : 'Original_Song'}]});
-    }) as typeof fetch, null, {responseCache:{read:async()=>null,write:async()=>{},discard}});
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability, responseCache:{read:async()=>null,write:async()=>{},discard}});
     const result=await service.refreshLive({includeChannels:false,includeCustomTalents:false,includeCollabs:false,pageSize:1,maxRequestsPerWindow:1000});
     expect(result.run.status).toBe('failed');
     expect(imported).not.toHaveBeenCalled();
@@ -101,7 +118,7 @@ describe("parallel Holodex refresh", () => {
         ...Array.from({length:34},(_,i)=>channel(`official-${i}`)),
         ...[...EXCLUDED_HOLODEX_CHANNEL_IDS].slice(0,16).map(channel)
       ] : [channel('last-official')]);
-    }) as typeof fetch);
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     expect((await service.refreshChannels()).refreshedChannels).toBe(35);
     expect(offsets).toEqual([0,50]);
   });
@@ -121,7 +138,7 @@ describe("parallel Holodex refresh", () => {
       offsets.push(offset);
       if (rejected && limit > 50) return new Response("unsupported limit", {status: 400});
       return Response.json(all.slice(offset, offset + limit));
-    }) as typeof fetch);
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     expect((await service.refreshChannels()).refreshedChannels).toBe(138);
     expect(offsets).toEqual(rejected ? [0, 0, 50, 100] : [0]);
   });
@@ -130,7 +147,7 @@ describe("parallel Holodex refresh", () => {
     const {database} = fixture();
     database.refreshHolodexChannels = vi.fn();
     const page = Array.from({length: 500}, (_, i) => channel(`official-${i}`));
-    const service = new HolodexMusicService(database, (async () => Response.json(page)) as typeof fetch);
+    const service = new HolodexMusicService(database, (async () => Response.json(page)) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     await expect(service.refreshChannels()).rejects.toThrow("repeated a channel");
     expect(database.refreshHolodexChannels).not.toHaveBeenCalled();
   });
@@ -143,7 +160,7 @@ describe("parallel Holodex refresh", () => {
       if(url.searchParams.get('topic')==='Music_Cover') return Response.json({total:0,items:[]});
       const offset=Number(url.searchParams.get('offset'));
       return Response.json({total:51,items:Array.from({length:Math.min(50,51-offset)},(_,i)=>item(`song-${offset+i}`))});
-    }) as typeof fetch);
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     const result=await service.refreshLive({includeChannels:false,includeCustomTalents:false,includeCollabs:false,maxRequestsPerWindow:1000});
     expect(result.run.status).toBe('completed');
     expect(imported.mock.calls[0][0].rows).toHaveLength(51);
@@ -162,7 +179,7 @@ describe("parallel Holodex refresh", () => {
         starts.push(Date.now());
         return new URL(String(input)).pathname === "/api/v2/channels"
           ? Response.json([]) : Response.json({ total: 0, items: [] });
-      }) as typeof fetch);
+      }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
       const quota = { maxRequestsPerWindow: 1, requestWindowMs: 1000 };
       await service.refreshChannels(quota);
       const pending = service.refreshLive({ ...quota, includeChannels: false, includeCustomTalents: false, includeCollabs: false });
@@ -195,7 +212,7 @@ describe("parallel Holodex refresh", () => {
           return Response.json({ total: 2, items: [item("external-song", "external-uploader"), item("official-song-0")] });
         }
         return new Response("unexpected detail request", { status: 500 });
-      }) as typeof fetch, null, { requestConcurrency: concurrency });
+      }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability,  requestConcurrency: concurrency });
       const result = await service.refreshLive({
         includeChannels: false, includeCustomTalents: false, pageSize: 1, maxRequestsPerWindow: 1000
       });
@@ -230,7 +247,7 @@ describe("parallel Holodex refresh", () => {
         finalPageFinished = true;
       }
       return Response.json({ total: 3, items: [item(`song-${index}`)] });
-    }) as typeof fetch);
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     const result = await service.refreshLive({
       includeChannels: false, includeCustomTalents: false, includeCollabs: false,
       replaceExisting: true, pageSize: 1, maxRequestsPerWindow: 1000
@@ -258,7 +275,7 @@ describe("parallel Holodex refresh", () => {
       }
       detailRequests.push(url.pathname);
       return Response.json({ ...item("external-song", "external-uploader"), description: "Full metadata" });
-    }) as typeof fetch);
+    }) as typeof fetch, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     const result = await service.refreshLive({ includeChannels: false, includeCustomTalents: false });
     expect(result.run.status).toBe("completed");
     expect(detailRequests).toEqual(["/api/v2/videos/external-song"]);

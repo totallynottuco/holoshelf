@@ -548,7 +548,8 @@ function emptyVideoStatsRefresh(): HololiveMusicVideoStatsRefreshResult {
 
 async function refreshOptionalCustomTalentVideoStats(
   context: IpcContext,
-  input: { idolIds: string[]; limit?: number | null }
+  input: { idolIds: string[]; limit?: number | null },
+  verifiedAvailability: ReturnType<HolodexMusicService["getVerifiedAvailability"]> = null
 ): Promise<HololiveMusicVideoStatsRefreshResult> {
   if (!context.database.getSettings()["sources.youtubeApiKey"]?.trim()) {
     return emptyVideoStatsRefresh();
@@ -557,7 +558,7 @@ async function refreshOptionalCustomTalentVideoStats(
   return context.youtubeVideoStatsService.refreshViewCounts({
     youtubeVideoIds: collectHololiveMusicVideoIdsForIdols(context, input.idolIds),
     limit: input.limit ?? null
-  });
+  }, verifiedAvailability);
 }
 
 function createProgressHolodexMusicService(
@@ -951,9 +952,10 @@ export function installIpcHandlers(context: IpcContext): void {
       maxRequestsPerWindow: input?.maxRequestsPerWindow ?? null,
       requestWindowMs: input?.requestWindowMs ?? null
     });
+    if (musicRefresh.run.status !== "completed") throw new Error(musicRefresh.run.error || "Song refresh failed before availability verification completed.");
     const videoStatsRefresh = await context.youtubeVideoStatsService.refreshViewCounts({
       limit: input?.videoStatsLimit ?? null
-    });
+    }, holodexMusicService.getVerifiedAvailability());
 
     return {
       channelRefresh,
@@ -984,10 +986,11 @@ export function installIpcHandlers(context: IpcContext): void {
       .listHololiveIdols()
       .filter((idol) => idol.source !== "custom")
       .map((idol) => idol.id);
+    if (musicRefresh.run.status !== "completed") throw new Error(musicRefresh.run.error || "Song refresh failed before availability verification completed.");
     const videoStatsRefresh = await context.youtubeVideoStatsService.refreshViewCounts({
       youtubeVideoIds: collectHololiveMusicVideoIdsForIdols(context, officialIdolIds),
       limit: input?.videoStatsLimit ?? null
-    });
+    }, holodexMusicService.getVerifiedAvailability());
 
     return {
       channelRefresh,
@@ -1031,17 +1034,7 @@ export function installIpcHandlers(context: IpcContext): void {
 
   handle("hololive:custom-songs:upsert", async (_event, payload) => {
     const input = hololiveCustomSongUpsertSchema.parse(payload);
-    let enrichedInput = input;
-    if (context.database.getSettings()["sources.youtubeApiKey"]?.trim()) {
-      try {
-        enrichedInput = await context.youtubeVideoStatsService.enrichCustomSongUpsert(input);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (/deleted|private|not embeddable|did not return/i.test(message)) {
-          throw error;
-        }
-      }
-    }
+    const enrichedInput = await context.youtubeVideoStatsService.enrichCustomSongUpsert(input);
     return context.database.upsertHololiveCustomSong(enrichedInput);
   });
 
@@ -1086,7 +1079,7 @@ export function installIpcHandlers(context: IpcContext): void {
     const musicRefresh = await holodexMusicService.refreshCustomTalent(input);
     const videoStatsRefresh = await refreshOptionalCustomTalentVideoStats(context, {
       idolIds: [input.idolId]
-    });
+    }, holodexMusicService.getVerifiedAvailability());
 
     return {
       musicRefresh,

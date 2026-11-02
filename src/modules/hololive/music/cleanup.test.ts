@@ -3,6 +3,7 @@ import { buildHololiveMusicSongKey } from "./classification";
 import {
   buildDuplicateTitleCore,
   cleanupCatalogRows,
+  isHololiveOfficialAudioMirror,
   normalizeVideoDetail,
   parseProvidedToYoutubeArtistCredits
 } from "./cleanup";
@@ -33,6 +34,65 @@ function detail(input: Partial<HolodexVideoDetail> & Pick<HolodexVideoDetail, "y
 }
 
 describe("Holodex cleanup rules", () => {
+  const traumaAudio = {
+    youtubeVideoId: "CeTdduq4KbI",
+    title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)' (Official Audio)",
+    songName: "TRAUMA (Feat. Takanashi Kiara)",
+    topicId: "Original_Song" as const,
+    channelId: "UCMmcz1ybSoAD-GUlDx_7H2A",
+    providedToYoutube: false,
+    durationSeconds: 157,
+    participantIds: ["kiara-channel"]
+  };
+  const traumaVideo = {
+    ...traumaAudio,
+    youtubeVideoId: "3f0PTj1xrvw",
+    title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)' Official MV",
+    durationSeconds: 172
+  };
+
+  it("keeps the official MV instead of the same uploader's non-topic official audio", () => {
+    const rows = [row(traumaAudio), row(traumaVideo)];
+    const details = Object.fromEntries([traumaAudio, traumaVideo].map(candidate => [candidate.youtubeVideoId, {
+      ...detail({ youtubeVideoId: candidate.youtubeVideoId, channelId: candidate.channelId, duration: candidate.durationSeconds, songNames: [candidate.songName] }),
+      mentions: [{ channelId: "kiara-channel", name: "Takanashi Kiara", englishName: "Takanashi Kiara", type: "vtuber", photoUrl: "", org: "Hololive" }]
+    }]));
+    const result = cleanupCatalogRows(rows, {}, details);
+    expect(result.rows.map(candidate => candidate.youtubeVideoId)).toEqual(["3f0PTj1xrvw"]);
+    expect(result.duplicateRemovals).toMatchObject([{
+      removedYoutubeVideoId: "CeTdduq4KbI", keptYoutubeVideoId: "3f0PTj1xrvw", reason: "official_audio_duplicate_of_mv"
+    }]);
+    expect(result.duplicateClusterCount).toBe(1);
+  });
+
+  it.each(["Live version", "Acoustic", "Piano", "Repaint", "Tour", "Solo", "Extended", "2025 ver.", "ライブ", "Rehearsal", "Performance Video", "FUWAWA ver.", "歌い分け"])("preserves a distinct %s recording even when structured song metadata omits the variant", (variant) => {
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, title: `${traumaVideo.title} (${variant})` })).toBe(false);
+  });
+
+  it("does not merge other uploaders or different performer credits", () => {
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, channelId: "another-official-artist" })).toBe(false);
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, songName: "TRAUMA (Feat. IRyS)" })).toBe(false);
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, participantIds: ["irys-channel"] })).toBe(false);
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, topicId: "Music_Cover" })).toBe(false);
+  });
+
+  it("requires explicit format signals, structured song identity, and known compatible durations", () => {
+    expect(isHololiveOfficialAudioMirror(traumaAudio, traumaVideo)).toBe(true);
+    expect(isHololiveOfficialAudioMirror({ ...traumaAudio, title: "TRAUMA" }, traumaVideo)).toBe(false);
+    expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, title: "TRAUMA" })).toBe(false);
+    expect(isHololiveOfficialAudioMirror({ ...traumaAudio, songName: null }, traumaVideo)).toBe(false);
+    for (const durationSeconds of [null, 0, -1, Number.POSITIVE_INFINITY, 400]) {
+      expect(isHololiveOfficialAudioMirror(traumaAudio, { ...traumaVideo, durationSeconds })).toBe(false);
+    }
+  });
+
+  it("preserves separate language recordings while allowing matching language MV/audio mirrors", () => {
+    const englishAudio = { ...traumaAudio, title: `${traumaAudio.title} (English ver.)` };
+    expect(isHololiveOfficialAudioMirror(englishAudio, traumaVideo)).toBe(false);
+    expect(isHololiveOfficialAudioMirror(englishAudio, { ...traumaVideo, title: `${traumaVideo.title} (English ver.)` })).toBe(true);
+    expect(isHololiveOfficialAudioMirror(englishAudio, { ...traumaVideo, title: `${traumaVideo.title} (Japanese ver.)` })).toBe(false);
+  });
+
   it("extracts only the structured Provided to YouTube artist-credit line", () => {
     expect(
       parseProvidedToYoutubeArtistCredits(

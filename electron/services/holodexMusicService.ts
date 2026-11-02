@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { YouTubeVideoStatsService, type YouTubeVideoAvailabilityCheckResult } from "./youtubeVideoStatsService";
 import type {
   HololiveCustomTalentInput,
   HololiveCustomTalentPreview,
@@ -18,7 +19,9 @@ import {
   HOLODEX_RELEASE_CHANNEL_PAGE_SIZE,
   buildHolodexPageUrl,
   cleanupCatalogRows,
+  isHololiveOfficialAudioMirror,
   makeCatalogRowsFromRecords,
+  normalizeVideoDetail,
   normalizeHolodexSearchItem,
   normalizeHolodexVideoItemDetail,
   parseHolodexArtifactBundle,
@@ -47,6 +50,8 @@ const CUSTOM_CHANNEL_RECENT_MUSIC_TIMEOUT_MS = 10_000;
 
 interface HolodexMusicServiceOptions {
   apiKey?: string | null;
+  youtubeApiKey?: string | null;
+  availabilityVerifier?: (youtubeVideoIds: string[]) => Promise<YouTubeVideoAvailabilityCheckResult>;
   requestConcurrency?: number;
   responseCache?: HolodexResponseCache;
 }
@@ -55,6 +60,10 @@ export class HolodexMusicService {
   private readonly apiKeyOverride: string | null;
   private readonly concurrency: number;
   private readonly responseCache: HolodexResponseCache | null;
+  private readonly youtubeApiKey: string | null;
+  private readonly availabilityVerifier: (youtubeVideoIds: string[]) => Promise<YouTubeVideoAvailabilityCheckResult>;
+  private readonly customAvailabilityVerifier: boolean;
+  private verifiedAvailability: YouTubeVideoAvailabilityCheckResult | null = null;
   private refreshCoverage: Record<string, { total: number; fetched: number; pages: number; pageSize: number; complete: boolean }> = {};
   private refreshClient: {
     apiKey: string | null;
@@ -72,6 +81,12 @@ export class HolodexMusicService {
     this.apiKeyOverride = options.apiKey?.trim() || null;
     this.concurrency = requestConcurrency(options.requestConcurrency);
     this.responseCache = options.responseCache ?? null;
+    this.youtubeApiKey = options.youtubeApiKey?.trim() || null;
+    this.customAvailabilityVerifier = Boolean(options.availabilityVerifier);
+    this.availabilityVerifier = options.availabilityVerifier ?? ((youtubeVideoIds) => new YouTubeVideoStatsService(database, {
+      apiKey: this.youtubeApiKey, fetcher: this.fetcher, requestConcurrency: this.concurrency,
+      log: (message) => this.reportProgress(message)
+    }).checkAvailability({ youtubeVideoIds }));
   }
 
   getRefreshCoverage() {
@@ -82,6 +97,129 @@ export class HolodexMusicService {
   getRefreshRequestMetrics() {
     const client = this.refreshClient?.client;
     return { ...(client?.getRequestMetrics() ?? { requests: 0, retries: 0 }), quotaWaitMs: client?.getQuotaWaitMs() ?? 0 };
+  }
+
+  getVerifiedAvailability(): YouTubeVideoAvailabilityCheckResult | null {
+    return this.verifiedAvailability;
+  }
+
+  private assertAvailabilityConfigured(): void {
+    if (!this.customAvailabilityVerifier && !this.youtubeApiKey && !this.database.getSettings()["sources.youtubeApiKey"]?.trim()) {
+      throw new Error("A YouTube Data API key is required to verify song availability before importing. Configure it in Settings or the release secrets folder.");
+    }
+  }
+
+  private async importVerifiedCatalog(
+    rows: HolodexCatalogRow[],
+    recordsById: Record<string, HolodexVideoRecord>,
+    details: Record<string, HolodexVideoDetail>,
+    source: "live" | "artifact",
+    options: { replaceExisting?: boolean } = {},
+    previousRemovals: HolodexArtifactBundle["duplicateRemovals"] = []
+  ): Promise<HololiveMusicImportResult> {
+    // Stored representatives participate in repair too, including ones absent from this Holodex page.
+    const existing = rows.length ? this.database.select<{ youtube_video_id: string }>(
+      `SELECT v.youtube_video_id FROM hololive_music_videos v
+       WHERE COALESCE(v.source_kind, 'official') != 'user'
+         AND NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)
+         AND (COALESCE(v.official_catalog_active, 1) = 1 OR EXISTS (
+           SELECT 1 FROM settings s WHERE s.key = 'internal.musicAvailabilityDeferred.' || v.youtube_video_id
+         ))`
+    ) : [];
+    const ids = [...new Set([...rows.map((row) => row.youtubeVideoId), ...existing.map((row) => row.youtube_video_id)])];
+    if (ids.length > 0) this.assertAvailabilityConfigured();
+    this.reportProgress(`Verifying ${ids.length} YouTube video(s) before choosing song representatives`);
+    const verification = ids.length ? await this.availabilityVerifier(ids) : {
+      checkedAt: new Date().toISOString(), requestedVideos: 0, availableVideoIds: [], deferredVideos: [], unavailableVideos: [], stats: []
+    };
+    const availableIds = new Set(verification.availableVideoIds);
+    const statsById = new Map(verification.stats.map((stat) => [stat.youtubeVideoId, stat]));
+    const deferred = [...verification.deferredVideos, ...verification.unavailableVideos];
+    for (const stat of verification.stats) {
+      const reason = this.database.getHololiveMusicSourceChannelMismatchReason(stat);
+      if (reason && availableIds.has(stat.youtubeVideoId)) {
+        availableIds.delete(stat.youtubeVideoId);
+        deferred.push({ youtubeVideoId: stat.youtubeVideoId, reason });
+      }
+    }
+    // Holodex can associate a Topic upload with an artist channel. Check its actual uploader too.
+    for (const row of rows) {
+      const detail = details[row.youtubeVideoId];
+      const actual = statsById.get(row.youtubeVideoId);
+      if (availableIds.has(row.youtubeVideoId) && detail?.providedToYoutube && detail.originalChannelId &&
+        actual?.youtubeChannelId && detail.originalChannelId !== actual.youtubeChannelId) {
+        availableIds.delete(row.youtubeVideoId);
+        deferred.push({ youtubeVideoId: row.youtubeVideoId, reason: "YouTube's actual uploader does not match the imported Topic source." });
+      }
+    }
+    const verifiedDetails = { ...details };
+    const verifiedRows = rows.filter((row) => availableIds.has(row.youtubeVideoId)).map((row) => {
+      const actual = statsById.get(row.youtubeVideoId);
+      if (verifiedDetails[row.youtubeVideoId] && actual) {
+        verifiedDetails[row.youtubeVideoId] = {
+          ...verifiedDetails[row.youtubeVideoId], duration: actual.durationSeconds ?? verifiedDetails[row.youtubeVideoId].duration
+        };
+      }
+      return { ...row, status: actual?.status ?? row.status, title: actual?.title || row.title };
+    });
+    // Complete replacement still keeps a freshly verified existing mirror candidate,
+    // so a temporarily incomplete Holodex result cannot downgrade a good MV to audio.
+    if (options.replaceExisting && verifiedRows.length) {
+      const incoming = new Set(verifiedRows.map((row) => row.youtubeVideoId));
+      const stored = this.database.select<{
+        youtube_video_id: string; title: string; song_name: string | null; topic_id: HololiveMusicTopic;
+        channel_id: string; channel_name: string; published_at: string; provided_to_youtube: number; duration_seconds: number | null;
+      }>(`SELECT youtube_video_id, title, song_name, topic_id, channel_id, channel_name, published_at, provided_to_youtube, duration_seconds
+          FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user' AND COALESCE(official_catalog_active, 1) = 1`);
+      const candidate = (row: HolodexCatalogRow) => ({
+        youtubeVideoId: row.youtubeVideoId, title: row.title, topicId: row.topicId, channelId: row.channelId,
+        songName: verifiedDetails[row.youtubeVideoId]?.songNames[0],
+        providedToYoutube: verifiedDetails[row.youtubeVideoId]?.providedToYoutube,
+        durationSeconds: verifiedDetails[row.youtubeVideoId]?.duration
+      });
+      for (const row of stored) {
+        if (incoming.has(row.youtube_video_id) || !availableIds.has(row.youtube_video_id) || typeof row.title !== "string") continue;
+        const actual = statsById.get(row.youtube_video_id)!;
+        const descriptor = {
+          youtubeVideoId: row.youtube_video_id, title: actual.title || row.title, songName: row.song_name,
+          topicId: row.topic_id, channelId: row.channel_id, providedToYoutube: Boolean(row.provided_to_youtube),
+          durationSeconds: actual.durationSeconds ?? row.duration_seconds
+        };
+        if (!verifiedRows.some((peer) => isHololiveOfficialAudioMirror(candidate(peer), descriptor) || isHololiveOfficialAudioMirror(descriptor, candidate(peer)))) continue;
+        verifiedDetails[row.youtube_video_id] = normalizeVideoDetail(row.youtube_video_id, {
+          ...this.database.listHolodexDetailCache([row.youtube_video_id])[row.youtube_video_id],
+          channelId: row.channel_id, duration: descriptor.durationSeconds, songNames: row.song_name ? [row.song_name] : [],
+          providedToYoutube: Boolean(row.provided_to_youtube)
+        });
+        verifiedRows.push({
+          youtubeVideoId: row.youtube_video_id, youtubeUrl: `https://www.youtube.com/watch?v=${row.youtube_video_id}`,
+          title: descriptor.title, status: actual.status, topicId: row.topic_id, channelId: row.channel_id,
+          channelName: row.channel_name, publishedAt: row.published_at
+        });
+      }
+    }
+    // Validate every candidate first: an embargoed MV must never displace its playable audio.
+    const verifiedRecords = Object.fromEntries(Object.entries(recordsById).map(([id, record]) => {
+      const actual = statsById.get(id);
+      return [id, actual ? { ...record, duration: actual.durationSeconds ?? record.duration, status: actual.status } : record];
+    }));
+    const cleanup = cleanupCatalogRows(verifiedRows, verifiedRecords, verifiedDetails);
+    const result = this.database.importHolodexMusicArtifacts({
+      rows: cleanup.rows, detailCache: verifiedDetails,
+      duplicateRemovals: [
+        ...previousRemovals.filter((removal) => removal.keptYoutubeVideoId && availableIds.has(removal.keptYoutubeVideoId)),
+        ...cleanup.duplicateRemovals
+      ]
+    }, source, { ...options, deferredVideos: deferred, verifiedVideoIds: [...availableIds] });
+    const storedIds = new Set(this.database.select<{ youtube_video_id: string }>(
+      "SELECT youtube_video_id FROM hololive_music_videos"
+    ).map((row) => row.youtube_video_id));
+    const stats = verification.stats.filter((stat) => availableIds.has(stat.youtubeVideoId) && storedIds.has(stat.youtubeVideoId));
+    this.database.upsertHololiveMusicVideoStats(stats);
+    for (const stat of stats) this.database.restoreHololiveMusicVideoAvailability(stat.youtubeVideoId);
+    this.verifiedAvailability = { ...verification, availableVideoIds: [...availableIds], stats, deferredVideos: deferred, unavailableVideos: [] };
+    this.reportProgress(`Availability verified: ${stats.length} retained song(s); ${deferred.length} unavailable or not ready video(s) deferred`);
+    return result;
   }
 
   async importArtifacts(directoryPath: string): Promise<HololiveMusicImportResult> {
@@ -104,7 +242,7 @@ export class HolodexMusicService {
       duplicateReportCsvText
     });
 
-    return this.database.importHolodexMusicArtifacts(bundle);
+    return this.importVerifiedCatalog(bundle.rows, {}, bundle.detailCache, "artifact", {}, bundle.duplicateRemovals);
   }
 
   async refreshChannels(input: {
@@ -164,6 +302,7 @@ export class HolodexMusicService {
     includeCollabs?: boolean | null;
     collabPageLimit?: number | null;
   }): Promise<HololiveMusicImportResult> {
+    this.assertAvailabilityConfigured();
     const idol = this.database.listHololiveIdols().find((candidate) => candidate.id === input.idolId);
     const channelId = idol?.youtubeChannelId?.trim() ?? "";
     if (!idol || idol.source !== "custom" || !channelId) {
@@ -212,20 +351,7 @@ export class HolodexMusicService {
         detailCache[videoId].collabChannelIds = [...new Set([...detailCache[videoId].collabChannelIds, ...channelIds])];
       }
     }
-    const cleanup = cleanupCatalogRows(
-      rows,
-      Object.fromEntries(records.map((record) => [record.youtubeVideoId, record])),
-      detailCache
-    );
-
-    return this.database.importHolodexMusicArtifacts(
-      {
-        rows: cleanup.rows,
-        detailCache,
-        duplicateRemovals: cleanup.duplicateRemovals
-      },
-      "live"
-    );
+    return this.importVerifiedCatalog(rows, Object.fromEntries(records.map((record) => [record.youtubeVideoId, record])), detailCache, "live");
   }
 
   async refreshLive(input: {
@@ -243,7 +369,9 @@ export class HolodexMusicService {
   } = {}): Promise<HololiveMusicImportResult> {
     const startedAt = performance.now();
     this.refreshCoverage = {};
+    this.verifiedAvailability = null;
     try {
+      this.assertAvailabilityConfigured();
       const client = this.createHolodexClient(input);
       if (input.includeChannels !== false) {
         this.reportProgress("Refreshing Holodex channel metadata");
@@ -362,25 +490,16 @@ export class HolodexMusicService {
         }
       }
       const fetchedAt = performance.now();
-      const cleanup = cleanupCatalogRows(
-        rowsForCleanup,
-        Object.fromEntries(records.map((record) => [record.youtubeVideoId, record])),
-        detailCache
-      );
-      const bundle: HolodexArtifactBundle = {
-        rows: cleanup.rows,
-        detailCache,
-        duplicateRemovals: cleanup.duplicateRemovals
-      };
-
-      this.reportProgress(`Importing ${cleanup.rows.length} cleaned Holodex music row(s)`);
       const metrics = client.getRequestMetrics();
       this.reportProgress(`Holodex requests: ${metrics.requests}, retries: ${metrics.retries}, concurrency: ${this.concurrency}`);
       this.reportProgress(`Holodex quota wait time: ${(client.getQuotaWaitMs() / 1000).toFixed(1)}s`);
       const importingAt = performance.now();
       this.reportProgress(`Holodex fetching: ${((fetchedAt - startedAt) / 1000).toFixed(1)}s; cleanup: ${((importingAt - fetchedAt) / 1000).toFixed(1)}s`);
-      const result = this.database.importHolodexMusicArtifacts(bundle, "live", { replaceExisting: Boolean(input.replaceExisting) });
-      this.reportProgress(`Holodex database import: ${((performance.now() - importingAt) / 1000).toFixed(1)}s`);
+      const result = await this.importVerifiedCatalog(
+        rowsForCleanup, Object.fromEntries(records.map((record) => [record.youtubeVideoId, record])), detailCache,
+        "live", { replaceExisting: Boolean(input.replaceExisting) }
+      );
+      this.reportProgress(`YouTube verification and Holodex database import: ${((performance.now() - importingAt) / 1000).toFixed(1)}s`);
       return result;
     } catch (error) {
       if (error instanceof HolodexCatalogCoverageError) {

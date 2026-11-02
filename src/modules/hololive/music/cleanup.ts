@@ -368,9 +368,11 @@ export function getRowCleanupReason(
   recordsById: Record<string, HolodexVideoRecord>,
   detailsById: Record<string, HolodexVideoDetail>
 ): string {
-  if (row.status.trim().toLowerCase() === "missing") {
+  const status = row.status.trim().toLowerCase();
+  if (status === "missing") {
     return "missing_status";
   }
+  if (!["past", "live", "upcoming"].includes(status)) return "unverified_status";
 
   const record = recordsById[row.youtubeVideoId];
   const detail = detailsById[row.youtubeVideoId];
@@ -476,6 +478,118 @@ export function hasCompatibleHolodexTopicDuplicateDuration(leftDuration: number,
     longerDuration > 0 &&
     difference / longerDuration <= HOLODEX_TOPIC_DUPLICATE_DURATION_MAX_RATIO
   );
+}
+
+export interface HololiveOfficialAudioMirrorCandidate {
+  youtubeVideoId: string;
+  title: string;
+  songName?: string | null;
+  topicId: string;
+  channelId?: string | null;
+  providedToYoutube?: boolean | number | null;
+  durationSeconds?: number | null;
+  participantIds?: readonly string[];
+}
+
+const DISTINCT_DIRECT_RECORDING_PATTERN =
+  /\b(?:live|concert|acoustic|piano|remix|repaint|tour|solo|instrumental|karaoke|extended|rehearsal|performance|dance|remaster(?:ed)?|re[- ]?record(?:ed|ing)?|alternate\s+take)\b|\b\d{4}\s+ver(?:sion)?\b|ライブ|アコースティック|ピアノ|オフボーカル|歌い分け/iu;
+const DIRECT_RECORDING_LANGUAGE_VERSION_PATTERN = /\b(english|japanese|indonesian|korean|chinese|spanish|en|jp|id|kr|cn|es)\s+ver(?:sion)?\b/giu;
+
+function directRecordingLanguageSignature(value: string): string {
+  const languages = new Set<string>();
+  const aliases: Record<string, string> = { en: "english", jp: "japanese", id: "indonesian", kr: "korean", cn: "chinese", es: "spanish" };
+  for (const match of value.matchAll(DIRECT_RECORDING_LANGUAGE_VERSION_PATTERN)) {
+    const language = match[1].toLowerCase();
+    languages.add(aliases[language] ?? language);
+  }
+  return [...languages].sort().join("+");
+}
+
+function hasDistinctDirectRecordingSignal(value: string): boolean {
+  if (DISTINCT_DIRECT_RECORDING_PATTERN.test(value)) return true;
+  const withoutKnownVersions = value
+    .replace(DIRECT_RECORDING_LANGUAGE_VERSION_PATTERN, "")
+    .replace(/\bfull\s+ver(?:sion)?\b/giu, "");
+  return /\b(?:ver(?:sion)?|edit|cut|mix|take)\b/iu.test(withoutKnownVersions);
+}
+
+/** Match an audio mirror to its MV without merging unrelated performances of the same song. */
+export function isHololiveOfficialAudioMirror(
+  audio: HololiveOfficialAudioMirrorCandidate,
+  musicVideo: HololiveOfficialAudioMirrorCandidate
+): boolean {
+  if (
+    audio.youtubeVideoId === musicVideo.youtubeVideoId ||
+    audio.providedToYoutube || musicVideo.providedToYoutube ||
+    !audio.topicId.trim() || audio.topicId !== musicVideo.topicId ||
+    !audio.channelId?.trim() || audio.channelId.trim() !== musicVideo.channelId?.trim() ||
+    !audio.songName?.trim() || !musicVideo.songName?.trim()
+  ) return false;
+
+  if (!/\bofficial[\s_-]+audio\b/iu.test(audio.title)) return false;
+  if (!/\b(?:official[\s_-]+(?:music[\s_-]+)?(?:video|mv)|music[\s_-]+video|mv)\b/iu.test(musicVideo.title)) return false;
+
+  const audioText = normalizeText(`${audio.title} ${audio.songName}`);
+  const musicVideoText = normalizeText(`${musicVideo.title} ${musicVideo.songName}`);
+  if (hasDistinctDirectRecordingSignal(audioText) || hasDistinctDirectRecordingSignal(musicVideoText)) return false;
+  if (directRecordingLanguageSignature(audioText) !== directRecordingLanguageSignature(musicVideoText)) return false;
+  if (buildHololiveMusicSongKey({ songName: audio.songName }) !== buildHololiveMusicSongKey({ songName: musicVideo.songName })) return false;
+
+  const participantKey = (ids: readonly string[] | undefined) => [...new Set((ids ?? []).map(id => id.trim()).filter(Boolean))].sort().join("+");
+  if (participantKey(audio.participantIds) !== participantKey(musicVideo.participantIds)) return false;
+
+  const audioDuration = audio.durationSeconds ?? 0;
+  const musicVideoDuration = musicVideo.durationSeconds ?? 0;
+  return Number.isFinite(audioDuration) && Number.isFinite(musicVideoDuration) &&
+    audioDuration > 0 && musicVideoDuration > 0 &&
+    hasCompatibleHolodexTopicDuplicateDuration(audioDuration, musicVideoDuration);
+}
+
+function findOfficialAudioMirrorRemovals(
+  rows: HolodexCatalogRow[],
+  detailsById: Record<string, HolodexVideoDetail>,
+  recordsById: Record<string, HolodexVideoRecord>
+): HolodexDuplicateRemoval[] {
+  const candidates = rows.map((row) => {
+    const detail = detailsById[row.youtubeVideoId];
+    const candidate: HololiveOfficialAudioMirrorCandidate = {
+      youtubeVideoId: row.youtubeVideoId,
+      title: row.title,
+      songName: detail?.songNames[0],
+      topicId: row.topicId,
+      channelId: detail?.channelId || recordsById[row.youtubeVideoId]?.channelId || row.channelId,
+      providedToYoutube: detail?.providedToYoutube,
+      durationSeconds: parseDuration(recordsById[row.youtubeVideoId]?.duration ?? detail?.duration),
+      participantIds: [...(detail?.mentions ?? []).map(mention => mention.channelId), ...(detail?.collabChannelIds ?? [])]
+    };
+    return { row, candidate };
+  });
+  const candidatesByKey = new Map<string, typeof candidates>();
+  for (const entry of candidates) {
+    const { candidate } = entry;
+    if (!candidate.channelId?.trim() || !candidate.songName?.trim() || candidate.providedToYoutube) continue;
+    const key = JSON.stringify([candidate.topicId, candidate.channelId.trim(), buildHololiveMusicSongKey({ songName: candidate.songName })]);
+    candidatesByKey.set(key, [...(candidatesByKey.get(key) ?? []), entry]);
+  }
+  const removals: HolodexDuplicateRemoval[] = [];
+  for (const group of candidatesByKey.values()) {
+    for (const audio of group) {
+      const matchingVideos = group.filter(video => isHololiveOfficialAudioMirror(audio.candidate, video.candidate));
+      if (matchingVideos.length === 0) continue;
+      const keptRow = choosePreferredNonTopicRow(matchingVideos.map(video => video.row), detailsById, recordsById);
+      removals.push({
+        removedYoutubeVideoId: audio.row.youtubeVideoId,
+        removedTitle: audio.row.title,
+        keptYoutubeVideoId: keptRow.youtubeVideoId,
+        keptTitle: keptRow.title,
+        reason: "official_audio_duplicate_of_mv",
+        songName: getPrimarySongName(keptRow, detailsById[keptRow.youtubeVideoId]),
+        removedPublishedAt: audio.row.publishedAt,
+        keptPublishedAt: keptRow.publishedAt
+      });
+    }
+  }
+  return removals;
 }
 
 function findKnownDuplicateRemovals(
@@ -685,8 +799,9 @@ export function cleanupCatalogRows(
     ...buildCrossOwnerTopicDuplicateGroups(baseKeptRows, detailsById, recordsById)
   ];
   const automaticResult = findDuplicateRemovals(candidateGroups, detailsById, recordsById);
+  const officialAudioRemovals = findOfficialAudioMirrorRemovals(baseKeptRows, detailsById, recordsById);
   const knownRemovals = findKnownDuplicateRemovals(baseKeptRows, detailsById);
-  const automaticRemovedIds = new Set(automaticResult.removals.map((removal) => removal.removedYoutubeVideoId));
+  const automaticRemovedIds = new Set([...automaticResult.removals, ...officialAudioRemovals].map((removal) => removal.removedYoutubeVideoId));
   const additionalKnownClusters = new Set(
     knownRemovals
       .filter((removal) => !automaticRemovedIds.has(removal.removedYoutubeVideoId))
@@ -694,7 +809,7 @@ export function cleanupCatalogRows(
   ).size;
   const removals = [
     ...new Map(
-      [...automaticResult.removals, ...knownRemovals].map((removal) => [removal.removedYoutubeVideoId, removal])
+      [...automaticResult.removals, ...officialAudioRemovals, ...knownRemovals].map((removal) => [removal.removedYoutubeVideoId, removal])
     ).values()
   ];
   const removedIds = new Set(removals.map((removal) => removal.removedYoutubeVideoId));
@@ -703,7 +818,7 @@ export function cleanupCatalogRows(
     rows: baseKeptRows.filter((row) => !removedIds.has(row.youtubeVideoId)),
     removedByBaseRules,
     removedDuplicateRows: removedIds.size,
-    duplicateClusterCount: automaticResult.duplicateClusterCount + additionalKnownClusters,
+    duplicateClusterCount: automaticResult.duplicateClusterCount + new Set(officialAudioRemovals.map(removal => removal.keptYoutubeVideoId)).size + additionalKnownClusters,
     duplicateRemovals: removals
   };
 }

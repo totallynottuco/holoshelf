@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { DatabaseService } from "./database";
 import { YouTubeVideoStatsService } from "./youtubeVideoStatsService";
 
+function readyVideo(id: string, viewCount: unknown = "10") {
+  return {
+    id, snippet: { title: "Verified Song", channelId: "official-channel", channelTitle: "Official Artist" },
+    contentDetails: { duration: "PT3M" }, statistics: { viewCount },
+    status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
+  };
+}
+
 describe("YouTube statistics refresh batching", () => {
   it("bounds parallel requests, batches writes, and preserves HTTP failures", async () => {
     const ids = Array.from({ length: 251 }, (_, i) => String(i));
@@ -12,7 +20,8 @@ describe("YouTube statistics refresh batching", () => {
       getHololiveMusicSourceChannelMismatchReason: ({ youtubeVideoId }: { youtubeVideoId: string }) =>
         youtubeVideoId === "200" ? "wrong uploader" : null,
       upsertHololiveMusicVideoStats: upsert,
-      markHololiveMusicVideoUnavailable: unavailable
+      deferHololiveMusicVideo: unavailable,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false)
     } as unknown as DatabaseService;
     let active = 0;
     let maxActive = 0;
@@ -27,8 +36,8 @@ describe("YouTube statistics refresh batching", () => {
           return new Response("unavailable", { status: 503 });
         }
         return Response.json({ items: requested.map((id) => ({
-          id, statistics: { viewCount: "100" },
-          status: { privacyStatus: id === "100" ? "private" : "public" }
+          ...readyVideo(id, "100"),
+          status: { uploadStatus: "processed", privacyStatus: id === "100" ? "private" : "public", embeddable: true }
         })) });
       }) as typeof fetch
     });
@@ -45,7 +54,8 @@ describe("YouTube statistics refresh batching", () => {
     const database = {
       listHololiveMusicVideoIdsForStats: () => ["keep-me"],
       upsertHololiveMusicVideoStats: vi.fn(),
-      markHololiveMusicVideoUnavailable: unavailable
+      deferHololiveMusicVideo: unavailable,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false)
     } as unknown as DatabaseService;
     const service = new YouTubeVideoStatsService(database, {
       apiKey: "test", fetcher: (async () => Response.json({ error: "bad response" })) as typeof fetch
@@ -58,10 +68,11 @@ describe("YouTube statistics refresh batching", () => {
     const database = {
       listHololiveMusicVideoIdsForStats: () => ["song"],
       getHololiveMusicSourceChannelMismatchReason: () => null,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false),
       upsertHololiveMusicVideoStats: () => { throw new Error("disk full"); }
     } as unknown as DatabaseService;
     const service = new YouTubeVideoStatsService(database, {
-      apiKey: "test", fetcher: (async () => Response.json({ items: [{ id: "song", statistics: { viewCount: "1" } }] })) as typeof fetch
+      apiKey: "test", fetcher: (async () => Response.json({ items: [readyVideo("song", "1")] })) as typeof fetch
     });
     await expect(service.refreshViewCounts()).rejects.toThrow("disk full");
   });
@@ -73,11 +84,12 @@ describe("YouTube statistics refresh batching", () => {
       listHololiveMusicVideoIdsForStats: () => ["good", "invalid"],
       getHololiveMusicSourceChannelMismatchReason: () => null,
       upsertHololiveMusicVideoStats: upsert,
-      markHololiveMusicVideoUnavailable: unavailable
+      deferHololiveMusicVideo: unavailable,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false)
     } as unknown as DatabaseService;
     const service = new YouTubeVideoStatsService(database, {
       apiKey: "test", fetcher: (async () => Response.json({ items: [
-        { id: "good", statistics: { viewCount: "10" } }, { id: "invalid", statistics: { viewCount } }
+        readyVideo("good", "10"), readyVideo("invalid", viewCount)
       ] })) as typeof fetch
     });
     expect(await service.refreshViewCounts()).toMatchObject({ updatedVideos: 0, failedBatches: 1, unavailableVideos: 0 });
@@ -90,10 +102,11 @@ describe("YouTube statistics refresh batching", () => {
     const database = {
       listHololiveMusicVideoIdsForStats: () => ["song"],
       upsertHololiveMusicVideoStats: vi.fn(),
-      markHololiveMusicVideoUnavailable: unavailable
+      deferHololiveMusicVideo: unavailable,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false)
     } as unknown as DatabaseService;
     const service = new YouTubeVideoStatsService(database, {
-      apiKey: "test", fetcher: (async () => Response.json({ items: returned.map(id => ({ id, statistics: { viewCount: "10" } })) })) as typeof fetch
+      apiKey: "test", fetcher: (async () => Response.json({ items: returned.map(id => readyVideo(id)) })) as typeof fetch
     });
     expect(await service.refreshViewCounts()).toMatchObject({ updatedVideos: 0, failedBatches: 1, unavailableVideos: 0 });
     expect(unavailable).not.toHaveBeenCalled();
@@ -104,10 +117,11 @@ describe("YouTube statistics refresh batching", () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response("busy", { status: 429, headers: { 'Retry-After': '0' } }))
       .mockResolvedValueOnce(new Response("busy", { status: 503, headers: { 'Retry-After': '0' } }))
-      .mockResolvedValueOnce(Response.json({ items: [{ id: "song", statistics: { viewCount: "0" } }] }));
+      .mockResolvedValueOnce(Response.json({ items: [readyVideo("song", "0")] }));
     const database = {
       listHololiveMusicVideoIdsForStats: () => ["song"],
       getHololiveMusicSourceChannelMismatchReason: () => null,
+      restoreHololiveMusicVideoAvailability: vi.fn(() => false),
       upsertHololiveMusicVideoStats: upsert
     } as unknown as DatabaseService;
     const result = await new YouTubeVideoStatsService(database, { apiKey: "test", fetcher }).refreshViewCounts();

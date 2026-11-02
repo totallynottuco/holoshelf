@@ -9,8 +9,14 @@ import {gzipSync} from "node:zlib";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const {CATALOG_REPOSITORY, CATALOG_MANIFEST_ASSET, CATALOG_MIN_APP_VERSION, appVersionAtLeast, parseCatalogUpdateManifest} = require("../dist-electron/src/shared/catalogUpdate.js");
-const {catalogHash, validateCatalogDatabase} = require("../dist-electron/electron/services/catalogUpdatePackage.js");
+let runtime;
+function catalogRuntime() {
+  runtime ??= {
+    ...require("../dist-electron/src/shared/catalogUpdate.js"),
+    ...require("../dist-electron/electron/services/catalogUpdatePackage.js")
+  };
+  return runtime;
+}
 
 function gh(args, capture = true) {
   // The Windows npm shim is a command file. Locate the installed CLI binary
@@ -20,6 +26,7 @@ function gh(args, capture = true) {
 }
 
 function currentRelease(runGh = gh) {
+  const {CATALOG_REPOSITORY, CATALOG_MIN_APP_VERSION, appVersionAtLeast} = catalogRuntime();
   const release = JSON.parse(runGh(["api", `repos/${CATALOG_REPOSITORY}/releases/latest`]));
   if (release.draft || release.prerelease || release.immutable) throw new Error("Silent catalog publishing needs an existing mutable stable app release");
   if (!appVersionAtLeast(release.tag_name, CATALOG_MIN_APP_VERSION)) {
@@ -33,7 +40,18 @@ function currentRelease(runGh = gh) {
 }
 
 function releaseAssets(id, runGh = gh) {
+  const {CATALOG_REPOSITORY} = catalogRuntime();
   return JSON.parse(runGh(["api", `repos/${CATALOG_REPOSITORY}/releases/${id}/assets?per_page=100`, "--paginate", "--slurp"])).flat();
+}
+
+export function assertVideoAvailabilityVerification(summary, seed) {
+  const receipt = summary.videoAvailabilityVerification;
+  if (receipt?.schema !== 1 || typeof receipt.checkedAt !== "string" || !Number.isFinite(Date.parse(receipt.checkedAt)) ||
+      receipt.checkedAt !== summary.videoStatsRefresh?.fetchedAt ||
+      !Number.isSafeInteger(receipt.retainedVideos) || receipt.retainedVideos < 0 || receipt.retainedVideos !== seed.musicRows ||
+      !Number.isSafeInteger(receipt.checkedVideos) || receipt.checkedVideos < receipt.retainedVideos) {
+    throw new Error("Refresh the catalog with YouTube availability verification before publishing");
+  }
 }
 
 export async function prepareCatalogUpdate({seedDirectory = path.join(root, "resources/seed"), outputDirectory = path.join(root, "data/catalog-publish"), tag = "preview"} = {}) {
@@ -43,10 +61,12 @@ export async function prepareCatalogUpdate({seedDirectory = path.join(root, "res
       !summary.holodexCoverage?.complete || !summary.refreshHolodex || !summary.refreshChannels || !summary.refreshStats || !summary.includeCollabs ||
       !summary.statsRefreshComplete || summary.videoStatsRefresh?.failedBatches !== 0 ||
       summary.statsCoverage?.catalogVideos !== seed.musicRows) throw new Error("Refresh the complete Holodex catalog and YouTube stats before publishing");
+  assertVideoAvailabilityVerification(summary, seed);
   for (const topic of ["Music_Cover", "Original_Song"]) {
     const coverage = summary.holodexCoverage.topics?.[topic];
     if (!coverage?.complete || coverage.fetched !== coverage.total) throw new Error(`Incomplete ${topic} coverage`);
   }
+  const {CATALOG_REPOSITORY, CATALOG_MIN_APP_VERSION, parseCatalogUpdateManifest, catalogHash, validateCatalogDatabase, CATALOG_MANIFEST_ASSET} = catalogRuntime();
   const bytes = fs.readFileSync(path.join(seedDirectory, seed.seedDatabase));
   const payload = gzipSync(bytes, {level: 9});
   const assetName = `holoshelf-catalog-${seed.version}-${catalogHash(payload).slice(0, 16)}.sqlite.gz`;
@@ -71,6 +91,7 @@ export async function publishCatalogUpdate({runGh = gh, argv = process.argv.slic
   }
   for (const arg of args) if (!["--yes", "--check", "--prepare-only"].includes(arg)) throw new Error(`Unknown option: ${arg}`);
   if (!args.has("--yes") && !args.has("--check") && !args.has("--prepare-only")) throw new Error("Choose --prepare-only or --yes to publish");
+  const {CATALOG_REPOSITORY, CATALOG_MANIFEST_ASSET, parseCatalogUpdateManifest, catalogHash} = catalogRuntime();
   const release = args.has("--prepare-only") ? null : currentRelease(runGh);
   if (args.has("--check")) { console.log(`Silent catalog publishing is available on ${release.html_url}`); return; }
   const prepared = await prepare({tag: release?.tag_name ?? "preview"});

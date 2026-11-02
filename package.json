@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.91",
+  "version": "1.1.92",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {

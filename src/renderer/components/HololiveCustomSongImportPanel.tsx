@@ -113,11 +113,14 @@ export function HololiveCustomSongImportPanel({
     durationLabel,
     viewCount !== null && Number.isFinite(viewCount) ? `${viewFormatter.format(viewCount)} views` : null
   ].filter((item): item is string => Boolean(item));
-  const statusLabel = editing ? "Editing" : preview?.apiKeyMissing ? "Manual" : preview ? "Loaded" : "YouTube";
+  const statusLabel = preview?.apiKeyMissing ? "Key required" : editing ? "Editing" : preview ? "Loaded" : "YouTube";
   const ownerIds = useMemo(() => uniqueIds(ownerIdolIds), [ownerIdolIds]);
   const saveBlockReason = (() => {
     if (!youtubeUrl.trim()) {
       return "Paste a YouTube link first";
+    }
+    if (preview?.apiKeyMissing) {
+      return "Add a YouTube API key in Settings to verify this video";
     }
     if (!title.trim()) {
       return "Add a title or load video details";
@@ -193,8 +196,9 @@ export function HololiveCustomSongImportPanel({
       setViewCount((current) => current ?? nextPreview.viewCount ?? null);
       setFetchedAt((current) => current || nextPreview.fetchedAt || "");
       showToast({
-        message: nextPreview.usedApi ? "Video loaded" : "Manual import ready",
-        tone: "success"
+        message: nextPreview.apiKeyMissing ? "YouTube API key required" : nextPreview.usedApi ? "Video loaded" : "Video details unavailable",
+        detail: nextPreview.apiKeyMissing ? "Add your key in Settings, then load the video again." : undefined,
+        tone: nextPreview.usedApi ? "success" : "error"
       });
     } catch (error) {
       showToast({
@@ -327,6 +331,11 @@ export function HololiveCustomSongImportPanel({
           {metadataItems.length > 0 ? (
             <div className="hololive-custom-song-meta" aria-label="Loaded video details">
               {metadataItems.map((item) => <span key={item}>{item}</span>)}
+            </div>
+          ) : null}
+          {preview?.apiKeyMissing ? (
+            <div className="hololive-custom-song-meta" role="status">
+              <span>A YouTube API key is required to verify this video. Add it in Settings, then load the video again.</span>
             </div>
           ) : null}
         </div>

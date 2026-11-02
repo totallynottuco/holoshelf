@@ -150,6 +150,15 @@ if (!process.env.HOLOSHELF_SEED_GENERATED_AT?.trim()) {
 
 database.run("PRAGMA foreign_keys = OFF;");
 
+// Automatic availability deferrals are local retry records, never shipped catalog entries.
+if (columnExists("hololive_music_videos", "official_catalog_active")) {
+  database.run("DELETE FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 0;");
+  for (const table of ["hololive_music_detail_cache", "hololive_music_video_stats"]) {
+    runIfTable(table, `DELETE FROM ${quoteIdentifier(table)} WHERE youtube_video_id NOT IN (SELECT youtube_video_id FROM hololive_music_videos);`);
+  }
+  runIfTable("hololive_music_duplicate_removals", "DELETE FROM hololive_music_duplicate_removals WHERE kept_youtube_video_id IS NOT NULL AND kept_youtube_video_id != '' AND kept_youtube_video_id NOT IN (SELECT youtube_video_id FROM hololive_music_videos);");
+}
+
 const customIdRows = columnExists("hololive_idols", "source")
   ? rows("SELECT id FROM hololive_idols WHERE source = 'custom'")
   : [];

@@ -611,7 +611,12 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         imageCacheRows: upsertRows(options.database, "hololive_image_cache", imageCacheRows, ["idol_id", "kind"])
       };
       options.database.repairHololiveMusicClassifications();
-      options.database.repairHololiveMusicDuplicateRows();
+      // Only replay new mirror mappings explicitly supplied by this trusted catalog.
+      // An older local report is not current availability evidence during ordinary startup.
+      const verifiedMirrorIds = new Set<string>(duplicateRows
+        .filter((row) => row.reason === "official_audio_duplicate_of_mv" && officialVideoIds.has(String(row.kept_youtube_video_id)))
+        .flatMap((row) => [String(row.removed_youtube_video_id), String(row.kept_youtube_video_id)]));
+      options.database.repairHololiveMusicDuplicateRows(null, verifiedMirrorIds);
       options.database.repairRejectedHololiveMusicRows();
 
       const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);

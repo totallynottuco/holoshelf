@@ -16,6 +16,19 @@ import type {
 } from "../../src/shared/contracts";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
 
+async function verifyFixtureVideoAvailability(youtubeVideoIds: string[]) {
+  const checkedAt = "2026-11-01T00:00:00.000Z";
+  return {
+    checkedAt, requestedVideos: youtubeVideoIds.length, availableVideoIds: youtubeVideoIds,
+    deferredVideos: [], unavailableVideos: [],
+    stats: youtubeVideoIds.map((youtubeVideoId) => ({
+      youtubeVideoId, viewCount: 0, fetchedAt: checkedAt,
+      youtubeChannelId: null, youtubeChannelName: null, durationSeconds: null, title: null,
+      status: "past" as const
+    }))
+  };
+}
+
 let initializedTestDatabaseBytes: Promise<Uint8Array> | null = null;
 
 function getInitializedTestDatabaseBytes(): Promise<Uint8Array> {
@@ -2916,7 +2929,7 @@ describe("DatabaseService", () => {
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as typeof fetch;
-    const service = new HolodexMusicService(database, fetcher);
+    const service = new HolodexMusicService(database, fetcher, null, { availabilityVerifier: verifyFixtureVideoAvailability });
     const preview = await service.resolveCustomTalent({
       channelInput:
         "https://holodex.net/search?q=type,value,text%0Atopic,Original_Song,Original_Song%0Achannel,UCdQYcUyffHZoz0KOwuiG0lQ,%E5%AE%99%E6%9C%88%E3%83%86%E3%82%A3%E3%83%A9&advanced=true"
@@ -2977,7 +2990,7 @@ describe("DatabaseService", () => {
 
       throw new Error(`Unexpected request: ${href}`);
     }) as typeof fetch;
-    const service = new HolodexMusicService(database, fetcher);
+    const service = new HolodexMusicService(database, fetcher, null, { availabilityVerifier: verifyFixtureVideoAvailability });
 
     const preview = await service.resolveCustomTalent({ channelInput: "@LeeandLie" });
 
@@ -3005,7 +3018,7 @@ describe("DatabaseService", () => {
         { status: 200, headers: { "Content-Type": "text/html" } }
       );
     }) as typeof fetch;
-    const service = new HolodexMusicService(database, fetcher);
+    const service = new HolodexMusicService(database, fetcher, null, { availabilityVerifier: verifyFixtureVideoAvailability });
 
     await expect(service.resolveCustomTalent({ channelInput: "@LeeandLie" })).rejects.toThrow(
       /resolved @LeeandLie to @LeeandLieVODS/
@@ -3459,7 +3472,7 @@ describe("DatabaseService", () => {
   it("imports Holodex final artifacts idempotently for the current idol roster", async () => {
     const artifactDir = createHolodexArtifactFixture();
     const database = await createTempDatabase();
-    const service = new HolodexMusicService(database);
+    const service = new HolodexMusicService(database, undefined, null, { availabilityVerifier: verifyFixtureVideoAvailability });
 
     const firstImport = await service.importArtifacts(artifactDir);
     const secondImport = await service.importArtifacts(artifactDir);
@@ -3483,7 +3496,7 @@ describe("DatabaseService", () => {
     expect(soraProfile.mediaGroups.find((group) => group.id === "original-songs")?.items.length).toBeGreaterThan(0);
   });
 
-  it("can replace existing Holodex music rows and stale cache data", async () => {
+  it("replaces the active catalog while preserving personally marked absent songs and their cache", async () => {
     const database = await createTempDatabase();
     const defaultBoard = database.getHololiveTierListData().activeBoard;
     const defaultTierId = defaultBoard.tiers[0].id;
@@ -3552,11 +3565,13 @@ describe("DatabaseService", () => {
     expect(marker).toMatchObject({ youtubeVideoId: "new-song", marker: "like" });
     expect(database.listHololiveMusicRows({ query: "Old Song" })).toHaveLength(0);
     expect(database.listHololiveMusicRows({ query: "New Song" })).toMatchObject([{ youtubeVideoId: "new-song", marker: "like" }]);
-    expect(database.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_detail_cache")).toEqual([
-      { youtube_video_id: "new-song" }
+    expect(database.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_detail_cache ORDER BY youtube_video_id")).toEqual([
+      { youtube_video_id: "new-song" },
+      { youtube_video_id: "old-song" }
     ]);
-    expect(database.select<{ title: string }>("SELECT title FROM catalog_items WHERE id = 'holodex:old-song'")).toHaveLength(0);
-    expect(database.select<{ count: number }>("SELECT COUNT(*) AS count FROM hololive_music_refresh_runs")[0].count).toBe(1);
+    expect(database.select<{ title: string }>("SELECT title FROM catalog_items WHERE id = 'holodex:old-song'")).toHaveLength(1);
+    expect(database.select("SELECT official_catalog_active FROM hololive_music_videos WHERE youtube_video_id = 'old-song'")).toEqual([{ official_catalog_active: 0 }]);
+    expect(database.select<{ count: number }>("SELECT COUNT(*) AS count FROM hololive_music_refresh_runs")[0].count).toBe(2);
     expect(
       database.select<{ marker_key: string; marker: string }>(
         "SELECT marker_key, marker FROM hololive_music_marker_keys ORDER BY marker_key"
@@ -4101,9 +4116,9 @@ describe("DatabaseService", () => {
     database.importHolodexMusicArtifacts(bundle, "live");
     const fetcher = (async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
-      expect(url.searchParams.get("part")).toBe("snippet,statistics,status");
+      expect(url.searchParams.get("part")).toBe("snippet,contentDetails,statistics,status,liveStreamingDetails");
       expect(url.searchParams.get("fields")).toBe(
-        "items(id,snippet(channelId,channelTitle),statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))"
+        "items(id,snippet(title,channelId,channelTitle,liveBroadcastContent),contentDetails(duration,regionRestriction),liveStreamingDetails(scheduledStartTime,actualStartTime,actualEndTime),statistics(viewCount),status(uploadStatus,privacyStatus,embeddable))"
       );
       expect(url.searchParams.get("id")).toBe("sora-stats-song");
       expect(url.searchParams.get("key")).toBe("test-youtube-key");
@@ -4112,7 +4127,8 @@ describe("DatabaseService", () => {
           items: [
             {
               id: "sora-stats-song",
-              snippet: { channelId: "UCp6993wxpyDPHUpavwDFqgg", channelTitle: "SoraCh." },
+              snippet: { title: "Sora Stats Song", channelId: "UCp6993wxpyDPHUpavwDFqgg", channelTitle: "SoraCh." },
+              contentDetails: { duration: "PT3M" },
               statistics: { viewCount: "1234567" },
               status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
             }
@@ -4167,7 +4183,8 @@ describe("DatabaseService", () => {
           items: [
             {
               id: "sora-stats-song",
-              snippet: { channelId: "UCp6993wxpyDPHUpavwDFqgg", channelTitle: "SoraCh." },
+              snippet: { title: "Sora Stats Song", channelId: "UCp6993wxpyDPHUpavwDFqgg", channelTitle: "SoraCh." },
+              contentDetails: { duration: "PT3M" },
               statistics: { viewCount: "7654321" },
               status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
             }
@@ -4225,7 +4242,8 @@ describe("DatabaseService", () => {
             items: [
               {
                 id: youtubeVideoId,
-                snippet: { channelId: "imposter-topic-channel", channelTitle: "Sora - Topic" },
+                snippet: { title: "Imposter Topic Song", channelId: "imposter-topic-channel", channelTitle: "Sora - Topic" },
+                contentDetails: { duration: "PT3M" },
                 statistics: { viewCount: "123" },
                 status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
               }
@@ -4244,7 +4262,7 @@ describe("DatabaseService", () => {
         "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
         [youtubeVideoId]
       )
-    ).toEqual([{ youtube_video_id: youtubeVideoId }]);
+    ).toEqual([]);
 
     seedHololiveBracketSong(database, {
       idolId: "tokino-sora",
@@ -4264,7 +4282,7 @@ describe("DatabaseService", () => {
     ).toBeNull();
   });
 
-  it("excludes YouTube-unavailable Hololive music rows during stats refresh and swaps to an alternate", async () => {
+  it("defers unverified Hololive music during stats refresh without deleting personal references", async () => {
     const database = await createTempDatabase();
     const canonicalPerformanceKey = "Original_Song:stats-unavailable-song:tokino-sora";
     seedHololiveBracketSong(database, {
@@ -4305,6 +4323,8 @@ describe("DatabaseService", () => {
           items: [
             {
               id: "tokino-sora-stats-unavailable-alt",
+              snippet: { title: "Available Alternate", channelId: "sora-channel" },
+              contentDetails: { duration: "PT3M" },
               statistics: { viewCount: "2222" },
               status: { uploadStatus: "processed", privacyStatus: "public", embeddable: true }
             }
@@ -4321,8 +4341,6 @@ describe("DatabaseService", () => {
     const result = await service.refreshViewCounts({
       youtubeVideoIds: ["tokino-sora-stats-unavailable-bad", "tokino-sora-stats-unavailable-alt"]
     });
-    const playerData = database.getHololiveMusicPlayerData();
-
     expect(result).toMatchObject({
       requestedVideos: 2,
       updatedVideos: 1,
@@ -4335,11 +4353,13 @@ describe("DatabaseService", () => {
       youtubeVideoId: "tokino-sora-stats-unavailable-alt",
       viewCount: 2222
     });
-    expect(playerData.playlists.find((playlist) => playlist.id === playlistId)?.items?.map((item) => item.youtubeVideoId)).toEqual([
-      "tokino-sora-stats-unavailable-alt"
+    expect(database.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([
+      { youtube_video_id: "tokino-sora-stats-unavailable-bad" }
     ]);
-    expect(playerData.queue.map((item) => item.youtubeVideoId)).toEqual(["tokino-sora-stats-unavailable-alt"]);
-    expect(playerData.currentItem?.youtubeVideoId).toBe("tokino-sora-stats-unavailable-alt");
+    expect(database.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([
+      { youtube_video_id: "tokino-sora-stats-unavailable-bad" }
+    ]);
+    expect(database.select("SELECT youtube_video_id FROM hololive_music_exclusions")).toEqual([]);
   });
 
   it("permanently excludes Hololive music rows without touching channel stats", async () => {
@@ -4784,7 +4804,7 @@ describe("DatabaseService", () => {
     expect(playerData.playlists.find((playlist) => playlist.systemId === "favorites")?.items).toHaveLength(1);
   });
 
-  it("marks permanently unavailable Hololive videos unplayable and swaps player references to an alternate", async () => {
+  it("retains automatically unavailable Hololive videos while swapping player references to an alternate", async () => {
     const database = await createTempDatabase();
     const canonicalPerformanceKey = "Original_Song:unavailable-song:tokino-sora";
     seedHololiveBracketSong(database, {
@@ -4841,7 +4861,7 @@ describe("DatabaseService", () => {
         "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
         ["tokino-sora-unavailable-bad"]
       )
-    ).toEqual([{ youtube_video_id: "tokino-sora-unavailable-bad" }]);
+    ).toEqual([]);
   });
 
   it("persists manual Favorites playlist ordering without converting it into a user playlist", async () => {
@@ -5218,7 +5238,9 @@ describe("DatabaseService", () => {
         }
 
         return new Response(null, { status: 404 });
-      }) as typeof fetch
+      }) as typeof fetch,
+      null,
+      { availabilityVerifier: verifyFixtureVideoAvailability }
     );
 
     // Missing mocked roster channels use detail fallbacks; don't spend a real quota window in a unit test.
@@ -5274,7 +5296,9 @@ describe("DatabaseService", () => {
         }
 
         return new Response(null, { status: 404 });
-      }) as typeof fetch
+      }) as typeof fetch,
+      null,
+      { availabilityVerifier: verifyFixtureVideoAvailability }
     );
 
     const result = await service.refreshLive({
@@ -5399,7 +5423,9 @@ describe("DatabaseService", () => {
         }
 
         return new Response(null, { status: 404 });
-      }) as typeof fetch
+      }) as typeof fetch,
+      null,
+      { availabilityVerifier: verifyFixtureVideoAvailability }
     );
 
     const result = await service.refreshCustomTalent({
@@ -5525,7 +5551,8 @@ describe("DatabaseService", () => {
 
         return new Response(null, { status: 404 });
       }) as typeof fetch,
-      (message) => progressMessages.push(message)
+      (message) => progressMessages.push(message),
+      { availabilityVerifier: verifyFixtureVideoAvailability }
     );
 
     const result = await service.refreshCustomTalent({

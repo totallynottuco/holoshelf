@@ -1,0 +1,204 @@
+import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseService } from "./database";
+import { normalizeVideoDetail } from "../../src/modules/hololive/music/cleanup";
+import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
+
+const AUDIO = "CeTdduq4KbI";
+const MV = "3f0PTj1xrvw";
+const KIARA = "UCHsx4Hqa-1ORjQTh9TYDhww";
+const IRISE = "UCMmcz1ybSoAD-GUlDx_7H2A";
+const folders: string[] = [];
+afterEach(() => {
+  for (const folder of folders.splice(0)) {
+    if (!path.resolve(folder).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`)) throw new Error("Unsafe test cleanup path");
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+async function database(persistWrites = false) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "holoshelf-verified-mirrors-"));
+  folders.push(folder);
+  const file = path.join(folder, "test.sqlite");
+  const db = new DatabaseService(file, undefined, { persistWrites, createBackups: false });
+  await db.init();
+  return { db, file };
+}
+function bundle(extraSongs: Array<{ id: string; song: string }> = []): HolodexArtifactBundle {
+  const songs = [
+    { id: AUDIO, title: "IRISÉ ‘TRAUMA (Feat. Takanashi Kiara)’ (Official Audio)", song: "TRAUMA (Feat. Takanashi Kiara)", duration: 157 },
+    { id: MV, title: "IRISÉ ‘TRAUMA (Feat. Takanashi Kiara)’ Official MV", song: "TRAUMA (Feat. Takanashi Kiara)", duration: 172 },
+    ...extraSongs.map(song => ({ ...song, title: song.song, duration: 180 }))
+  ];
+  return {
+    rows: songs.map(song => ({ youtubeVideoId: song.id, youtubeUrl: `https://youtu.be/${song.id}`, title: song.title, channelId: IRISE,
+      channelName: "IRISÉ", status: "past", topicId: "Original_Song", publishedAt: "2026-10-30T00:00:00.000Z" })),
+    detailCache: Object.fromEntries(songs.map(song => [song.id, normalizeVideoDetail(song.id, {
+      channelId: IRISE, duration: song.duration, songNames: [song.song], relationshipsLoaded: true, collabChannelIds: [KIARA],
+      mentions: [{ channelId: KIARA, name: "Takanashi Kiara", englishName: "Takanashi Kiara", type: "vtuber", org: "Hololive", photoUrl: "" }]
+    })])), duplicateRemovals: []
+  };
+}
+function only(bundleValue: HolodexArtifactBundle, videoIds: string[]): HolodexArtifactBundle {
+  return { ...bundleValue, rows: bundleValue.rows.filter(row => videoIds.includes(row.youtubeVideoId)),
+    detailCache: Object.fromEntries(Object.entries(bundleValue.detailCache).filter(([id]) => videoIds.includes(id))) };
+}
+function ids(db: DatabaseService) {
+  return db.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_videos ORDER BY youtube_video_id").map(row => row.youtube_video_id);
+}
+function savePersonalReferences(db: DatabaseService) {
+  db.setHololiveMusicMarker({ youtubeVideoId: AUDIO, marker: "favorite" });
+  const data = db.createHololiveMusicPlaylist("Saved songs");
+  const playlistId = data.playlists.find(playlist => !playlist.systemId)!.id;
+  db.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: AUDIO });
+  db.addHololiveMusicQueueItem({ youtubeVideoId: AUDIO, placement: "now" });
+  return playlistId;
+}
+function insertMapping(db: DatabaseService, removed = AUDIO, kept = MV, reason = "official_audio_duplicate_of_mv") {
+  db.run(`INSERT INTO hololive_music_duplicate_removals
+    (removed_youtube_video_id,removed_title,kept_youtube_video_id,kept_title,reason,source_run_id,updated_at)
+    VALUES (?, 'Removed', ?, 'Kept', ?, NULL, '2999-01-01T00:00:00.000Z')`, [removed, kept, reason]);
+}
+function track(db: DatabaseService, id: string, notes: string, rating: number) {
+  db.run(`UPDATE tracked_entries SET status = 'completed', rating = ?, notes = ?, started_at = '2026-10-30', completed_at = '2026-10-31'
+    WHERE item_id = (SELECT item_id FROM hololive_music_videos WHERE youtube_video_id = ?)`, [rating, notes, id]);
+}
+
+describe("freshly verified official audio mirror repair", () => {
+  it("requires proof for both videos and transfers personal references only after both are verified", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle());
+    const playlistId = savePersonalReferences(db);
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 42 WHERE marker_key = ?", [`video:${AUDIO}`]);
+    track(db, AUDIO, "My saved audio notes", 9);
+    expect(ids(db)).toEqual([MV, AUDIO].sort());
+    expect(db.repairHololiveMusicDuplicateRows()).toBe(0);
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO])).toBe(0);
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([MV])).toBe(0);
+    expect(ids(db)).toHaveLength(2);
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO, MV])).toBe(1);
+    expect(ids(db)).toEqual([MV]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: MV }]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MV }]);
+    expect(db.select("SELECT marker, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`video:${MV}`])).toEqual([{ marker: "favorite", favorite_position: 42 }]);
+    expect(db.select(`SELECT t.status, t.rating, t.notes, t.started_at, t.completed_at FROM tracked_entries t
+      JOIN hololive_music_videos v ON v.item_id = t.item_id WHERE v.youtube_video_id = ?`, [MV])).toEqual([
+      { status: "completed", rating: 9, notes: "My saved audio notes", started_at: "2026-10-30", completed_at: "2026-10-31" }
+    ]);
+  });
+
+  it("does not prefer an inactive or private MV even when its ID was supplied", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle());
+    savePersonalReferences(db);
+    db.deferHololiveMusicVideo({ youtubeVideoId: MV, reason: "Private", createBackup: false });
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO, MV])).toBe(0);
+    expect(ids(db)).toHaveLength(2);
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([AUDIO]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: AUDIO }]);
+  });
+
+  it("does not replay unchecked mirror mappings or transfer their personal data at repair or startup", async () => {
+    const { db, file } = await database(true);
+    db.importHolodexMusicArtifacts(bundle());
+    const playlistId = savePersonalReferences(db);
+    const markers = db.select("SELECT * FROM hololive_music_marker_keys");
+    insertMapping(db);
+    expect(db.repairHololiveMusicDuplicateRows()).toBe(0);
+    expect(ids(db)).toHaveLength(2);
+    expect(db.select("SELECT * FROM hololive_music_marker_keys")).toEqual(markers);
+    db.setSetting("internal.startupMaintenanceFingerprint", "force-maintenance");
+    db.flush();
+    const reopened = new DatabaseService(file, undefined, { persistWrites: false, createBackups: false });
+    await reopened.init();
+    expect(ids(reopened)).toHaveLength(2);
+    expect(reopened.getSettings()["internal.startupMaintenanceVersion"]).toBe("2");
+    expect(reopened.select("SELECT * FROM hololive_music_marker_keys")).toEqual(markers);
+    expect(reopened.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: AUDIO }]);
+    expect(reopened.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: AUDIO }]);
+  });
+
+  it("only applies the new import rule when both imported candidates have verification proof", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle(), "live", { verifiedVideoIds: [AUDIO] });
+    expect(ids(db)).toHaveLength(2);
+    db.importHolodexMusicArtifacts(bundle(), "live", { verifiedVideoIds: [AUDIO, MV] });
+    expect(ids(db)).toEqual([MV]);
+  });
+
+  it("keeps the verified repair narrow instead of running unrelated stored duplicate rules", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle([{ id: "unrelated01", song: "Different song one" }, { id: "unrelated02", song: "Different song two" }]));
+    insertMapping(db, "unrelated01", "unrelated02", "known_duplicate_of_official");
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO, MV])).toBe(1);
+    expect(ids(db)).toEqual([MV, "unrelated01", "unrelated02"].sort());
+  });
+
+  it("permits only explicitly trusted incoming catalog mappings to transfer markers with favorite order", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle());
+    savePersonalReferences(db);
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 17 WHERE marker_key = ?", [`video:${AUDIO}`]);
+    track(db, AUDIO, "Keep this note through a silent catalog update", 8);
+    insertMapping(db);
+    expect(db.repairHololiveMusicDuplicateRows(null, new Set([AUDIO, MV]))).toBe(1);
+    expect(ids(db)).toEqual([MV]);
+    expect(db.select("SELECT marker, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`video:${MV}`])).toEqual([{ marker: "favorite", favorite_position: 17 }]);
+    expect(db.select(`SELECT t.notes, t.rating FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id = t.item_id
+      WHERE v.youtube_video_id = ?`, [MV])).toEqual([{ notes: "Keep this note through a silent catalog update", rating: 8 }]);
+  });
+
+  it("retains conflicting personal notes and ratings on an inactive audio record", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle());
+    track(db, AUDIO, "Audio-specific note", 8);
+    track(db, MV, "MV-specific note", 9);
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO, MV])).toBe(1);
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([MV]);
+    expect(db.select(`SELECT v.youtube_video_id, v.official_catalog_active, t.notes, t.rating FROM hololive_music_videos v
+      JOIN tracked_entries t ON t.item_id = v.item_id ORDER BY v.youtube_video_id`)).toEqual([
+      { youtube_video_id: MV, official_catalog_active: 1, notes: "MV-specific note", rating: 9 },
+      { youtube_video_id: AUDIO, official_catalog_active: 0, notes: "Audio-specific note", rating: 8 }
+    ].sort((left, right) => left.youtube_video_id.localeCompare(right.youtube_video_id)));
+  });
+
+  it("preserves tracked personal state across replacement, reactivates valid rows and hides absent rows", async () => {
+    const { db } = await database();
+    const catalog = bundle([{ id: "savedabsent", song: "Saved absent song" }, { id: "defaultgone", song: "Default absent song" }]);
+    db.importHolodexMusicArtifacts(catalog);
+    track(db, MV, "Keep the valid song's note", 10);
+    track(db, "savedabsent", "Keep the absent song's note", 7);
+    const previousState = db.select(`SELECT t.* FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id = t.item_id
+      WHERE v.youtube_video_id IN (?, ?) ORDER BY v.youtube_video_id`, [MV, "savedabsent"]);
+    db.importHolodexMusicArtifacts(only(catalog, [MV]), "live", { replaceExisting: true, verifiedVideoIds: [MV] });
+    expect(ids(db)).toEqual([MV, "savedabsent"].sort());
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([MV]);
+    expect(db.select(`SELECT t.* FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id = t.item_id
+      WHERE v.youtube_video_id IN (?, ?) ORDER BY v.youtube_video_id`, [MV, "savedabsent"])).toEqual(previousState);
+    expect(db.select("SELECT * FROM settings WHERE key = 'internal.musicAvailabilityDeferred.savedabsent'")).toEqual([]);
+    db.importHolodexMusicArtifacts(only(catalog, [MV, "savedabsent"]), "live", { verifiedVideoIds: [MV, "savedabsent"] });
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId).sort()).toEqual([MV, "savedabsent"].sort());
+  });
+
+  it("transfers saved audio notes, rating and favorite order when replacement receives only the verified preferred MV", async () => {
+    const { db } = await database();
+    const catalog = bundle();
+    db.importHolodexMusicArtifacts(only(catalog, [AUDIO]));
+    const playlistId = savePersonalReferences(db);
+    track(db, AUDIO, "Personal note saved before replacement", 8);
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 11 WHERE marker_key = ?", [`video:${AUDIO}`]);
+    const replacement = only(catalog, [MV]);
+    replacement.duplicateRemovals = [{ removedYoutubeVideoId: AUDIO, removedTitle: catalog.rows[0].title,
+      keptYoutubeVideoId: MV, keptTitle: catalog.rows[1].title, reason: "official_audio_duplicate_of_mv",
+      songName: "TRAUMA (Feat. Takanashi Kiara)", removedPublishedAt: "2026-10-30", keptPublishedAt: "2026-10-30" }];
+    const result = db.importHolodexMusicArtifacts(replacement, "live", { replaceExisting: true, verifiedVideoIds: [AUDIO, MV] });
+    expect(result).toMatchObject({ importedRows: 1, detailCacheRows: 1, run: { keptRows: 1, filteredRows: 0 } });
+    expect(ids(db)).toEqual([MV]);
+    expect(db.select(`SELECT t.notes, t.rating FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id = t.item_id
+      WHERE v.youtube_video_id = ?`, [MV])).toEqual([{ notes: "Personal note saved before replacement", rating: 8 }]);
+    expect(db.select("SELECT marker, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`video:${MV}`])).toEqual([{ marker: "favorite", favorite_position: 11 }]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: MV }]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MV }]);
+  });
+});
