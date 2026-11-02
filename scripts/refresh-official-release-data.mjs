@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import {materializeCatalogDuplicateResets} from "./catalog-duplicate-resets.mjs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -553,6 +554,14 @@ async function main() {
 
     statsCoverage ??= auditOfficialMusicStats(database);
 
+    let catalogDuplicateResets = null;
+    if (refreshHolodex && refreshStats && holodexCoverage?.complete && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0) {
+      catalogDuplicateResets = materializeCatalogDuplicateResets(database, {
+        checkedAt: videoStatsRefresh.fetchedAt, videoStatsRefresh, statsCoverage, holodexCoverage
+      });
+      log(`Prepared ${catalogDuplicateResets.resetRows} verified catalog-entry reports for released clients`);
+    }
+
     if (refreshImages) {
       log("Refreshing high-resolution talent card images");
       imageRefresh = await measure("images", () => refreshTalentCardImages(database, imagesDirectory, log));
@@ -592,6 +601,7 @@ async function main() {
       holodexRequestMetrics,
       videoStatsRefresh,
       statsCoverage,
+      catalogDuplicateResets,
       videoAvailabilityVerification: videoStatsRefresh && statsCoverage ? {
         schema: 1, checkedAt: videoStatsRefresh.fetchedAt,
         checkedVideos: videoStatsRefresh.requestedVideos, retainedVideos: statsCoverage.catalogVideos

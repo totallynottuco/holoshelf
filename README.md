@@ -22,6 +22,8 @@ Song imports verify every candidate and existing representative against YouTube 
 
 Installed clients can set `sources.youtubeRegionCode` to a two-letter country code. Imports, previews, and statistics then verify playback in that country; cached checks from another region cannot bypass verification. Local availability holds survive worldwide catalog updates and remain eligible for a later retry. The public release catalog remains worldwide.
 
+Verified catalog exports also clear older duplicate decisions for every retained official video. This lets released clients recover distinct recordings restored by newer catalog rules while preserving personal exclusions and saved references.
+
 For an existing installation, the wizard defaults to a fast **data-only update**: it applies the new bundled catalog directly and verifies the AppData merge. The app version stays the same. A full app rebuild/install with a patch-version bump remains available for app-code changes, along with a seed-only option.
 
 Wizard option **4: Update local data and publish a silent songs/stats update to GitHub** refreshes the complete Holodex catalog and YouTube stats, validates the sanitized seed, applies and verifies a local data-only update when Holoshelf is installed, then uploads a compressed database and `holoshelf-catalog.json` to the existing latest stable GitHub release. It does not create a release or tag, change release notes, upload an installer, bump the app version, or push source commits. It requires GitHub CLI authentication with release-upload access. Existing immutable releases cannot accept asset updates. The wizard checks publishing prerequisites before spending API quota. Option 1 continues to apply a local data-only update without publishing.
