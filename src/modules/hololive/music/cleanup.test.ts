@@ -3,6 +3,7 @@ import { buildHololiveMusicSongKey } from "./classification";
 import {
   buildDuplicateTitleCore,
   cleanupCatalogRows,
+  hasCompatibleHololiveMusicRecording,
   isHololiveOfficialAudioMirror,
   normalizeVideoDetail,
   parseProvidedToYoutubeArtistCredits
@@ -91,6 +92,60 @@ describe("Holodex cleanup rules", () => {
     expect(isHololiveOfficialAudioMirror(englishAudio, traumaVideo)).toBe(false);
     expect(isHololiveOfficialAudioMirror(englishAudio, { ...traumaVideo, title: `${traumaVideo.title} (English ver.)` })).toBe(true);
     expect(isHololiveOfficialAudioMirror(englishAudio, { ...traumaVideo, title: `${traumaVideo.title} (Japanese ver.)` })).toBe(false);
+  });
+
+  it("requires known recording durations and preserves multi-song uploads regardless of song ordering", () => {
+    const single = { durationSeconds: 193, songNames: ["わんわん!わおーん / Bowwow Ahwoooooo"] };
+    const combinedSongs = ["わんわん!わおーん / Bowwow Ahwoooooo", "さしみお (feat. スバおか) / Sashimio (feat. SubaOka)"];
+    expect(hasCompatibleHololiveMusicRecording(single, { durationSeconds: 397, songNames: combinedSongs })).toBe(false);
+    expect(hasCompatibleHololiveMusicRecording(single, { durationSeconds: 200, songNames: combinedSongs })).toBe(false);
+    expect(hasCompatibleHololiveMusicRecording({ durationSeconds: 397, songNames: combinedSongs },
+      { durationSeconds: 399, songNames: [...combinedSongs].reverse() })).toBe(true);
+    expect(hasCompatibleHololiveMusicRecording({ durationSeconds: 157 }, { durationSeconds: 172 })).toBe(true);
+    for (const durationSeconds of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(hasCompatibleHololiveMusicRecording(single, { durationSeconds })).toBe(false);
+    }
+  });
+
+  it.each([false, true])("retains Mio's individual song when a two-song video's metadata order is reversed=%s", (reversed) => {
+    const songs = ["わんわん!わおーん / Bowwow Ahwoooooo", "さしみお (feat. スバおか) / Sashimio (feat. SubaOka)"];
+    const rows = [row({ youtubeVideoId: "4fJuqc_2Y_I", title: "わんわん！わおーん" }),
+      row({ youtubeVideoId: "cr9iLdXK9ik", title: "わんわんわおーん / さしみお feat.スバおか" })];
+    const details = {
+      "4fJuqc_2Y_I": detail({ youtubeVideoId: "4fJuqc_2Y_I", channelId: "mio-topic", originalChannelId: "mio", providedToYoutube: true, duration: 193, songNames: [songs[0]] }),
+      "cr9iLdXK9ik": detail({ youtubeVideoId: "cr9iLdXK9ik", channelId: "mio", duration: 397, songNames: reversed ? [...songs].reverse() : songs })
+    };
+    const result = cleanupCatalogRows(rows, {}, details);
+    expect(result.rows.map(entry => entry.youtubeVideoId)).toEqual(["4fJuqc_2Y_I", "cr9iLdXK9ik"]);
+    expect(result.duplicateRemovals).toEqual([]);
+  });
+
+  it.each(["unknown-duration", "multi-song", "different-duration", "topic-only"])("keeps separate same-title recordings with %s evidence", (scenario) => {
+    const rows = [row({ youtubeVideoId: "single", title: "Example Song" }), row({ youtubeVideoId: "other", title: "Example Song" })];
+    const details = {
+      single: detail({ youtubeVideoId: "single", channelId: "talent", originalChannelId: "topic", providedToYoutube: true, duration: 193, songNames: ["Example Song"] }),
+      other: detail({ youtubeVideoId: "other", channelId: "talent", duration: scenario === "different-duration" || scenario === "topic-only" ? 397 : 200,
+        songNames: scenario === "multi-song" ? ["Example Song", "Second Song"] : ["Example Song"],
+        providedToYoutube: scenario === "topic-only", originalChannelId: scenario === "topic-only" ? "topic" : "" })
+    };
+    if (scenario === "unknown-duration") details.other.duration = null;
+    const result = cleanupCatalogRows(rows, {}, details);
+    expect(result.rows.map(entry => entry.youtubeVideoId)).toEqual(["single", "other"]);
+    expect(result.duplicateRemovals).toEqual([]);
+  });
+
+  it("chooses a compatible recording before considering preferred-video ranking", () => {
+    const rows = [row({ youtubeVideoId: "single", title: "Example Song" }),
+      row({ youtubeVideoId: "matching", title: "Example Song" }),
+      row({ youtubeVideoId: "combined", title: "[Official MV] Example Song" })];
+    const details = {
+      single: detail({ youtubeVideoId: "single", channelId: "talent", originalChannelId: "topic", providedToYoutube: true, duration: 193, songNames: ["Example Song"] }),
+      matching: detail({ youtubeVideoId: "matching", channelId: "talent", duration: 198, songNames: ["Example Song"] }),
+      combined: detail({ youtubeVideoId: "combined", channelId: "talent", duration: 397, songNames: ["Example Song", "Second Song"] })
+    };
+    const result = cleanupCatalogRows(rows, {}, details);
+    expect(result.rows.map(entry => entry.youtubeVideoId)).toEqual(["matching", "combined"]);
+    expect(result.duplicateRemovals).toMatchObject([{ removedYoutubeVideoId: "single", keptYoutubeVideoId: "matching" }]);
   });
 
   it("extracts only the structured Provided to YouTube artist-credit line", () => {

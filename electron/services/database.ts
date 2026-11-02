@@ -138,6 +138,7 @@ import {
   buildDuplicateTitleCore,
   getRowCleanupReason,
   hasCompatibleHolodexTopicDuplicateDuration,
+  hasCompatibleHololiveMusicRecording,
   isHololiveOfficialAudioMirror,
   parseProvidedToYoutubeArtistCredits
 } from "../../src/modules/hololive/music/cleanup";
@@ -276,6 +277,7 @@ interface HololiveStoredMusicDuplicateRow extends Record<string, unknown> {
   participants_json: string | null;
   owned_idol_ids_json: string | null;
   featured_idol_ids_json: string | null;
+  song_names_json?: string | null;
 }
 
 const HOLOLIVE_MUSIC_PARTICIPANT_ROLE_ORDER: Record<HololiveMusicParticipantRole, number> = {
@@ -12041,7 +12043,7 @@ export class DatabaseService {
       return 0;
     }
 
-    const removals: HolodexDuplicateRemoval[] = rows.filter((row) =>
+    const removals: HolodexDuplicateRemoval[] = this.filterCompatibleStoredHololiveMusicRemovals(rows).filter((row) =>
       row.reason !== "official_audio_duplicate_of_mv" ||
       (verifiedVideoIds.has(row.removed_youtube_video_id) && verifiedVideoIds.has(row.kept_youtube_video_id ?? ""))
     ).map((row) => ({
@@ -12264,14 +12266,16 @@ export class DatabaseService {
       provided_to_youtube: number;
       duration_seconds: number | null;
       published_at: string | null;
+      song_names_json: string | null;
     }>(
-      `SELECT youtube_video_id, title, song_name, topic_id, canonical_performance_key,
-              provided_to_youtube, duration_seconds, published_at
-       FROM hololive_music_videos
-       WHERE canonical_performance_key != ''
-         AND COALESCE(source_kind, 'official') != 'user'
-         AND COALESCE(official_catalog_active, 1) = 1
-         AND canonical_performance_key IN (
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_performance_key,
+              v.provided_to_youtube, v.duration_seconds, v.published_at, details.song_names_json
+       FROM hololive_music_videos v
+       LEFT JOIN hololive_music_detail_cache details ON details.youtube_video_id = v.youtube_video_id
+       WHERE v.canonical_performance_key != ''
+         AND COALESCE(v.source_kind, 'official') != 'user'
+         AND COALESCE(v.official_catalog_active, 1) = 1
+         AND v.canonical_performance_key IN (
            SELECT canonical_performance_key
            FROM hololive_music_videos
            WHERE canonical_performance_key != ''
@@ -12281,7 +12285,7 @@ export class DatabaseService {
            HAVING SUM(CASE WHEN provided_to_youtube = 1 THEN 1 ELSE 0 END) > 0
               AND SUM(CASE WHEN provided_to_youtube = 0 THEN 1 ELSE 0 END) > 0
          )
-       ORDER BY canonical_performance_key, provided_to_youtube, youtube_video_id`
+       ORDER BY v.canonical_performance_key, v.provided_to_youtube, v.youtube_video_id`
     );
     if (rows.length === 0) {
       return 0;
@@ -12300,8 +12304,10 @@ export class DatabaseService {
         continue;
       }
 
-      const keptRow = [...nonTopicRows].sort((left, right) => this.compareHololiveMusicDisplayRow(right, left))[0];
       for (const topicRow of topicRows) {
+        const keptRow = nonTopicRows.filter(row => this.hasCompatibleStoredHololiveMusicRecording(topicRow, row))
+          .sort((left, right) => this.compareHololiveMusicDisplayRow(right, left))[0];
+        if (!keptRow) continue;
         removals.push({
           removedYoutubeVideoId: topicRow.youtube_video_id,
           removedTitle: topicRow.title,
@@ -12366,8 +12372,9 @@ export class DatabaseService {
     const rows = this.select<HololiveStoredMusicDuplicateRow>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
               v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds,
-              v.published_at, v.participants_json, v.owned_idol_ids_json, v.featured_idol_ids_json, stats.view_count
+              v.published_at, v.participants_json, v.owned_idol_ids_json, v.featured_idol_ids_json, stats.view_count, details.song_names_json
        FROM hololive_music_videos v LEFT JOIN hololive_music_video_stats stats USING(youtube_video_id)
+       LEFT JOIN hololive_music_detail_cache details ON details.youtube_video_id = v.youtube_video_id
        WHERE COALESCE(v.source_kind, 'official') != 'user' AND COALESCE(v.official_catalog_active, 1) = 1
          AND v.provided_to_youtube = 0 AND v.canonical_song_key != ''`
     ).filter((row) => verifiedVideoIds.has(row.youtube_video_id));
@@ -12379,7 +12386,8 @@ export class DatabaseService {
     const candidate = (row: HololiveStoredMusicDuplicateRow) => ({
       youtubeVideoId: row.youtube_video_id, title: row.title, songName: row.song_name,
       topicId: row.topic_id, channelId: row.channel_id, providedToYoutube: Boolean(row.provided_to_youtube),
-      durationSeconds: row.duration_seconds, participantIds: [...this.getStoredHololiveDuplicateParticipantSignals(row)]
+      durationSeconds: row.duration_seconds, songNames: this.parseJsonStringArray(row.song_names_json),
+      participantIds: [...this.getStoredHololiveDuplicateParticipantSignals(row)]
     });
     const removals: HolodexDuplicateRemoval[] = [];
     for (const group of groups.values()) {
@@ -12406,10 +12414,11 @@ export class DatabaseService {
     const rows = this.select<HololiveStoredMusicDuplicateRow>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
               v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds, stats.view_count, v.published_at,
-              participants_json, owned_idol_ids_json, featured_idol_ids_json
+              participants_json, owned_idol_ids_json, featured_idol_ids_json, details.song_names_json
        FROM hololive_music_videos v
        LEFT JOIN hololive_music_video_stats stats
          ON stats.youtube_video_id = v.youtube_video_id
+       LEFT JOIN hololive_music_detail_cache details ON details.youtube_video_id = v.youtube_video_id
        WHERE v.canonical_song_key != ''
          AND COALESCE(v.source_kind, 'official') != 'user'
          AND COALESCE(v.official_catalog_active, 1) = 1
@@ -12444,7 +12453,7 @@ export class DatabaseService {
       for (const topicRow of topicRows) {
         const matchingNonTopicRows = nonTopicRows.filter(
           (nonTopicRow) =>
-            this.hasStoredHololiveDuplicateDurationOverlap(topicRow, nonTopicRow) &&
+            this.hasCompatibleStoredHololiveMusicRecording(topicRow, nonTopicRow) &&
             this.hasStoredHololiveDuplicateParticipantOverlap(topicRow, nonTopicRow)
         );
         if (matchingNonTopicRows.length === 0) {
@@ -12494,6 +12503,48 @@ export class DatabaseService {
     }
 
     return hasCompatibleHolodexTopicDuplicateDuration(leftDuration, rightDuration);
+  }
+
+  private hasCompatibleStoredHololiveMusicRecording(
+    left: { duration_seconds: number | null; song_name?: string | null; song_names_json?: string | null },
+    right: { duration_seconds: number | null; song_name?: string | null; song_names_json?: string | null }
+  ): boolean {
+    const recording = (row: typeof left) => {
+      const songNames = this.parseJsonStringArray(row.song_names_json);
+      return { durationSeconds: row.duration_seconds, songNames: songNames.length ? songNames : row.song_name ? [row.song_name] : [] };
+    };
+    return hasCompatibleHololiveMusicRecording(recording(left), recording(right));
+  }
+
+  private filterCompatibleStoredHololiveMusicRemovals<T extends {
+    removed_youtube_video_id: string; kept_youtube_video_id: string | null; reason: string
+  }>(removals: T[]): T[] {
+    const wholeRecordingReasons = new Set([
+      "topic_duplicate_of_non_topic", "canonical_topic_duplicate_of_non_topic", "official_audio_duplicate_of_mv"
+    ]);
+    if (!removals.some(removal => wholeRecordingReasons.has(removal.reason))) return removals;
+    const metadata = new Map(this.select<{
+      youtube_video_id: string; duration_seconds: number | null; song_name: string | null; song_names_json: string | null
+    }>(`SELECT v.youtube_video_id, COALESCE(v.duration_seconds, d.duration_seconds) AS duration_seconds,
+               v.song_name, d.song_names_json
+        FROM hololive_music_videos v LEFT JOIN hololive_music_detail_cache d ON d.youtube_video_id = v.youtube_video_id
+        UNION ALL
+        SELECT d.youtube_video_id, d.duration_seconds, NULL AS song_name, d.song_names_json
+        FROM hololive_music_detail_cache d
+        WHERE NOT EXISTS (SELECT 1 FROM hololive_music_videos v WHERE v.youtube_video_id = d.youtube_video_id)`)
+      .map(row => [row.youtube_video_id, row]));
+    return removals.filter(removal => {
+      if (!wholeRecordingReasons.has(removal.reason)) return true;
+      const removed = metadata.get(removal.removed_youtube_video_id);
+      const kept = metadata.get(removal.kept_youtube_video_id ?? "");
+      // Legacy reports may outlive all metadata for an already removed source. Preserve
+      // their existing transfer behavior unless retained metadata disproves the match.
+      if (!removed || !kept || this.hasCompatibleStoredHololiveMusicRecording(removed, kept)) return true;
+      this.run(`DELETE FROM hololive_music_duplicate_removals
+        WHERE removed_youtube_video_id = ? AND kept_youtube_video_id = ? AND reason = ?`,
+      [removal.removed_youtube_video_id, removal.kept_youtube_video_id, removal.reason]);
+      return false;
+    });
   }
 
   private hasStoredHololiveDuplicateParticipantOverlap(
@@ -12827,7 +12878,7 @@ export class DatabaseService {
     verifiedVideoIds: ReadonlySet<string> = new Set<string>()
   ): Array<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null; reason: string }> {
     const sourceFilter = runId ? "source_run_id = ?" : "source_run_id IS NULL AND updated_at >= ?";
-    return this.select<{
+    return this.filterCompatibleStoredHololiveMusicRemovals(this.select<{
       removed_youtube_video_id: string;
       kept_youtube_video_id: string | null;
       reason: string;
@@ -12838,7 +12889,7 @@ export class DatabaseService {
          AND kept_youtube_video_id IS NOT NULL
          AND kept_youtube_video_id != ''`,
       [runId ?? updatedSince ?? ""]
-    ).filter((row) => row.reason !== "official_audio_duplicate_of_mv" ||
+    )).filter((row) => row.reason !== "official_audio_duplicate_of_mv" ||
       (verifiedVideoIds.has(row.removed_youtube_video_id) && verifiedVideoIds.has(row.kept_youtube_video_id ?? "")));
   }
 

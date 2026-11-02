@@ -48,12 +48,12 @@ function only(bundleValue: HolodexArtifactBundle, videoIds: string[]): HolodexAr
 function ids(db: DatabaseService) {
   return db.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_videos ORDER BY youtube_video_id").map(row => row.youtube_video_id);
 }
-function savePersonalReferences(db: DatabaseService) {
-  db.setHololiveMusicMarker({ youtubeVideoId: AUDIO, marker: "favorite" });
+function savePersonalReferences(db: DatabaseService, youtubeVideoId = AUDIO) {
+  db.setHololiveMusicMarker({ youtubeVideoId, marker: "favorite" });
   const data = db.createHololiveMusicPlaylist("Saved songs");
   const playlistId = data.playlists.find(playlist => !playlist.systemId)!.id;
-  db.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId: AUDIO });
-  db.addHololiveMusicQueueItem({ youtubeVideoId: AUDIO, placement: "now" });
+  db.addHololiveMusicPlaylistItem({ playlistId, youtubeVideoId });
+  db.addHololiveMusicQueueItem({ youtubeVideoId, placement: "now" });
   return playlistId;
 }
 function insertMapping(db: DatabaseService, removed = AUDIO, kept = MV, reason = "official_audio_duplicate_of_mv") {
@@ -233,5 +233,75 @@ describe("freshly verified official audio mirror repair", () => {
     expect(db.select("SELECT * FROM hololive_music_exclusions")).toEqual(originalExclusions);
     expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([MV]);
     expect(db.select("SELECT * FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [AUDIO])).toHaveLength(1);
+  });
+});
+
+const MIO_TOPIC = "4fJuqc_2Y_I";
+const MIO_DIRECT = "cr9iLdXK9ik";
+const BOWWOW = "わんわん!わおーん / Bowwow Ahwoooooo";
+const SASHIMIO = "さしみお (feat. スバおか) / Sashimio (feat. SubaOka)";
+function mioBundle(directDuration = 397, directSongNames = [BOWWOW, SASHIMIO]): HolodexArtifactBundle {
+  const channelId = "UCp-5t9SrOQwXMU7iIjQfARg";
+  return {
+    rows: [MIO_TOPIC, MIO_DIRECT].map(id => ({ youtubeVideoId: id, youtubeUrl: `https://youtu.be/${id}`,
+      title: id === MIO_TOPIC ? "わんわん！わおーん" : "わんわんわおーん / さしみお feat.スバおか", status: "past",
+      topicId: "Original_Song", channelId, channelName: "Mio Channel 大神ミオ", publishedAt: "2021-08-20T10:00:00.000Z" })),
+    detailCache: {
+      [MIO_TOPIC]: normalizeVideoDetail(MIO_TOPIC, { channelId, duration: 193, songNames: [BOWWOW], providedToYoutube: true,
+        originalChannelId: "UCHYTTba2SyK82DuoFh1FLDg", relationshipsLoaded: true }),
+      [MIO_DIRECT]: normalizeVideoDetail(MIO_DIRECT, { channelId, duration: directDuration, songNames: directSongNames, relationshipsLoaded: true })
+    }, duplicateRemovals: []
+  };
+}
+
+describe("recording compatibility for stored Topic duplicate repair", () => {
+  it.each([
+    [397, [BOWWOW, SASHIMIO]],
+    [205, [BOWWOW, SASHIMIO]],
+    [397, [BOWWOW]]
+  ])("retains a single track beside an incompatible direct recording (%is)", async (duration, songNames) => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle(duration as number, songNames as string[]));
+    expect(ids(db)).toEqual([MIO_TOPIC, MIO_DIRECT].sort());
+    expect(db.repairHololiveMusicDuplicateRows()).toBe(0);
+    expect(db.select("SELECT * FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [MIO_TOPIC])).toEqual([]);
+  });
+
+  it.each(["canonical_topic_duplicate_of_non_topic", "topic_duplicate_of_non_topic"])("rejects a stale %s report before deleting a song or moving personal references", async (reason) => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle());
+    const playlistId = savePersonalReferences(db, MIO_TOPIC);
+    track(db, MIO_TOPIC, "Keep this single-track rating", 9);
+    const markers = db.select("SELECT * FROM hololive_music_marker_keys");
+    insertMapping(db, MIO_TOPIC, MIO_DIRECT, reason);
+    expect(db.repairHololiveMusicDuplicateRows()).toBe(0);
+    expect(ids(db)).toEqual([MIO_TOPIC, MIO_DIRECT].sort());
+    expect(db.select("SELECT * FROM hololive_music_marker_keys")).toEqual(markers);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: MIO_TOPIC }]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MIO_TOPIC }]);
+    expect(db.select("SELECT * FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [MIO_TOPIC])).toEqual([]);
+  });
+
+  it.each([false, true])("also rejects incompatible transfer reports when only the removed track's detail cache remains (other repair: %s)", async (otherRepair) => {
+    const { db } = await database();
+    const extras = bundle([{ id: "unrelated01", song: "Different song one" }, { id: "unrelated02", song: "Different song two" }]);
+    db.importHolodexMusicArtifacts({ rows: [...mioBundle().rows, ...extras.rows], detailCache: { ...mioBundle().detailCache, ...extras.detailCache }, duplicateRemovals: [] });
+    const playlistId = savePersonalReferences(db, MIO_TOPIC);
+    const markers = db.select("SELECT * FROM hololive_music_marker_keys");
+    db.run("DELETE FROM hololive_music_videos WHERE youtube_video_id = ?", [MIO_TOPIC]);
+    insertMapping(db, MIO_TOPIC, MIO_DIRECT, "canonical_topic_duplicate_of_non_topic");
+    if (otherRepair) insertMapping(db, "unrelated01", "unrelated02", "known_duplicate_of_official");
+    expect(db.repairHololiveMusicDuplicateRows()).toBe(otherRepair ? 1 : 0);
+    expect(db.select("SELECT * FROM hololive_music_marker_keys")).toEqual(markers);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: MIO_TOPIC }]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MIO_TOPIC }]);
+    expect(db.select("SELECT * FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [MIO_TOPIC])).toEqual([]);
+  });
+
+  it("still consolidates a genuine Topic/audio recording with an MV containing a short intro", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle(208, [BOWWOW]));
+    expect(ids(db)).toEqual([MIO_DIRECT]);
+    expect(db.select("SELECT kept_youtube_video_id FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [MIO_TOPIC])).toEqual([{ kept_youtube_video_id: MIO_DIRECT }]);
   });
 });

@@ -50,6 +50,38 @@ function fixture() {
 }
 
 describe("parallel Holodex refresh", () => {
+  it.each([false, true])("uses fresh verified durations to retain a separate recording with multiple songs=%s", async (multipleSongs) => {
+    const { database, imported } = fixture();
+    const single = {
+      ...item("individual-song"), title: "Example Song", duration: 180,
+      original_channel_id: "official-1", description: "Provided to YouTube by cover corp.", songs: [{ name: "Example Song" }]
+    };
+    const combined = {
+      ...item("long-recording"), title: "[Official MV] Example Song", duration: 180,
+      songs: multipleSongs ? [{ name: "Example Song" }, { name: "Second Song" }] : [{ name: "Example Song" }]
+    };
+    const verified = vi.fn(async (ids: string[]) => {
+      const result = await verifyFixtureVideoAvailability(ids);
+      return { ...result, stats: result.stats.map(stat => ({ ...stat,
+        youtubeChannelId: "official-1", durationSeconds: stat.youtubeVideoId === "individual-song" ? 193 : 397
+      })) };
+    });
+    const service = new HolodexMusicService(database, (async input => {
+      const url = new URL(String(input));
+      return Response.json(url.searchParams.get("topic") === "Original_Song"
+        ? { total: 2, items: [single, combined] } : { total: 0, items: [] });
+    }) as typeof fetch, null, { availabilityVerifier: verified });
+    const result = await service.refreshLive({ includeChannels: false, includeCustomTalents: false, includeCollabs: false });
+    expect(result.run.status).toBe("completed");
+    expect(verified).toHaveBeenCalledOnce();
+    const bundle = imported.mock.calls[0][0];
+    expect(bundle.rows.map(row => row.youtubeVideoId)).toEqual(expect.arrayContaining(["individual-song", "long-recording"]));
+    expect(bundle.rows).toHaveLength(2);
+    expect(bundle.duplicateRemovals).toEqual([]);
+    expect(bundle.detailCache["individual-song"].duration).toBe(193);
+    expect(bundle.detailCache["long-recording"].duration).toBe(397);
+  });
+
   it("keeps large-page output identical to small pages, including fresh details and collab links", async () => {
     async function run(pageSize: number, serverCap = pageSize) {
       const { database, imported } = fixture();
