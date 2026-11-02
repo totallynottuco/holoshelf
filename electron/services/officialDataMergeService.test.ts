@@ -596,6 +596,54 @@ describe("mergeBundledOfficialData", () => {
     expect(user.database.select("SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id=?", [audioId])).toEqual([]);
   });
 
+  it("keeps an explicitly excluded audio version excluded without excluding its newly bundled official MV", async () => {
+    const user = await createTempDatabase("holoshelf-official-excluded-audio-");
+    const seedDirectory = await createSeedDirectory("2026-11-02T030000Z");
+    const audioId = "irys-excluded-audio";
+    const mvId = "kiara-incoming-mv";
+    const audio = {
+      youtubeVideoId: audioId, title: "[Audio] BORN!", songName: "BORN!",
+      channelId: "UC8rcEBzJSleTkf_-agPM20g", channelName: "IRyS Ch. hololive-EN"
+    };
+    const mv = {
+      youtubeVideoId: mvId, title: "[Official MV] BORN! / Takanashi Kiara x IRyS", songName: "BORN!",
+      channelId: "UCHsx4Hqa-1ORjQTh9TYDhww", channelName: "Takanashi Kiara Ch. hololive-EN"
+    };
+    user.database.importHolodexMusicArtifacts(createBundle([audio]));
+    user.database.excludeHololiveMusicVideo({ youtubeVideoId: audioId });
+    for (let index = 0; index < 23; index += 1) {
+      user.database.run(
+        `INSERT INTO hololive_music_exclusions (youtube_video_id,title_snapshot,source_url_snapshot,created_at)
+         VALUES (?, ?, ?, '2026-10-31T12:00:00.000Z')`,
+        [`other-explicit-exclusion-${index}`, `Previously excluded song ${index}`, `https://youtu.be/other-explicit-exclusion-${index}`]
+      );
+    }
+    const before = user.database.select("SELECT * FROM hololive_music_exclusions ORDER BY youtube_video_id");
+    expect(before).toHaveLength(24);
+
+    const seedDatabase = new DatabaseService(path.join(seedDirectory, "holoshelf-template.sqlite"));
+    await seedDatabase.init();
+    seedDatabase.importHolodexMusicArtifacts(createBundle([mv]));
+    seedDatabase.run(
+      `INSERT INTO hololive_music_duplicate_removals
+         (removed_youtube_video_id,removed_title,kept_youtube_video_id,kept_title,reason,song_name,
+          removed_published_at,kept_published_at,source_run_id,updated_at)
+       VALUES (?, ?, ?, ?, 'official_audio_duplicate_of_mv', 'BORN!', ?, ?, NULL, ?)`,
+      [audioId, audio.title, mvId, mv.title, "2026-10-28T00:00:00.000Z", "2026-10-29T00:00:00.000Z", "2026-11-02T03:00:00.000Z"]
+    );
+    seedDatabase.flush();
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: { dataDirectory: user.dataDirectory, hololiveImageDirectory: user.hololiveImageDirectory, seedDirectory },
+      isPackaged: true, now: () => "2026-11-02T03:00:00.000Z"
+    });
+
+    expect(user.database.select("SELECT * FROM hololive_music_exclusions ORDER BY youtube_video_id")).toEqual(before);
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: [audioId, mvId] }).map((row) => row.youtubeVideoId)).toEqual([mvId]);
+    expect(user.database.select("SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id=?", [mvId])).toEqual([]);
+  });
+
   it("applies bundled duplicate removals after official data rows are merged", async () => {
     const user = await createTempDatabase("holoshelf-official-duplicates-");
     const seedDirectory = await createSeedDirectory("2026-07-01");

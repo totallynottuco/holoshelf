@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseService } from "./database";
+import { mergeBundledOfficialData } from "./officialDataMergeService";
 import { normalizeVideoDetail } from "../../src/modules/hololive/music/cleanup";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
 
@@ -200,5 +201,37 @@ describe("freshly verified official audio mirror repair", () => {
     expect(db.select("SELECT marker, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`video:${MV}`])).toEqual([{ marker: "favorite", favorite_position: 11 }]);
     expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: MV }]);
     expect(db.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MV }]);
+  });
+
+  it("keeps audio exclusions tied to their video during a direct verified mirror repair", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(bundle());
+    db.run(`INSERT INTO hololive_music_exclusions (youtube_video_id, title_snapshot, source_url_snapshot, created_at)
+      VALUES (?, 'Excluded audio', ?, '2026-10-31T00:00:00.000Z')`, [AUDIO, `https://youtu.be/${AUDIO}`]);
+    const originalExclusions = db.select("SELECT * FROM hololive_music_exclusions");
+    expect(db.repairVerifiedHololiveMusicAudioMirrors([AUDIO, MV])).toBe(1);
+    expect(db.select("SELECT * FROM hololive_music_exclusions")).toEqual(originalExclusions);
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([MV]);
+  });
+
+  it("keeps an excluded audio's original exclusion unchanged when a trusted incoming seed supplies its preferred MV", async () => {
+    const { db, file } = await database();
+    db.importHolodexMusicArtifacts(only(bundle(), [AUDIO]));
+    db.excludeHololiveMusicVideo({ youtubeVideoId: AUDIO });
+    const originalExclusions = db.select("SELECT * FROM hololive_music_exclusions");
+    const { db: seed, file: seedFile } = await database(true);
+    seed.importHolodexMusicArtifacts(bundle(), "live", { verifiedVideoIds: [AUDIO, MV] });
+    // Keep this incoming report eligible for transfer regardless of millisecond ordering.
+    seed.run("UPDATE hololive_music_duplicate_removals SET updated_at = '2999-01-01T00:00:00.000Z'");
+    seed.flush();
+    const seedDirectory = path.dirname(seedFile);
+    fs.copyFileSync(seedFile, path.join(seedDirectory, "holoshelf-template.sqlite"));
+    fs.writeFileSync(path.join(seedDirectory, "official-data.json"), JSON.stringify({ schema: 1, version: "2026.11.01.exclusion-test" }));
+    const result = await mergeBundledOfficialData({ database: db, isPackaged: true,
+      paths: { dataDirectory: path.dirname(file), hololiveImageDirectory: path.join(path.dirname(file), "images"), seedDirectory } });
+    expect(result.status).toBe("merged");
+    expect(db.select("SELECT * FROM hololive_music_exclusions")).toEqual(originalExclusions);
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([MV]);
+    expect(db.select("SELECT * FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [AUDIO])).toHaveLength(1);
   });
 });

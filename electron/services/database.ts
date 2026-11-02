@@ -12825,7 +12825,7 @@ export class DatabaseService {
     runId: string | null,
     updatedSince: string | null = null,
     verifiedVideoIds: ReadonlySet<string> = new Set<string>()
-  ): Array<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null }> {
+  ): Array<{ removed_youtube_video_id: string; kept_youtube_video_id: string | null; reason: string }> {
     const sourceFilter = runId ? "source_run_id = ?" : "source_run_id IS NULL AND updated_at >= ?";
     return this.select<{
       removed_youtube_video_id: string;
@@ -12871,7 +12871,9 @@ export class DatabaseService {
           "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
           [removedId]
         )[0];
-        if (removedExclusion) {
+        // Exclusions identify the exact video the user removed. Choosing a preferred MV
+        // for an audio mirror must not silently exclude that different video as well.
+        if (removedExclusion && removal.reason !== "official_audio_duplicate_of_mv") {
           const keptExclusion = this.select<{ youtube_video_id: string }>(
             "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
             [keptId]
