@@ -1,9 +1,9 @@
 {
   "startedAt": "2026-11-02T07:25:31.011Z",
-  "completedAt": "2026-11-02T07:28:03.426Z",
+  "completedAt": "2026-11-02T08:30:39.761Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-11-02T072537Z",
+  "officialDataVersion": "2026-11-02T083039Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -82,8 +82,8 @@
     "unavailableVideos": 0,
     "failedBatches": 0,
     "failedBatchDetails": [],
-    "batches": 0,
-    "fetchedAt": "2026-11-02T07:27:48.376Z"
+    "batches": 62,
+    "fetchedAt": "2026-11-02T08:30:35.971Z"
   },
   "statsCoverage": {
     "catalogVideos": 3079,
@@ -96,7 +96,7 @@
   },
   "videoAvailabilityVerification": {
     "schema": 1,
-    "checkedAt": "2026-11-02T07:27:48.376Z",
+    "checkedAt": "2026-11-02T08:30:35.971Z",
     "checkedVideos": 3079,
     "retainedVideos": 3079
   },
@@ -114,6 +114,24 @@
     "customIdols": 0,
     "statsRows": 3079,
     "detailCacheRows": 3079,
-    "duplicateRemovalRows": 1188
+    "duplicateRemovalRows": 4267
+  },
+  "metadataRepair": {
+    "kind": "verified-catalog-duplicate-resets",
+    "startedAt": "2026-11-02T08:30:35.504Z",
+    "completedAt": "2026-11-02T08:30:39.761Z",
+    "originalFullRefresh": {
+      "startedAt": "2026-11-02T07:25:31.011Z",
+      "completedAt": "2026-11-02T07:28:03.426Z",
+      "officialDataVersion": "2026-11-02T072537Z"
+    },
+    "holodexRefreshed": false,
+    "holodexCoveragePreserved": true,
+    "youtubeAvailabilityReverified": true,
+    "youtubeRequests": 62,
+    "youtubeVerificationMs": 3598,
+    "retainedVideos": 3079,
+    "resetRows": 3079,
+    "reason": "Clear stale client duplicate mappings for every currently verified retained official video without changing distinct recordings."
   }
 }
