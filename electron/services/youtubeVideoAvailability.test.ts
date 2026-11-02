@@ -90,9 +90,91 @@ describe("YouTube availability evidence", () => {
     expect(classifyYouTubeVideoAvailability(restricted, "JP").state).toBe("ready");
   });
 
+  it("checks the installed playback country while retaining public catalog entries playable elsewhere", async () => {
+    const restricted = video("restricted", { contentDetails: { duration: "PT3M", regionRestriction: { blocked: ["US"] } } });
+    const unlisted = video("unlisted", {
+      contentDetails: { duration: "PT3M", regionRestriction: { allowed: ["US", "JP"] } },
+      status: { uploadStatus: "processed", privacyStatus: "unlisted", embeddable: true }
+    });
+    const fetcher = vi.fn(async () => Response.json({ items: [restricted, unlisted] }));
+    const database = { getSettings: () => ({ "sources.youtubeRegionCode": " us " }) } as unknown as DatabaseService;
+    const local = new YouTubeVideoStatsService(database, { apiKey: "test-key", fetcher });
+    const checked = await local.checkAvailability({ youtubeVideoIds: ["restricted", "unlisted"] });
+    expect(checked.regionCode).toBe("US");
+    expect(checked.availableVideoIds).toEqual(["unlisted"]);
+    expect(checked.deferredVideos).toEqual([{ youtubeVideoId: "restricted", reason: "YouTube does not currently allow playback in US." }]);
+    const global = new YouTubeVideoStatsService({} as DatabaseService, { apiKey: "test-key", fetcher });
+    expect(await global.checkAvailability({ youtubeVideoIds: ["restricted", "unlisted"] }))
+      .toMatchObject({ regionCode: null, availableVideoIds: ["restricted", "unlisted"], deferredVideos: [] });
+    expect(await local.checkAvailability({ youtubeVideoIds: ["restricted", "unlisted"], regionCode: "JP" }))
+      .toMatchObject({ regionCode: "JP", availableVideoIds: ["restricted", "unlisted"] });
+    expect(await local.checkAvailability({ youtubeVideoIds: ["restricted", "unlisted"], regionCode: null }))
+      .toMatchObject({ regionCode: null, availableVideoIds: ["restricted", "unlisted"] });
+  });
+
+  it("soft-defers region-blocked statistics without replacing them or using them for duplicate repair", async () => {
+    const { database, methods } = statsDatabase(["restricted", "allowed"]);
+    methods.getSettings.mockReturnValue({ "sources.youtubeRegionCode": "US" });
+    const service = new YouTubeVideoStatsService(database, { apiKey: "test-key", fetcher: async () => Response.json({ items: [
+      video("restricted", { contentDetails: { duration: "PT3M", regionRestriction: { blocked: ["US"] } } }), video("allowed")
+    ] }) });
+    expect(await service.refreshViewCounts()).toMatchObject({ updatedVideos: 1, unavailableVideos: 1, failedBatches: 0 });
+    expect(methods.deferHololiveMusicVideo).toHaveBeenCalledExactlyOnceWith({
+      youtubeVideoId: "restricted", reason: "YouTube does not currently allow playback in US.", createBackup: true
+    });
+    expect(methods.restoreHololiveMusicVideoAvailability).toHaveBeenCalledExactlyOnceWith("allowed");
+    expect(methods.repairVerifiedHololiveMusicAudioMirrors).toHaveBeenCalledExactlyOnceWith(["allowed"]);
+    expect(methods.upsertHololiveMusicVideoStats.mock.calls[0][0].map((stat: { youtubeVideoId: string }) => stat.youtubeVideoId)).toEqual(["allowed"]);
+  });
+
+  it("applies the configured playback region to both custom previews and saves", async () => {
+    const service = new YouTubeVideoStatsService({ getSettings: () => ({ "sources.youtubeRegionCode": "US" }) } as unknown as DatabaseService,
+      { apiKey: "test-key", fetcher: async input => {
+        const id = new URL(String(input)).searchParams.get("id")!;
+        return Response.json({ items: [video(id, {
+          contentDetails: { duration: "PT3M", regionRestriction: id === "abcDEF12345" ? { blocked: ["US"] } : { allowed: ["US"] } },
+          status: { uploadStatus: "processed", privacyStatus: "unlisted", embeddable: true }
+        })] });
+      } });
+    await expect(service.previewCustomSong({ youtubeUrl: "https://youtu.be/abcDEF12345" })).rejects.toThrow("playback in US");
+    await expect(service.enrichCustomSongUpsert({ youtubeUrl: "https://youtu.be/abcDEF12345", title: "Blocked song", topicId: "Original_Song", ownerIdolIds: [] }))
+      .rejects.toBeInstanceOf(YouTubeVideoNotReadyError);
+    await expect(service.previewCustomSong({ youtubeUrl: "https://youtu.be/abcDEF67890" }))
+      .resolves.toMatchObject({ youtubeVideoId: "abcDEF67890", usedApi: true, durationSeconds: 180 });
+    await expect(service.enrichCustomSongUpsert({ youtubeUrl: "https://youtu.be/abcDEF67890", title: "Unlisted song", topicId: "Original_Song", ownerIdolIds: [] }))
+      .resolves.toMatchObject({ youtubeUrl: "https://www.youtube.com/watch?v=abcDEF67890", durationSeconds: 180 });
+  });
+
+  it.each([false, true])("never reuses a global availability cache for a configured country: legacy=%s", async (legacy) => {
+    const cache = await verified(["restricted"]);
+    if (legacy) delete cache.regionCode;
+    const { database, methods } = statsDatabase(["restricted"]);
+    methods.getSettings.mockReturnValue({ "sources.youtubeRegionCode": "US" });
+    const fetcher = vi.fn(async () => Response.json({ items: [video("restricted", { contentDetails: { duration: "PT3M", regionRestriction: { blocked: ["US"] } } })] }));
+    const service = new YouTubeVideoStatsService(database, { apiKey: "test-key", fetcher });
+    expect(await service.refreshViewCounts({}, cache)).toMatchObject({ updatedVideos: 0, unavailableVideos: 1, batches: 1 });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(methods.restoreHololiveMusicVideoAvailability).not.toHaveBeenCalled();
+  });
+
+  it("reuses fresh matching-country verification but rechecks a different country's deferral", async () => {
+    const { database, methods } = statsDatabase(["restricted"]);
+    methods.getSettings.mockReturnValue({ "sources.youtubeRegionCode": "US" });
+    const fetcher = vi.fn(async () => Response.json({ items: [video("restricted", { contentDetails: { duration: "PT3M", regionRestriction: { blocked: ["US"] } } })] }));
+    const service = new YouTubeVideoStatsService(database, { apiKey: "test-key", fetcher });
+    const cache = await service.checkAvailability({ youtubeVideoIds: ["restricted"] });
+    expect(cache.regionCode).toBe("US");
+    fetcher.mockClear();
+    expect(await service.refreshViewCounts({}, cache)).toMatchObject({ updatedVideos: 0, unavailableVideos: 1, batches: 0 });
+    expect(fetcher).not.toHaveBeenCalled();
+    methods.getSettings.mockReturnValue({ "sources.youtubeRegionCode": "JP" });
+    expect(await service.refreshViewCounts({}, cache)).toMatchObject({ updatedVideos: 1, unavailableVideos: 0, batches: 1 });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("checks new candidates in 50-video batches without writing to the database", async () => {
     const writes = vi.fn();
-    const database = new Proxy({}, { get: () => writes }) as DatabaseService;
+    const database = new Proxy({}, { get: (_target, property) => property === "getSettings" ? () => ({}) : writes }) as DatabaseService;
     const fetcher = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
       const url = new URL(String(input));
       expect(url.searchParams.get("fields")).toContain("regionRestriction");
@@ -118,7 +200,7 @@ describe("YouTube availability evidence", () => {
     () => Response.json({ error: "bad response" }),
     () => new Response("authorization failed", { status: 403 })
   ])("fails closed on malformed or failed API checks without changing the library", async (response) => {
-    const writes = vi.fn();const database = new Proxy({}, { get: () => writes }) as DatabaseService;
+    const writes = vi.fn();const database = new Proxy({}, { get: (_target, property) => property === "getSettings" ? () => ({}) : writes }) as DatabaseService;
     const service = new YouTubeVideoStatsService(database, { apiKey: "private-test-key", fetcher: async () => response() });
     await expect(service.checkAvailability({ youtubeVideoIds: ["requested"] })).rejects.toThrow("verification failed");
     expect(writes).not.toHaveBeenCalled();
@@ -153,7 +235,7 @@ describe("YouTube availability evidence", () => {
     const fetcher = vi.fn();const log = vi.fn();
     const service = new YouTubeVideoStatsService(database, { fetcher, log });
     const result = await service.refreshViewCounts({}, cache);
-    expect(fetcher).not.toHaveBeenCalled();expect(methods.getSettings).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();expect(methods.getSettings).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ requestedVideos: 2, updatedVideos: 2, batches: 0, fetchedAt: cache.checkedAt, failedBatches: 0 });
     expect(methods.upsertHololiveMusicVideoStats).toHaveBeenCalledWith(cache.stats);
     expect(methods.repairVerifiedHololiveMusicAudioMirrors).toHaveBeenCalledExactlyOnceWith(["first", "second"]);
@@ -181,7 +263,7 @@ describe("YouTube availability evidence", () => {
     const { database, methods } = statsDatabase(["not-public"]);const fetcher = vi.fn();
     const service = new YouTubeVideoStatsService(database, { fetcher });
     const result = await service.refreshViewCounts({}, cache);
-    expect(fetcher).not.toHaveBeenCalled();expect(methods.getSettings).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();expect(methods.getSettings).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ updatedVideos: 0, unavailableVideos: 1, batches: 0, failedBatches: 0 });
     expect(methods.deferHololiveMusicVideo).toHaveBeenCalledWith({
       youtubeVideoId: "not-public", reason: cache.deferredVideos[0].reason, createBackup: true

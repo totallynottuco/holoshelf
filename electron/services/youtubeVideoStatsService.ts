@@ -59,6 +59,8 @@ export interface YouTubeVerifiedVideoStats {
 
 export interface YouTubeVideoAvailabilityCheckResult {
   checkedAt: string;
+  /** Null/omitted means globally playable somewhere, rather than checked for one country. */
+  regionCode?: string | null;
   requestedVideos: number;
   availableVideoIds: string[];
   deferredVideos: Array<{ youtubeVideoId: string; reason: string }>;
@@ -247,16 +249,17 @@ export class YouTubeVideoStatsService {
   }): Promise<YouTubeVideoAvailabilityCheckResult> {
     const videoIds = [...new Set(input.youtubeVideoIds.map((id) => id.trim()).filter(Boolean))];
     const checkedAt = new Date().toISOString();
+    const regionCode = this.readRegionCode(input.regionCode);
     if (videoIds.length === 0) {
-      return { checkedAt, requestedVideos: 0, availableVideoIds: [], deferredVideos: [], unavailableVideos: [], stats: [] };
+      return { checkedAt, regionCode, requestedVideos: 0, availableVideoIds: [], deferredVideos: [], unavailableVideos: [], stats: [] };
     }
     const apiKey = await this.readApiKey();
     try {
       const results = await mapConcurrent(this.chunk(videoIds, YOUTUBE_VIDEO_STATS_BATCH_SIZE), this.concurrency,
-        (batch) => this.fetchBatch(batch, apiKey, checkedAt, input.regionCode));
+        (batch) => this.fetchBatch(batch, apiKey, checkedAt, regionCode));
       const stats = results.flatMap((result) => result.stats);
       return {
-        checkedAt, requestedVideos: videoIds.length, availableVideoIds: stats.map((stat) => stat.youtubeVideoId), stats,
+        checkedAt, regionCode, requestedVideos: videoIds.length, availableVideoIds: stats.map((stat) => stat.youtubeVideoId), stats,
         deferredVideos: results.flatMap((result) => result.deferredVideos),
         unavailableVideos: results.flatMap((result) => result.unavailableVideos)
       };
@@ -272,11 +275,13 @@ export class YouTubeVideoStatsService {
     limit?: number | null;
   } = {}, verifiedAvailability?: YouTubeVideoAvailabilityCheckResult | null): Promise<HololiveMusicVideoStatsRefreshResult> {
     const videoIds = this.database.listHololiveMusicVideoIdsForStats(input);
+    const regionCode = this.readRegionCode();
     const now = Date.now();
     const verifiedAt = verifiedAvailability ? Date.parse(verifiedAvailability.checkedAt) : Number.NaN;
     // Only reuse fresh responses supplied by this run's pre-import verification.
     // Stored library statistics are never evidence that a video is still available.
-    const cache = Number.isFinite(verifiedAt) && now - verifiedAt <= 10 * 60_000 && verifiedAt - now <= 60_000
+    const cacheRegion = verifiedAvailability?.regionCode?.trim().toUpperCase() || null;
+    const cache = cacheRegion === regionCode && Number.isFinite(verifiedAt) && now - verifiedAt <= 10 * 60_000 && verifiedAt - now <= 60_000
       ? verifiedAvailability : null;
     const fetchedAt = cache?.checkedAt ?? new Date(now).toISOString();
 
@@ -364,7 +369,7 @@ export class YouTubeVideoStatsService {
     for (const group of this.chunk(batches, this.concurrency)) {
       const results = await mapConcurrent(group, this.concurrency, async (batch) => {
         try {
-          return await this.fetchBatch(batch, apiKey, fetchedAt);
+          return await this.fetchBatch(batch, apiKey, fetchedAt, regionCode);
         } catch (error) {
           failedBatches += 1;
           const reason = (error instanceof Error ? error.message : "Unknown YouTube stats failure")
@@ -424,7 +429,7 @@ export class YouTubeVideoStatsService {
 
     const fetchedAt = new Date().toISOString();
     const item = await this.fetchVideoMetadata(youtubeVideoId, apiKey);
-    const availability = classifyYouTubeVideoAvailability(item);
+    const availability = classifyYouTubeVideoAvailability(item, this.readRegionCode());
     if (availability.state !== "ready") {
       throw new YouTubeVideoNotReadyError(availability.state, availability.reason!);
     }
@@ -610,7 +615,16 @@ export class YouTubeVideoStatsService {
       return this.apiKeyOverride;
     }
 
-    return this.database.getSettings()["sources.youtubeApiKey"]?.trim() || null;
+    return this.database.getSettings?.()?.["sources.youtubeApiKey"]?.trim() || null;
+  }
+
+  private readRegionCode(override?: string | null): string | null {
+    const value = override !== undefined ? override : this.database.getSettings?.()?.["sources.youtubeRegionCode"];
+    const regionCode = value?.trim().toUpperCase() || null;
+    if (regionCode && !ISO_COUNTRY_CODES.has(regionCode)) {
+      throw new Error("YouTube playback region must be a two-letter country code, such as US.");
+    }
+    return regionCode;
   }
 
   private chunk<T>(items: T[], size: number): T[][] {

@@ -811,6 +811,69 @@ describe("mergeBundledOfficialData", () => {
     ]);
   });
 
+  it("keeps a local availability hold when a global catalog includes the video until a local check restores it", async () => {
+    const user = await createTempDatabase("holoshelf-official-region-hold-");
+    const seedDirectory = await createSeedDirectory("2026-11-03");
+    user.database.importHolodexMusicArtifacts(createBundle([
+      { youtubeVideoId: "official-kept", title: "Earlier official title", songName: "Updated Official Song" }
+    ]));
+    user.database.setHololiveMusicMarker({ youtubeVideoId: "official-kept", marker: "favorite" });
+    user.database.deferHololiveMusicVideo({ youtubeVideoId: "official-kept", reason: "Blocked in US", createBackup: false });
+    const markers = user.database.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key");
+    const merge = () => mergeBundledOfficialData({ database: user.database, isPackaged: true,
+      paths: { dataDirectory: user.dataDirectory, hololiveImageDirectory: user.hololiveImageDirectory, seedDirectory } });
+
+    expect((await merge()).status).toBe("merged");
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["official-kept"] })).toEqual([]);
+    expect(user.database.select("SELECT title, official_catalog_active FROM hololive_music_videos WHERE youtube_video_id = 'official-kept'")).toEqual([
+      { title: "Updated Official Title", official_catalog_active: 0 }
+    ]);
+    expect(user.database.getSettings()["internal.musicAvailabilityDeferred.official-kept"]).toBe("1");
+    expect(user.database.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key")).toEqual(markers);
+    expect(user.database.select("SELECT * FROM hololive_music_exclusions")).toEqual([]);
+
+    expect(user.database.restoreHololiveMusicVideoAvailability("official-kept")).toBe(true);
+    expect(user.database.getSettings()["internal.musicAvailabilityDeferred.official-kept"]).toBeUndefined();
+    fs.writeFileSync(path.join(seedDirectory, "official-data.json"), JSON.stringify({ schema: 1, version: "2026-11-04" }));
+    expect((await merge()).status).toBe("merged");
+    expect(user.database.listHololiveMusicRows({ youtubeVideoIds: ["official-kept"] })).toMatchObject([
+      { youtubeVideoId: "official-kept", marker: "favorite" }
+    ]);
+  });
+
+  it("preserves absent deferred videos and retry metadata without requiring personal references", async () => {
+    const user = await createTempDatabase("holoshelf-official-missing-deferred-");
+    const seedDirectory = await createSeedDirectory("2026-11-03");
+    user.database.importHolodexMusicArtifacts(createBundle([
+      { youtubeVideoId: "deferred-missing", title: "Pending premiere", songName: "Pending premiere" },
+      { youtubeVideoId: "deferred-saved", title: "Saved unavailable song", songName: "Saved unavailable song" },
+      { youtubeVideoId: "prunable-old", title: "Obsolete ordinary row", songName: "Obsolete ordinary row" }
+    ]));
+    user.database.setHololiveMusicMarker({ youtubeVideoId: "deferred-saved", marker: "favorite" });
+    for (const id of ["deferred-missing", "deferred-saved"]) {
+      user.database.deferHololiveMusicVideo({ youtubeVideoId: id, reason: "Not available yet", createBackup: false });
+    }
+    user.database.run(`INSERT INTO hololive_music_exclusions (youtube_video_id,title_snapshot,source_url_snapshot,created_at)
+      VALUES ('manual-exclusion','Explicitly removed version','https://youtu.be/manual-exclusion','2026-11-01T00:00:00.000Z')`);
+    const details = user.database.select("SELECT * FROM hololive_music_detail_cache WHERE youtube_video_id LIKE 'deferred-%' ORDER BY youtube_video_id");
+    const markers = user.database.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key");
+    const exclusions = user.database.select("SELECT * FROM hololive_music_exclusions ORDER BY youtube_video_id");
+
+    const result = await mergeBundledOfficialData({ database: user.database, isPackaged: true,
+      paths: { dataDirectory: user.dataDirectory, hololiveImageDirectory: user.hololiveImageDirectory, seedDirectory } });
+    expect(result).toMatchObject({ status: "merged", preservedMissingRows: 2, prunedMissingRows: 1 });
+    expect(user.database.select("SELECT youtube_video_id, official_catalog_active FROM hololive_music_videos WHERE youtube_video_id LIKE 'deferred-%' ORDER BY youtube_video_id")).toEqual([
+      { youtube_video_id: "deferred-missing", official_catalog_active: 0 },
+      { youtube_video_id: "deferred-saved", official_catalog_active: 0 }
+    ]);
+    expect(user.database.select("SELECT * FROM hololive_music_detail_cache WHERE youtube_video_id LIKE 'deferred-%' ORDER BY youtube_video_id")).toEqual(details);
+    expect(user.database.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key")).toEqual(markers);
+    expect(user.database.select("SELECT * FROM hololive_music_exclusions ORDER BY youtube_video_id")).toEqual(exclusions);
+    expect(user.database.getSettings()["internal.musicAvailabilityDeferred.deferred-missing"]).toBe("1");
+    expect(user.database.getSettings()["internal.musicAvailabilityDeferred.deferred-saved"]).toBe("1");
+    expect(user.database.select("SELECT * FROM hololive_music_videos WHERE youtube_video_id = 'prunable-old'")).toEqual([]);
+  });
+
   it("skips packaged merge when the user database already has the bundled official data version", async () => {
     const user = await createTempDatabase("holoshelf-official-current-");
     const seedDirectory = await createSeedDirectory("2026-06-30");

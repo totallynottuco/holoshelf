@@ -7,6 +7,7 @@ import type { DatabaseService } from "./database";
 export const OFFICIAL_DATA_VERSION_SETTING = "hololive.officialDataVersion";
 export const OFFICIAL_DATA_MERGED_AT_SETTING = "hololive.officialDataMergedAt";
 export const OFFICIAL_DATA_MERGE_SUMMARY_SETTING = "hololive.officialDataMergeSummary";
+const MUSIC_AVAILABILITY_DEFERRED_PREFIX = "internal.musicAvailabilityDeferred.";
 
 interface OfficialDataManifest {
   version?: unknown;
@@ -389,10 +390,11 @@ function pruneMissingOfficialMusicRows(
   officialYoutubeVideoIds: Set<string>
 ): Pick<OfficialDataMergeResult, "prunedMissingRows" | "preservedMissingRows"> {
   const rows = database.select<MissingMusicRow>(
-    `SELECT v.youtube_video_id, v.item_id, v.canonical_performance_key
+    `SELECT v.youtube_video_id, v.item_id, v.canonical_performance_key,
+            EXISTS (SELECT 1 FROM settings s WHERE s.key = ? || v.youtube_video_id) AS availability_deferred
      FROM hololive_music_videos v
      WHERE COALESCE(v.source_kind, 'official') = 'official'
-     ORDER BY v.youtube_video_id`
+     ORDER BY v.youtube_video_id`, [MUSIC_AVAILABILITY_DEFERRED_PREFIX]
   );
   const missingRows = rows.filter((row) => !officialYoutubeVideoIds.has(row.youtube_video_id));
 
@@ -404,7 +406,7 @@ function pruneMissingOfficialMusicRows(
   let preservedMissingRows = 0;
 
   for (const row of missingRows) {
-    if (hasUserOwnedMusicReferences(database, row)) {
+    if (row.availability_deferred === 1 || hasUserOwnedMusicReferences(database, row)) {
       deactivateOfficialMusicRow(database, row);
       preservedMissingRows += 1;
       continue;
@@ -618,6 +620,12 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         statsRows: upsertOfficialStats(options.database, statsRows),
         imageCacheRows: upsertRows(options.database, "hololive_image_cache", imageCacheRows, ["idol_id", "kind"])
       };
+      // A global catalog cannot override a failed local playback/region check.
+      // Only a fresh local YouTube verification clears these retryable holds.
+      options.database.run(`UPDATE hololive_music_videos SET official_catalog_active = 0
+        WHERE COALESCE(source_kind, 'official') = 'official'
+          AND EXISTS (SELECT 1 FROM settings s WHERE s.key = ? || hololive_music_videos.youtube_video_id)`,
+      [MUSIC_AVAILABILITY_DEFERRED_PREFIX]);
       options.database.repairHololiveMusicClassifications();
       // Only replay new mirror mappings explicitly supplied by this trusted catalog.
       // An older local report is not current availability evidence during ordinary startup.
