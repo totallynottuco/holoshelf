@@ -590,6 +590,14 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
     };
 
     options.database.transaction(() => {
+      // Read the installed recording's old key before the incoming catalog replaces it.
+      for (const row of musicRows) {
+        if (row.topic_id === "Original_Song" || row.topic_id === "Music_Cover") {
+          options.database.preserveHololiveMusicRecordingMarker(
+            String(row.youtube_video_id), row.topic_id, String(row.canonical_performance_key ?? "")
+          );
+        }
+      }
       counts = {
         idols: upsertRows(options.database, "hololive_idols", idolRows, ["id"]),
         channels: upsertRows(options.database, "hololive_channels", channelRows, ["id"]),

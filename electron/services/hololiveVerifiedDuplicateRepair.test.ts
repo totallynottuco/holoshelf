@@ -305,3 +305,67 @@ describe("recording compatibility for stored Topic duplicate repair", () => {
     expect(db.select("SELECT kept_youtube_video_id FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id = ?", [MIO_TOPIC])).toEqual([{ kept_youtube_video_id: MIO_DIRECT }]);
   });
 });
+
+describe("separate identity for multi-song recordings", () => {
+  it("shows both Mio recordings in raw and deduplicated profile lists with stable identity across song order", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle());
+    const singleKey = db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].canonicalPerformanceKey;
+    expect(singleKey).not.toContain(":recording:");
+    expect(db.listHololiveMusicRows({ dedupeCanonicalPerformance: true }).map(row => row.youtubeVideoId).sort()).toEqual([MIO_TOPIC, MIO_DIRECT].sort());
+    const profileItems = db.getHololiveIdolProfile("ookami-mio").mediaGroups.find(group => group.id === "original-songs")!.items;
+    expect(profileItems.map(item => item.id).sort()).toEqual([MIO_TOPIC, MIO_DIRECT].sort());
+    expect(profileItems.find(item => item.id === MIO_DIRECT)?.title).toBe("わんわんわおーん / さしみお feat.スバおか");
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].canonicalPerformanceKey).toBe(`Original_Song:recording:${MIO_DIRECT}`);
+    db.importHolodexMusicArtifacts(mioBundle(397, [SASHIMIO, BOWWOW]));
+    db.repairHololiveMusicClassifications();
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].canonicalPerformanceKey).toBe(singleKey);
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].canonicalPerformanceKey).toBe(`Original_Song:recording:${MIO_DIRECT}`);
+    expect(db.getHololiveIdolProfile("ookami-mio").mediaGroups.find(group => group.id === "original-songs")!.items).toHaveLength(2);
+  });
+
+  it("keeps Favorite state and positions independent when either recording is rated or refreshed", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle());
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_TOPIC, marker: "favorite" });
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].marker).toBeNull();
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_DIRECT, marker: "favorite" });
+    const singleKey = db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].canonicalPerformanceKey;
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 3 WHERE marker_key IN (?, ?)", [singleKey, `video:${MIO_TOPIC}`]);
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 17 WHERE marker_key IN (?, ?)", [`Original_Song:recording:${MIO_DIRECT}`, `video:${MIO_DIRECT}`]);
+    const markers = db.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key");
+    db.importHolodexMusicArtifacts(mioBundle(397, [SASHIMIO, BOWWOW]));
+    expect(db.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key")).toEqual(markers);
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_TOPIC, marker: "dislike" });
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].marker).toBe("favorite");
+    expect(db.select("SELECT favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`Original_Song:recording:${MIO_DIRECT}`])).toEqual([{ favorite_position: 17 }]);
+    expect(db.getHololiveMusicPlayerData().playlists.find(playlist => playlist.systemId === "favorites")?.items?.map(item => item.youtubeVideoId)).toEqual([MIO_DIRECT]);
+  });
+
+  it("migrates explicit video Favorite state and order without erasing shared legacy marker rows", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle());
+    const legacyKey = db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].canonicalPerformanceKey;
+    db.run("UPDATE hololive_music_videos SET canonical_performance_key = ? WHERE youtube_video_id = ?", [legacyKey, MIO_DIRECT]);
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_TOPIC, marker: "favorite" });
+    db.run("UPDATE hololive_music_marker_keys SET favorite_position = 17 WHERE marker_key = ?", [`video:${MIO_DIRECT}`]);
+    const previousMarkers = db.select("SELECT * FROM hololive_music_marker_keys ORDER BY marker_key");
+    db.repairHololiveMusicClassifications();
+    expect(db.select("SELECT marker, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [`Original_Song:recording:${MIO_DIRECT}`])).toEqual([{ marker: "favorite", favorite_position: 17 }]);
+    expect(db.select("SELECT * FROM hololive_music_marker_keys WHERE marker_key != ? ORDER BY marker_key", [`Original_Song:recording:${MIO_DIRECT}`])).toEqual(previousMarkers);
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_TOPIC, marker: "like" });
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].marker).toBe("favorite");
+  });
+
+  it("does not copy an ambiguous shared single-track Favorite to a multi-song recording without a video alias", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(mioBundle());
+    db.setHololiveMusicMarker({ youtubeVideoId: MIO_TOPIC, marker: "favorite" });
+    const legacyKey = db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].canonicalPerformanceKey;
+    db.run("UPDATE hololive_music_videos SET canonical_performance_key = ? WHERE youtube_video_id = ?", [legacyKey, MIO_DIRECT]);
+    db.repairHololiveMusicClassifications();
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_TOPIC] })[0].marker).toBe("favorite");
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MIO_DIRECT] })[0].marker).toBeNull();
+    expect(db.select("SELECT * FROM hololive_music_marker_keys WHERE marker_key = ?", [`Original_Song:recording:${MIO_DIRECT}`])).toEqual([]);
+  });
+});

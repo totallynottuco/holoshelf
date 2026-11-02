@@ -540,6 +540,73 @@ describe("mergeBundledOfficialData", () => {
     });
   });
 
+  it.each([false, true])("preserves canonical-only favorites when merging a multi-song identity without copying a shared song marker: shared=%s", async (sharedCanonical) => {
+    const user = await createTempDatabase("holoshelf-official-recording-marker-");
+    const seedDirectory = await createSeedDirectory("2026-11-02T080000Z");
+    const singleId = "4fJuqc_2Y_I";
+    const recordingId = "cr9iLdXK9ik";
+    const firstSong = "わんわん!わおーん / Bowwow Ahwoooooo";
+    const secondSong = "さしみお (feat. スバおか) / Sashimio (feat. SubaOka)";
+    const recordingTitle = "わんわんわおーん / さしみお feat.スバおか";
+    const input = [
+      { youtubeVideoId: singleId, title: "わんわん！わおーん", songName: firstSong,
+        channelId: "UCp-5t9SrOQwXMU7iIjQfARg", channelName: "Mio Channel 大神ミオ" },
+      { youtubeVideoId: recordingId, title: recordingTitle, songName: secondSong,
+        channelId: "UCp-5t9SrOQwXMU7iIjQfARg", channelName: "Mio Channel 大神ミオ" }
+    ];
+    const legacy = createBundle(input);
+    legacy.detailCache[singleId].duration = 193;
+    legacy.detailCache[singleId].providedToYoutube = true;
+    legacy.detailCache[singleId].originalChannelId = "UCHYTTba2SyK82DuoFh1FLDg";
+    legacy.detailCache[recordingId].duration = 397;
+    user.database.importHolodexMusicArtifacts(legacy);
+    const oldKeys = user.database.select<{ youtube_video_id: string; canonical_performance_key: string }>(
+      "SELECT youtube_video_id,canonical_performance_key FROM hololive_music_videos WHERE youtube_video_id IN (?,?)", [singleId, recordingId]
+    );
+    const singleKey = oldKeys.find(row => row.youtube_video_id === singleId)!.canonical_performance_key;
+    const recordingOldKey = oldKeys.find(row => row.youtube_video_id === recordingId)!.canonical_performance_key;
+    expect(singleKey).not.toBe(recordingOldKey);
+    // Simulate the historical key collision caused by Holodex reversing song order.
+    if (sharedCanonical) user.database.run("UPDATE hololive_music_videos SET canonical_performance_key=? WHERE youtube_video_id=?", [singleKey, recordingId]);
+    const favoriteOldKey = sharedCanonical ? singleKey : recordingOldKey;
+    user.database.run(
+      `INSERT INTO hololive_music_marker_keys (marker_key,marker,created_at,updated_at,favorite_position)
+       VALUES (?,'favorite','2026-10-30T12:00:00.000Z','2026-10-31T12:00:00.000Z',17)`, [favoriteOldKey]
+    );
+    const originalMarker = user.database.select("SELECT * FROM hololive_music_marker_keys");
+    expect(originalMarker).toHaveLength(1);
+    expect(user.database.select("SELECT * FROM hololive_music_marker_keys WHERE marker_key LIKE 'video:%'")).toEqual([]);
+
+    const current = createBundle(input);
+    current.detailCache[singleId] = legacy.detailCache[singleId];
+    current.detailCache[recordingId].duration = 397;
+    current.detailCache[recordingId].songNames = [firstSong, secondSong];
+    const seedDatabase = new DatabaseService(path.join(seedDirectory, "holoshelf-template.sqlite"));
+    await seedDatabase.init();
+    seedDatabase.importHolodexMusicArtifacts(current);
+    const recordingKey = `Original_Song:recording:${recordingId}`;
+    expect(seedDatabase.listHololiveMusicRows({ youtubeVideoIds: [recordingId] })[0].canonicalPerformanceKey).toBe(recordingKey);
+
+    await mergeBundledOfficialData({
+      database: user.database,
+      paths: { dataDirectory: user.dataDirectory, hololiveImageDirectory: user.hololiveImageDirectory, seedDirectory },
+      isPackaged: true, now: () => "2026-11-02T08:00:00.000Z"
+    });
+    const merged = user.database.listHololiveMusicRows({ youtubeVideoIds: [singleId, recordingId], dedupeCanonicalPerformance: true });
+    expect(merged).toHaveLength(2);
+    expect(merged.find(row => row.youtubeVideoId === singleId)?.marker).toBe(sharedCanonical ? "favorite" : null);
+    expect(merged.find(row => row.youtubeVideoId === recordingId)).toMatchObject({
+      canonicalPerformanceKey: recordingKey, marker: sharedCanonical ? null : "favorite"
+    });
+    expect(user.database.select("SELECT * FROM hololive_music_marker_keys WHERE marker_key=?", [favoriteOldKey])).toEqual(originalMarker);
+    const newMarker = user.database.select("SELECT marker,favorite_position FROM hololive_music_marker_keys WHERE marker_key=?", [recordingKey]);
+    expect(newMarker).toEqual(sharedCanonical ? [] : [{ marker: "favorite", favorite_position: 17 }]);
+    expect(user.database.select("SELECT * FROM hololive_music_marker_keys WHERE marker_key LIKE 'video:%'")).toEqual([]);
+    const profileSongs = user.database.getHololiveIdolProfile("ookami-mio").mediaGroups.find(group => group.id === "original-songs")!.items;
+    expect(profileSongs.find(row => row.id === singleId)).toBeDefined();
+    expect(profileSongs.find(row => row.id === recordingId)).toMatchObject({ title: recordingTitle, marker: sharedCanonical ? null : "favorite" });
+  });
+
   it.each([true, false])("trusts an incoming audio-to-MV mapping only when its representative is in the seed: %s", async (includeMv) => {
     const user = await createTempDatabase("holoshelf-official-audio-mirror-");
     const seedDirectory = await createSeedDirectory("2026-11-02T020000Z");

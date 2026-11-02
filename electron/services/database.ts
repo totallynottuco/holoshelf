@@ -2604,6 +2604,34 @@ export class DatabaseService {
     return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
   }
 
+  preserveHololiveMusicRecordingMarker(youtubeVideoId: string, topicId: HololiveMusicTopic, nextKey: string): void {
+    if (!this.isHololiveMusicRecordingKey(nextKey, topicId)) return;
+    type MarkerRow = { marker: HololiveMusicMarker; created_at: string; updated_at: string; favorite_position: number | null };
+    let marker = this.select<MarkerRow>(
+      "SELECT marker, created_at, updated_at, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?",
+      [`video:${youtubeVideoId}`]
+    )[0];
+    if (!marker) {
+      const previousKey = this.select<{ canonical_performance_key: string }>(
+        "SELECT canonical_performance_key FROM hololive_music_videos WHERE youtube_video_id = ?", [youtubeVideoId]
+      )[0]?.canonical_performance_key;
+      const shared = previousKey && this.select(
+        "SELECT 1 FROM hololive_music_videos WHERE canonical_performance_key = ? AND youtube_video_id != ? LIMIT 1",
+        [previousKey, youtubeVideoId]
+      ).length > 0;
+      if (previousKey && !shared) {
+        marker = this.select<MarkerRow>(
+          "SELECT marker, created_at, updated_at, favorite_position FROM hololive_music_marker_keys WHERE marker_key = ?", [previousKey]
+        )[0];
+      }
+    }
+    if (!marker) return;
+    // Prefer explicit video state; a shared legacy song marker cannot tell us which
+    // recording was rated. Keep those historical rows without copying ambiguous state.
+    this.run(`INSERT OR IGNORE INTO hololive_music_marker_keys (marker_key, marker, created_at, updated_at, favorite_position)
+      VALUES (?, ?, ?, ?, ?)`, [nextKey, marker.marker, marker.created_at, marker.updated_at, marker.favorite_position]);
+  }
+
   private deleteHololiveMusicMarkersForKeys(markerKeys: string[]): void {
     const keys = [...new Set(markerKeys.map((key) => key.trim()).filter(Boolean))];
     if (keys.length === 0) {
@@ -5861,7 +5889,7 @@ export class DatabaseService {
           label: "Original Songs",
           items: originalSongs.map((row) => ({
             id: row.youtubeVideoId,
-            title: row.songName || row.title,
+            title: this.getHololiveProfileSongTitle(row),
             url: row.youtubeUrl,
             publishedAt: row.publishedAt,
             durationSeconds: row.durationSeconds,
@@ -5876,7 +5904,7 @@ export class DatabaseService {
           label: "Covers",
           items: covers.map((row) => ({
             id: row.youtubeVideoId,
-            title: row.songName || row.title,
+            title: this.getHololiveProfileSongTitle(row),
             url: row.youtubeUrl,
             publishedAt: row.publishedAt,
             durationSeconds: row.durationSeconds,
@@ -5891,7 +5919,7 @@ export class DatabaseService {
           label: "Featured In",
           items: featured.map((row) => ({
             id: row.youtubeVideoId,
-            title: row.songName || row.title,
+            title: this.getHololiveProfileSongTitle(row),
             url: row.youtubeUrl,
             publishedAt: row.publishedAt,
             durationSeconds: row.durationSeconds,
@@ -10339,12 +10367,21 @@ export class DatabaseService {
   }
 
   private buildHololiveProfileSongDedupeKey(row: HololiveMusicRow): string {
+    if (this.isHololiveMusicRecordingKey(row.canonicalPerformanceKey, row.topicId)) return row.canonicalPerformanceKey;
     const rawName = (row.songName || row.title || "").trim();
     const withoutVersionSegments = rawName
       .replace(/[\(\[\u3010][^\)\]\u3011]*(?:ft\.?|feat\.?|featuring|with|3d\s*live|live\s*ver|live from|acoustic|piano|re:?\s*arrange|ver\.?|version)[^\)\]\u3011]*[\)\]\u3011]/giu, " ")
       .replace(/\b(?:ft\.?|feat\.?|featuring|with)\b.+$/iu, " ");
     const primaryTitle = withoutVersionSegments.split(/\s+\/\s+|\//u, 1)[0]?.trim() ?? "";
     return buildNormalizedHololiveMusicKey(primaryTitle) || row.canonicalSongKey || buildNormalizedHololiveMusicKey(row.title);
+  }
+
+  private isHololiveMusicRecordingKey(key: string | null | undefined, topicId: HololiveMusicTopic): boolean {
+    return Boolean(key?.startsWith(`${topicId}:recording:`));
+  }
+
+  private getHololiveProfileSongTitle(row: HololiveMusicRow): string {
+    return this.isHololiveMusicRecordingKey(row.canonicalPerformanceKey, row.topicId) ? row.title : row.songName || row.title;
   }
 
   private compareHololiveMusicProfileRow(left: HololiveMusicRow, right: HololiveMusicRow): number {
@@ -11766,6 +11803,7 @@ export class DatabaseService {
     youtubeVideoId: string;
     title: string;
     songName?: string | null;
+    songNames?: readonly string[];
     topicId: HololiveMusicTopic;
     channelId: string;
     channelName?: string | null;
@@ -11845,7 +11883,8 @@ export class DatabaseService {
       [...rawFeaturedIdolIds, ...inferredGroupFeaturedIdolIds].filter((idolId) => !ownedIdolIdSet.has(idolId)),
       idolMetadata
     );
-    const canonicalPerformanceKey = buildHololiveMusicPerformanceKey({
+    const structuredSongKeys = new Set((input.songNames ?? []).map(songName => buildHololiveMusicSongKey({ songName })).filter(Boolean));
+    const canonicalPerformanceKey = structuredSongKeys.size > 1 ? `${input.topicId}:recording:${input.youtubeVideoId}` : buildHololiveMusicPerformanceKey({
       youtubeVideoId: input.youtubeVideoId,
       topicId: input.topicId,
       canonicalSongKey,
@@ -12110,6 +12149,7 @@ export class DatabaseService {
           youtubeVideoId: row.youtubeVideoId,
           title: row.title,
           songName,
+          songNames: detail.songNames,
           topicId: row.topicId,
           channelId: detail.channelId,
           channelName: row.channelName,
@@ -12121,6 +12161,7 @@ export class DatabaseService {
         channelContext,
         idolMetadata
       );
+      this.preserveHololiveMusicRecordingMarker(row.youtubeVideoId, row.topicId, classification.canonicalPerformanceKey);
       const sourceKind = this.getHololiveMusicSourceKindForIdols(
         [idolId, ...classification.ownedIdolIds, ...classification.featuredIdolIds, ...participantTags]
           .filter((idolId): idolId is string => Boolean(idolId)),
@@ -13854,6 +13895,7 @@ export class DatabaseService {
             youtubeVideoId: row.youtube_video_id,
             title: row.title,
             songName: row.song_name,
+            songNames: detail.songNames,
             topicId: row.topic_id,
             channelId: row.channel_id,
             channelName: row.channel_name,
@@ -13879,6 +13921,8 @@ export class DatabaseService {
         ) {
           continue;
         }
+
+        this.preserveHololiveMusicRecordingMarker(row.youtube_video_id, row.topic_id, classification.canonicalPerformanceKey);
 
         this.run(
           `UPDATE hololive_music_videos
