@@ -143,6 +143,7 @@ import {
   hasCompatibleHolodexTopicDuplicateDuration,
   hasCompatibleHololiveMusicRecording,
   isHololiveOfficialAudioMirror,
+  isHololiveOfficialPerformancePresentation,
   parseProvidedToYoutubeArtistCredits
 } from "../../src/modules/hololive/music/cleanup";
 import { EXCLUDED_HOLODEX_CHANNEL_IDS, isExcludedHolodexChannelId } from "../../src/modules/hololive/music/types";
@@ -1984,6 +1985,7 @@ export class DatabaseService {
       repairedRows += this.purgeCanonicalTopicDuplicateRows(runId);
       repairedRows += this.purgeCrossOwnerTopicDuplicateRows(runId);
       repairedRows += this.purgeCanonicalVariantDuplicateRows(runId);
+      repairedRows += this.purgeOfficialAudioMirrorRows(runId, verifiedVideoIds, true);
       repairedRows += this.purgeSupersededDirectUploadRows(runId);
       if (repairedRows > 0) {
         this.transferHololiveMusicMarkersFromDuplicateRemovals(runId, repairStartedAt, verifiedVideoIds);
@@ -2005,7 +2007,7 @@ export class DatabaseService {
     if (verifiedVideoIds.size < 2) return 0;
     let repairedRows = 0;
     // The narrow purge transfers only each verified pair's references and markers before deleting its mirror.
-    const repair = () => { repairedRows = this.purgeOfficialAudioMirrorRows(null, verifiedVideoIds); };
+    const repair = () => { repairedRows = this.purgeOfficialAudioMirrorRows(null, verifiedVideoIds, true); };
     if (this.inTransaction) repair();
     else this.transaction(repair);
     return repairedRows;
@@ -2102,7 +2104,7 @@ export class DatabaseService {
       canonicalDuplicateCount += this.purgeCrossOwnerTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCanonicalVariantDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeSupersededDirectUploadRows(runId);
-      canonicalDuplicateCount += this.purgeOfficialAudioMirrorRows(runId, verifiedVideoIds);
+      canonicalDuplicateCount += this.purgeOfficialAudioMirrorRows(runId, verifiedVideoIds, true);
       matchedDuplicateCount += canonicalDuplicateCount;
       const survivingIds = new Set(this.select<{ youtube_video_id: string }>(
         "SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(official_catalog_active, 1) = 1"
@@ -12429,12 +12431,13 @@ export class DatabaseService {
     }
   }
 
-  private purgeOfficialAudioMirrorRows(runId: string | null, verifiedVideoIds: ReadonlySet<string>): number {
+  private purgeOfficialAudioMirrorRows(runId: string | null, verifiedVideoIds: ReadonlySet<string>, includePerformances = false): number {
     if (verifiedVideoIds.size < 2) return 0;
     const rows = this.select<HololiveStoredMusicDuplicateRow>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
               v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds,
-              v.published_at, v.participants_json, v.owned_idol_ids_json, v.featured_idol_ids_json, stats.view_count, details.song_names_json
+              v.published_at, v.participants_json, v.owned_idol_ids_json, v.featured_idol_ids_json, stats.view_count, details.song_names_json,
+              EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id) AS excluded
        FROM hololive_music_videos v LEFT JOIN hololive_music_video_stats stats USING(youtube_video_id)
        LEFT JOIN hololive_music_detail_cache details ON details.youtube_video_id = v.youtube_video_id
        WHERE COALESCE(v.source_kind, 'official') != 'user' AND COALESCE(v.official_catalog_active, 1) = 1
@@ -12442,12 +12445,13 @@ export class DatabaseService {
     ).filter((row) => verifiedVideoIds.has(row.youtube_video_id));
     const groups = new Map<string, HololiveStoredMusicDuplicateRow[]>();
     for (const row of rows) {
-      const key = JSON.stringify([row.channel_id, row.topic_id, row.canonical_song_key]);
+      const key = JSON.stringify([row.channel_id, row.topic_id]);
       groups.set(key, [...(groups.get(key) ?? []), row]);
     }
     const candidate = (row: HololiveStoredMusicDuplicateRow) => ({
       youtubeVideoId: row.youtube_video_id, title: row.title, songName: row.song_name,
       topicId: row.topic_id, channelId: row.channel_id, providedToYoutube: Boolean(row.provided_to_youtube),
+      originalChannelId: row.original_channel_id,
       durationSeconds: row.duration_seconds, songNames: this.parseJsonStringArray(row.song_names_json),
       participantIds: [...this.getStoredHololiveDuplicateParticipantSignals(row)]
     });
@@ -12455,7 +12459,10 @@ export class DatabaseService {
     for (const group of groups.values()) {
       if (group.length < 2) continue;
       for (const audio of group) {
-        const kept = group.filter((row) => isHololiveOfficialAudioMirror(candidate(audio), candidate(row)))
+        if (!/\bofficial[\s_-]+audio\b/iu.test(audio.title) &&
+            !(includePerformances && /\b(?:performance|dance)\s+video\b/iu.test(audio.title))) continue;
+        const kept = group.filter((row) => row.excluded !== 1 && (isHololiveOfficialAudioMirror(candidate(audio), candidate(row)) ||
+          (includePerformances && isHololiveOfficialPerformancePresentation(candidate(audio), candidate(row)))))
           .sort((left, right) => this.compareHololiveMusicDisplayRow(right, left))[0];
         if (!kept) continue;
         this.transferHololiveMusicReferencesBetweenVideos(audio.youtube_video_id, kept.youtube_video_id);
@@ -12463,7 +12470,8 @@ export class DatabaseService {
         this.retireVerifiedHololiveMusicAudioMirror(audio.youtube_video_id, kept.youtube_video_id);
         removals.push({
           removedYoutubeVideoId: audio.youtube_video_id, removedTitle: audio.title,
-          keptYoutubeVideoId: kept.youtube_video_id, keptTitle: kept.title, reason: "official_audio_duplicate_of_mv",
+          keptYoutubeVideoId: kept.youtube_video_id, keptTitle: kept.title,
+          reason: isHololiveOfficialAudioMirror(candidate(audio), candidate(kept)) ? "official_audio_duplicate_of_mv" : "canonical_variant_duplicate_of_full",
           songName: kept.song_name || kept.title, removedPublishedAt: audio.published_at || "", keptPublishedAt: kept.published_at || ""
         });
       }

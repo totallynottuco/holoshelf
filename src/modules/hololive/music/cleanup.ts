@@ -522,6 +522,7 @@ export interface HololiveOfficialAudioMirrorCandidate {
   songName?: string | null;
   topicId: string;
   channelId?: string | null;
+  originalChannelId?: string | null;
   providedToYoutube?: boolean | number | null;
   durationSeconds?: number | null;
   songNames?: readonly string[];
@@ -579,6 +580,39 @@ export function isHololiveOfficialAudioMirror(
     { durationSeconds: audio.durationSeconds, songNames: audio.songNames ?? [audio.songName] },
     { durationSeconds: musicVideo.durationSeconds, songNames: musicVideo.songNames ?? [musicVideo.songName] }
   );
+}
+
+/** Prefer the artist's official MV to a studio performance/dance presentation. */
+export function isHololiveOfficialPerformancePresentation(
+  presentation: HololiveOfficialAudioMirrorCandidate,
+  musicVideo: HololiveOfficialAudioMirrorCandidate
+): boolean {
+  if (presentation.youtubeVideoId === musicVideo.youtubeVideoId || presentation.topicId !== "Original_Song" ||
+      musicVideo.topicId !== "Original_Song" || presentation.providedToYoutube || musicVideo.providedToYoutube ||
+      !presentation.channelId?.trim() || presentation.channelId.trim() !== musicVideo.channelId?.trim()) return false;
+  // Holodex sometimes attributes a third-party program to the credited artist.
+  // Those need a curated preference; same-artist metadata alone is not proof.
+  if ([presentation, musicVideo].some(row => row.originalChannelId?.trim() && row.originalChannelId.trim() !== row.channelId?.trim())) return false;
+  const format = /\b(?:performance|dance)\s+video\b/iu;
+  if (!format.test(presentation.title) || !/\bofficial[\s_-]+(?:music[\s_-]+)?(?:video|mv)\b/iu.test(musicVideo.title)) return false;
+  const text = (row: HololiveOfficialAudioMirrorCandidate) => normalizeText(`${row.title} ${row.songName ?? ""}`);
+  const presentationText = text(presentation).replace(format, "");
+  const mvText = text(musicVideo);
+  if (hasDistinctDirectRecordingSignal(presentationText) || hasDistinctDirectRecordingSignal(mvText) ||
+      directRecordingLanguageSignature(presentationText) !== directRecordingLanguageSignature(mvText)) return false;
+  const songKey = (row: HololiveOfficialAudioMirrorCandidate) => {
+    if ((row.songNames?.length ?? 0) > 1) return "";
+    const quoted = [...normalizeText(row.title).matchAll(/‘([^’]+)’|“([^”]+)”|「([^」]+)」|"([^"\n]+)"/gu)];
+    const names = [row.songName, ...(row.songNames ?? []), ...(quoted.length === 1 ? [quoted[0][1] ?? quoted[0][2] ?? quoted[0][3] ?? quoted[0][4]] : [])]
+      .filter((name): name is string => Boolean(name?.trim()));
+    const keys = new Set(names.map(songName => buildHololiveMusicSongKey({ songName })));
+    return keys.size === 1 ? [...keys][0] : "";
+  };
+  const key = songKey(presentation);
+  if (!key || key !== songKey(musicVideo)) return false;
+  const participants = (row: HololiveOfficialAudioMirrorCandidate) => [...new Set(row.participantIds ?? [])].sort().join("+");
+  return participants(presentation) === participants(musicVideo) &&
+    hasCompatibleHololiveMusicRecording(presentation, musicVideo);
 }
 
 function findOfficialAudioMirrorRemovals(

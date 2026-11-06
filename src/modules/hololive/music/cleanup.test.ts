@@ -5,10 +5,35 @@ import {
   cleanupCatalogRows,
   hasCompatibleHololiveMusicRecording,
   isHololiveOfficialAudioMirror,
+  isHololiveOfficialPerformancePresentation,
   normalizeVideoDetail,
   parseProvidedToYoutubeArtistCredits
 } from "./cleanup";
 import type { HolodexCatalogRow, HolodexVideoDetail, HolodexVideoRecord } from "./types";
+
+describe("official performance presentation preference", () => {
+  const mv = { youtubeVideoId: "3f0PTj1xrvw", title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)’ Official MV",
+    songName: "TRAUMA (Feat. Takanashi Kiara)", songNames: ["TRAUMA (Feat. Takanashi Kiara)"], topicId: "Original_Song",
+    channelId: "irise", durationSeconds: 172, participantIds: ["kiara"] };
+  const performance = { ...mv, youtubeVideoId: "3d1AbOhFUxE", title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)’ Performance Video",
+    songName: null, songNames: [], durationSeconds: 165 };
+  it("uses an unambiguous quoted title when song metadata is missing", () => {
+    expect(isHololiveOfficialPerformancePresentation(performance, mv)).toBe(true);
+    expect(isHololiveOfficialPerformancePresentation({ ...performance, youtubeVideoId: "futureUpload", title: performance.title.replace("TRAUMA", "New Song") },
+      { ...mv, title: mv.title.replace("TRAUMA", "New Song"), songName: "New Song (Feat. Takanashi Kiara)", songNames: [] })).toBe(true);
+  });
+  it.each(["Live", "Acoustic", "Piano", "Remix", "Rehearsal", "2026 ver.", "ライブ"])("preserves a distinct %s performance", variant => {
+    expect(isHololiveOfficialPerformancePresentation({ ...performance, title: `${performance.title} (${variant})` }, mv)).toBe(false);
+  });
+  it("requires matching artists, participants, song identity, and compatible complete recordings", () => {
+    for (const changed of [
+      { channelId: "other-artist" }, { originalChannelId: "third-party-program" }, { participantIds: ["irys"] },
+      { durationSeconds: null }, { durationSeconds: 400 }, { songNames: ["TRAUMA", "Other Song"] },
+      { title: "IRISÉ ‘Other Song’ Performance Video" }, { title: "IRISÉ ‘TRAUMA’ ‘Another Song’ Performance Video" },
+      { title: "TRAUMA Performance Video" }, { songName: "Conflicting metadata" }, { topicId: "Music_Cover" }
+    ]) expect(isHololiveOfficialPerformancePresentation({ ...performance, ...changed }, mv)).toBe(false);
+  });
+});
 
 function row(input: Partial<HolodexCatalogRow> & Pick<HolodexCatalogRow, "youtubeVideoId" | "title">): HolodexCatalogRow {
   return {

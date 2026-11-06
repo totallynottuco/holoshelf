@@ -77,6 +77,25 @@ function presentationBundle(): HolodexArtifactBundle {
 }
 
 describe("curated preferred song presentations", () => {
+  it("prefers the MV for new same-artist performance uploads without a curated ID", async () => {
+    for (const id of ["3d1AbOhFUxE", "futureVideo"]){
+      const { db } = await database();
+      const input = bundle([{ id, song: "TRAUMA (Feat. Takanashi Kiara)" }]);
+      input.rows.find(row => row.youtubeVideoId === id)!.title = "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)’ Performance Video";
+      input.detailCache[id].songNames = [];
+      input.detailCache[id].duration = 165;
+      db.importHolodexMusicArtifacts(input);
+      const playlist = savePersonalReferences(db, id);
+      track(db, id, "Saved performance notes", 8);
+      expect(db.repairVerifiedHololiveMusicAudioMirrors([id])).toBe(0);
+      expect(db.repairVerifiedHololiveMusicAudioMirrors([MV])).toBe(0);
+      expect(db.repairVerifiedHololiveMusicAudioMirrors([id, MV])).toBe(1);
+      expect(db.listHololiveMusicRows({ youtubeVideoIds: [id, MV] }).map(row => row.youtubeVideoId)).toEqual([MV]);
+      expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id=?", [playlist])).toEqual([{ youtube_video_id: MV }]);
+      expect(db.select(`SELECT t.notes,t.rating FROM tracked_entries t JOIN hololive_music_videos v ON t.item_id=v.item_id WHERE v.youtube_video_id=?`, [MV]))
+        .toEqual([{ notes: "Saved performance notes", rating: 8 }]);
+    }
+  });
   it("requires both videos verified before preferring the official MV to PLAY COLOR", async () => {
     const { db } = await database();
     db.importHolodexMusicArtifacts(presentationBundle());
