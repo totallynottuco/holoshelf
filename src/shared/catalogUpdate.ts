@@ -1,7 +1,8 @@
 export const CATALOG_REPOSITORY = "totallynottuco/holoshelf";
 export const CATALOG_MANIFEST_ASSET = "holoshelf-catalog.json";
-// Earlier clients rewrite recording identities and cannot preserve regional holds.
-export const CATALOG_MIN_APP_VERSION = "1.1.94";
+// Earlier clients also transfer broadcast-edit exclusions and can discard saved notes.
+// Publish the compatible app before sending the new variant replacement reports.
+export const CATALOG_MIN_APP_VERSION = "1.1.95";
 export const CATALOG_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const CATALOG_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 export const CATALOG_MAX_DATABASE_BYTES = 256 * 1024 * 1024;

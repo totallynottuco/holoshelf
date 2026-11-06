@@ -46,8 +46,8 @@ function fixture(next = manifest, body = compressed, appVersion = "1.1.90") {
 }
 
 describe("silent catalog updates", () => {
-  it.each(["1.1.90", "1.1.91", "1.1.92", "1.1.93"])("blocks new recording identities on legacy client %s before downloading or merging", async appVersion => {
-    expect(CATALOG_MIN_APP_VERSION).toBe("1.1.94");
+  it.each(["1.1.90", "1.1.91", "1.1.92", "1.1.93", "1.1.94"])("blocks catalogs requiring safe variant replacement on legacy client %s before downloading or merging", async appVersion => {
+    expect(CATALOG_MIN_APP_VERSION).toBe("1.1.95");
     const next = {...manifest, minAppVersion: CATALOG_MIN_APP_VERSION};
     const f = fixture(next, compressed, appVersion);
     expect(await f.service.checkForUpdates()).toBe("requires-app-update");
@@ -58,7 +58,7 @@ describe("silent catalog updates", () => {
   });
 
   it("allows the compatible client to receive the current recording-aware catalog silently", async () => {
-    const f = fixture({...manifest, minAppVersion: CATALOG_MIN_APP_VERSION}, compressed, "1.1.94");
+    const f = fixture({...manifest, minAppVersion: CATALOG_MIN_APP_VERSION}, compressed, "1.1.95");
     expect(await f.service.checkForUpdates()).toBe("merged");
     expect(f.fetcher).toHaveBeenCalledTimes(2);
     expect(f.merge).toHaveBeenCalledOnce();

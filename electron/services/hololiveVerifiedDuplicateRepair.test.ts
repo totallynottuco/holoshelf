@@ -114,7 +114,7 @@ describe("freshly verified official audio mirror repair", () => {
     const reopened = new DatabaseService(file, undefined, { persistWrites: false, createBackups: false });
     await reopened.init();
     expect(ids(reopened)).toHaveLength(2);
-    expect(reopened.getSettings()["internal.startupMaintenanceVersion"]).toBe("2");
+    expect(reopened.getSettings()["internal.startupMaintenanceVersion"]).toBe("3");
     expect(reopened.select("SELECT * FROM hololive_music_marker_keys")).toEqual(markers);
     expect(reopened.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlistId])).toEqual([{ youtube_video_id: AUDIO }]);
     expect(reopened.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: AUDIO }]);

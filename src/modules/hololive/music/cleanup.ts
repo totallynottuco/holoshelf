@@ -9,6 +9,7 @@ import {
   buildHolodexDuplicateOwnerKey,
   buildHololiveMusicSongKey,
   buildNormalizedHololiveMusicKey,
+  extractHololiveBroadcastSongTitle,
   normalizeHololiveMusicText
 } from "./classification";
 import { isExcludedHolodexChannelId } from "./types";
@@ -207,6 +208,8 @@ function hasLikelyChannelPrefix(segmentKey: string, context: DuplicateTitleConte
 }
 
 export function buildDuplicateTitleCore(title: string, context: DuplicateTitleContext = {}): string {
+  const broadcastSong = extractHololiveBroadcastSongTitle(title);
+  if (broadcastSong) return buildHololiveMusicSongKey({ songName: broadcastSong });
   const cleanedTitle = stripDuplicateSongContext(stripLeadingGenericSegment(normalizeText(title).trim()));
   const loweredTitle = cleanedTitle.toLowerCase();
 

@@ -129,6 +129,8 @@ import {
   buildHololiveMusicPerformanceKey,
   buildHololiveMusicSongKey,
   getHolodexEffectiveOwnerChannelId,
+  extractHololiveBroadcastSongTitle,
+  hasHololiveBroadcastEditMarker,
   hasHololiveLowPriorityLiveVersionMarker,
   hasHololiveLowPriorityVersionMarker,
   normalizeHololiveMusicText
@@ -346,7 +348,7 @@ interface HololiveBracketCandidateSelectionResult {
 }
 
 const STARTUP_MAINTENANCE_SETTING = "internal.startupMaintenanceVersion";
-const STARTUP_MAINTENANCE_VERSION = "2";
+const STARTUP_MAINTENANCE_VERSION = "3";
 const OFFICIAL_ROSTER_CLASSIFICATION_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(HOLOLIVE_IDOLS.map(({ id, displayName, generation, youtubeChannelId }) => (
     [id, displayName, generation, youtubeChannelId]
@@ -11804,6 +11806,7 @@ export class DatabaseService {
     title: string;
     songName?: string | null;
     songNames?: readonly string[];
+    description?: string;
     topicId: HololiveMusicTopic;
     channelId: string;
     channelName?: string | null;
@@ -11812,8 +11815,9 @@ export class DatabaseService {
     participants: StoredHololiveMusicParticipant[];
     fallbackIdolId?: string | null;
   }, channelContext: HololiveChannelContext, idolMetadata = this.getHololiveIdolMetadataMap()): HololiveMusicClassification {
-    const canonicalSongKey = input.songName?.trim()
-      ? buildHololiveMusicSongKey({ songName: input.songName, title: input.title })
+    const songName = input.songName?.trim() || extractHololiveBroadcastSongTitle(input.title, input.description);
+    const canonicalSongKey = songName
+      ? buildHololiveMusicSongKey({ songName, title: input.title })
       : buildDuplicateTitleCore(input.title, { channelName: input.channelName });
     const effectiveOwnerChannelId = getHolodexEffectiveOwnerChannelId({
       channelId: input.channelId,
@@ -12097,7 +12101,7 @@ export class DatabaseService {
     }));
 
     for (const removal of removals) {
-      if (removal.reason === "official_audio_duplicate_of_mv") {
+      if (removal.reason === "official_audio_duplicate_of_mv" || removal.reason === "canonical_variant_duplicate_of_full") {
         this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
         this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
         this.retireVerifiedHololiveMusicAudioMirror(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
@@ -12150,6 +12154,7 @@ export class DatabaseService {
           title: row.title,
           songName,
           songNames: detail.songNames,
+          description: detail.description,
           topicId: row.topicId,
           channelId: detail.channelId,
           channelName: row.channelName,
@@ -12557,30 +12562,76 @@ export class DatabaseService {
     return hasCompatibleHololiveMusicRecording(recording(left), recording(right));
   }
 
+  private getHololiveBroadcastSongAliases(row: { title: string; song_name?: string | null; canonical_song_key?: string }): string[] {
+    return [...new Set([
+      row.canonical_song_key || (row.song_name ? buildHololiveMusicSongKey({ songName: row.song_name }) : ""),
+      buildDuplicateTitleCore(row.title)
+    ])].filter(alias => alias && (alias.length >= 4 || /[^\x00-\x7F]/u.test(alias)));
+  }
+
+  private canReplaceHololiveBroadcastEdit(full: {
+    title: string; song_name: string | null; duration_seconds: number | null; song_names_json: string | null;
+    owned_idol_ids_json: string; featured_idol_ids_json: string; canonical_song_key: string; channel_id: string | null;
+  }, edit: typeof full): boolean {
+    const performers = (row: typeof full) => [...new Set([
+      ...this.parseJsonStringArray(row.owned_idol_ids_json), ...this.parseJsonStringArray(row.featured_idol_ids_json)
+    ])].sort().join("+");
+    const editPerformers = performers(edit);
+    const fullPerformers = performers(full);
+    const samePerformers = editPerformers !== "" && editPerformers === fullPerformers;
+    const editIds = editPerformers ? editPerformers.split("+") : [];
+    const fullIds = fullPerformers ? fullPerformers.split("+") : [];
+    // Group uploads often have incomplete mentions on one version. Permit a
+    // subset on that same trusted group channel, but never conflicting casts.
+    const compatibleGroupCredits = (!editIds.length && !fullIds.length) ||
+      (editIds.length > 0 && fullIds.length > 0 &&
+        (editIds.every(id => fullIds.includes(id)) || fullIds.every(id => editIds.includes(id))));
+    const sameGroupChannel = compatibleGroupCredits && full.channel_id !== null &&
+      full.channel_id === edit.channel_id && this.getHololiveChannelContext().groupChannelIds.has(full.channel_id);
+    return (edit.duration_seconds ?? 0) > 0 &&
+      (full.duration_seconds ?? 0) > (edit.duration_seconds ?? 0) + 20 &&
+      this.parseJsonStringArray(edit.song_names_json).length <= 1 &&
+      this.parseJsonStringArray(full.song_names_json).length <= 1 &&
+      (samePerformers || sameGroupChannel) &&
+      this.getHololiveBroadcastSongAliases(edit).some(alias => this.getHololiveBroadcastSongAliases(full).includes(alias)) &&
+      !hasHololiveBroadcastEditMarker(`${full.title} ${full.song_name ?? ""}`) &&
+      !/\b(?:acoustic|piano|live|tour|remix|repaint)\b|ライブ|アコースティック/iu.test(`${full.title} ${full.song_name ?? ""}`);
+  }
+
   private filterCompatibleStoredHololiveMusicRemovals<T extends {
     removed_youtube_video_id: string; kept_youtube_video_id: string | null; reason: string
   }>(removals: T[]): T[] {
     const wholeRecordingReasons = new Set([
       "topic_duplicate_of_non_topic", "canonical_topic_duplicate_of_non_topic", "official_audio_duplicate_of_mv"
     ]);
-    if (!removals.some(removal => wholeRecordingReasons.has(removal.reason))) return removals;
+    if (!removals.some(removal => wholeRecordingReasons.has(removal.reason) || removal.reason === "canonical_variant_duplicate_of_full")) return removals;
     const metadata = new Map(this.select<{
-      youtube_video_id: string; duration_seconds: number | null; song_name: string | null; song_names_json: string | null
+      youtube_video_id: string; duration_seconds: number | null; song_name: string | null; song_names_json: string | null;
+      title: string; owned_idol_ids_json: string; featured_idol_ids_json: string;
+      excluded: number;
+      canonical_song_key: string;
+      channel_id: string | null;
     }>(`SELECT v.youtube_video_id, COALESCE(v.duration_seconds, d.duration_seconds) AS duration_seconds,
-               v.song_name, d.song_names_json
+               v.song_name, d.song_names_json, v.title, v.owned_idol_ids_json, v.featured_idol_ids_json, v.canonical_song_key, v.channel_id,
+               EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id) AS excluded
         FROM hololive_music_videos v LEFT JOIN hololive_music_detail_cache d ON d.youtube_video_id = v.youtube_video_id
         UNION ALL
-        SELECT d.youtube_video_id, d.duration_seconds, NULL AS song_name, d.song_names_json
+        SELECT d.youtube_video_id, d.duration_seconds, NULL AS song_name, d.song_names_json, '' AS title,
+               '[]' AS owned_idol_ids_json, '[]' AS featured_idol_ids_json, '' AS canonical_song_key, d.channel_id, 0 AS excluded
         FROM hololive_music_detail_cache d
         WHERE NOT EXISTS (SELECT 1 FROM hololive_music_videos v WHERE v.youtube_video_id = d.youtube_video_id)`)
       .map(row => [row.youtube_video_id, row]));
     return removals.filter(removal => {
-      if (!wholeRecordingReasons.has(removal.reason)) return true;
       const removed = metadata.get(removal.removed_youtube_video_id);
       const kept = metadata.get(removal.kept_youtube_video_id ?? "");
+      if (removal.reason === "canonical_variant_duplicate_of_full") {
+        if (kept?.excluded) return false;
+        if (!removed || !kept || !hasHololiveBroadcastEditMarker(`${removed.title} ${removed.song_name ?? ""}`) ||
+            this.canReplaceHololiveBroadcastEdit(kept, removed)) return true;
+      } else if (!wholeRecordingReasons.has(removal.reason) || !removed || !kept ||
+                 this.hasCompatibleStoredHololiveMusicRecording(removed, kept)) return true;
       // Legacy reports may outlive all metadata for an already removed source. Preserve
       // their existing transfer behavior unless retained metadata disproves the match.
-      if (!removed || !kept || this.hasCompatibleStoredHololiveMusicRecording(removed, kept)) return true;
       this.run(`DELETE FROM hololive_music_duplicate_removals
         WHERE removed_youtube_video_id = ? AND kept_youtube_video_id = ? AND reason = ?`,
       [removal.removed_youtube_video_id, removal.kept_youtube_video_id, removal.reason]);
@@ -12647,15 +12698,21 @@ export class DatabaseService {
       duration_seconds: number | null;
       view_count: number | null;
       published_at: string | null;
+      owned_idol_ids_json: string;
+      featured_idol_ids_json: string;
+      song_names_json: string | null;
     }>(
       `SELECT v.youtube_video_id, v.title, v.song_name, v.topic_id, v.canonical_song_key, v.canonical_performance_key,
-              v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds, stats.view_count, v.published_at
+              v.channel_id, v.channel_name, v.original_channel_id, v.provided_to_youtube, v.duration_seconds, stats.view_count, v.published_at,
+              v.owned_idol_ids_json, v.featured_idol_ids_json, details.song_names_json
        FROM hololive_music_videos v
+       LEFT JOIN hololive_music_detail_cache details ON details.youtube_video_id = v.youtube_video_id
        LEFT JOIN hololive_music_video_stats stats
          ON stats.youtube_video_id = v.youtube_video_id
        WHERE v.canonical_song_key != ''
          AND COALESCE(v.source_kind, 'official') != 'user'
          AND COALESCE(v.official_catalog_active, 1) = 1
+         AND NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id)
        ORDER BY v.canonical_song_key, v.canonical_performance_key, v.youtube_video_id`
     );
     if (rows.length === 0) {
@@ -12663,7 +12720,7 @@ export class DatabaseService {
     }
 
     const removalsByRemovedId = new Map<string, HolodexDuplicateRemoval>();
-    const collectVariantRemovals = (componentRows: typeof rows) => {
+    const collectVariantRemovals = (componentRows: typeof rows, broadcastOnly = false) => {
       if (componentRows.length < 2) {
         return;
       }
@@ -12677,9 +12734,15 @@ export class DatabaseService {
       }
 
       for (const variantRow of lowPriorityRows) {
-        const eligibleFullRows = hasHololiveLowPriorityLiveVersionMarker([variantRow.title, variantRow.song_name ?? ""].join(" "))
+        if (broadcastOnly && !hasHololiveBroadcastEditMarker(`${variantRow.title} ${variantRow.song_name ?? ""}`)) continue;
+        let eligibleFullRows = hasHololiveLowPriorityLiveVersionMarker([variantRow.title, variantRow.song_name ?? ""].join(" "))
           ? fullRows.filter((fullRow) => this.canReplaceHololiveLiveVariantWithFullRow(fullRow, variantRow))
           : fullRows;
+        if (hasHololiveBroadcastEditMarker(`${variantRow.title} ${variantRow.song_name ?? ""}`)) {
+          // A size label identifies an edit, not a different performance. Require
+          // a genuinely longer single-song counterpart, never a medley or concert.
+          eligibleFullRows = eligibleFullRows.filter(fullRow => this.canReplaceHololiveBroadcastEdit(fullRow, variantRow));
+        }
         const keptRow = [...eligibleFullRows].sort((left, right) => this.compareHololiveMusicDisplayRow(right, left))[0];
         if (!keptRow) {
           continue;
@@ -12717,6 +12780,7 @@ export class DatabaseService {
     }
 
     const rowsBySongOwnerKey = new Map<string, typeof rows>();
+    const rowsByPerformerKey = new Map<string, typeof rows>();
     const addSongOwnerGroup = (keyParts: Array<string | null | undefined>, row: (typeof rows)[number]) => {
       const normalizedParts = keyParts.map((part) => part?.trim() ?? "");
       if (normalizedParts.some((part) => !part)) {
@@ -12737,10 +12801,27 @@ export class DatabaseService {
           ? row.original_channel_id.trim()
           : row.channel_id?.trim() ?? "";
       addSongOwnerGroup(["effective-owner", row.topic_id, row.canonical_song_key, effectiveOwnerChannelId], row);
+      const performers = [...new Set([
+        ...this.parseJsonStringArray(row.owned_idol_ids_json),
+        ...this.parseJsonStringArray(row.featured_idol_ids_json)
+      ])].sort();
+      // A distributor/anime channel may carry the same artist's short edit.
+      // Match the complete performer set, never merely one shared participant.
+      if (performers.length) {
+        // Keep exact title aliases as well: structured metadata may spell a
+        // Japanese title differently (e.g. シルべ versus the video's シルベ).
+        for (const alias of this.getHololiveBroadcastSongAliases(row)) {
+          const key = JSON.stringify([row.topic_id, alias, performers]);
+          rowsByPerformerKey.set(key, [...(rowsByPerformerKey.get(key) ?? []), row]);
+        }
+      }
     }
 
     for (const componentRows of rowsBySongOwnerKey.values()) {
       collectVariantRemovals(componentRows);
+    }
+    for (const componentRows of rowsByPerformerKey.values()) {
+      collectVariantRemovals(componentRows, true);
     }
 
     const removals = [...removalsByRemovedId.values()];
@@ -12749,7 +12830,9 @@ export class DatabaseService {
     }
 
     for (const removal of removals) {
-      this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+      this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.retireVerifiedHololiveMusicAudioMirror(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
@@ -12964,8 +13047,8 @@ export class DatabaseService {
           [removedId]
         )[0];
         // Exclusions identify the exact video the user removed. Choosing a preferred MV
-        // for an audio mirror must not silently exclude that different video as well.
-        if (removedExclusion && removal.reason !== "official_audio_duplicate_of_mv") {
+        // for a mirror or broadcast edit must not exclude that different video as well.
+        if (removedExclusion && removal.reason !== "official_audio_duplicate_of_mv" && removal.reason !== "canonical_variant_duplicate_of_full") {
           const keptExclusion = this.select<{ youtube_video_id: string }>(
             "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
             [keptId]
@@ -13896,6 +13979,7 @@ export class DatabaseService {
             title: row.title,
             songName: row.song_name,
             songNames: detail.songNames,
+            description: detail.description,
             topicId: row.topic_id,
             channelId: row.channel_id,
             channelName: row.channel_name,

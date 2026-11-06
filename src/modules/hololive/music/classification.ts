@@ -8,13 +8,41 @@ const DISTINCT_VERSION_MARKERS: Array<[string, RegExp]> = [
   ["tour", /\btour\b/iu]
 ];
 
+const BROADCAST_SIZE_SOURCE = String.raw`(?:\btv[\s-]*size(?:d)?(?:\s+ver(?:sion)?\.?)?\b|\btv\s*(?:アニメ\s*)?ver(?:sion)?\b|テレビサイズ|アニメ\s*(?:サイズ|size)|TVサイズ)`;
+const BROADCAST_SIZE_PATTERN = new RegExp(BROADCAST_SIZE_SOURCE, "iu");
+const BROADCAST_ENDING_PATTERN = /ノンクレジット\s*(?:オープニング|エンディング|OP|ED)|\b(?:creditless|non[\s-]*credit)\s*(?:opening|ending)\b/iu;
 const LOW_PRIORITY_VERSION_PATTERN =
   /\b(?:tv\s*size|remaster(?:ed)?(?:\s+ver(?:sion)?)?|daybreak\s+ver(?:sion)?|solo\s+ver(?:sion)?|japanese\s+ver(?:sion)?|english\s+ver(?:sion)?|jp\s+ver(?:sion)?|en\s+ver(?:sion)?|indonesian\s+ver(?:sion)?|korean\s+ver(?:sion)?|chinese\s+ver(?:sion)?|spanish\s+ver(?:sion)?)\b/iu;
 const LOW_PRIORITY_LIVE_VERSION_PATTERN =
   /\b(?:3d\s*(?:live|mv)|live\s+ver(?:sion)?|live\s+(?:from|performance)|concert\s+ver(?:sion)?|festival\s+ver(?:sion)?)\b/iu;
 const BRACKETED_CONTEXT_PATTERN = /\s*[\(\[\u3010]([^\)\]\u3011]*)[\)\]\u3011]\s*/gu;
 const TRAILING_VERSION_PATTERN =
-  /(?:\s*[-–—:]\s*|\s+)(?:tv\s*size|japanese\s+ver(?:sion)?|english\s+ver(?:sion)?|jp\s+ver(?:sion)?|en\s+ver(?:sion)?|indonesian\s+ver(?:sion)?|korean\s+ver(?:sion)?|chinese\s+ver(?:sion)?|spanish\s+ver(?:sion)?)\.?\s*$/iu;
+  new RegExp(String.raw`(?:\s*[-–—:]\s*|\s+)(?:${BROADCAST_SIZE_SOURCE}|japanese\s+ver(?:sion)?|english\s+ver(?:sion)?|jp\s+ver(?:sion)?|en\s+ver(?:sion)?|indonesian\s+ver(?:sion)?|korean\s+ver(?:sion)?|chinese\s+ver(?:sion)?|spanish\s+ver(?:sion)?)\.?\s*$`, "iu");
+
+export function hasHololiveBroadcastEditMarker(value: string | null | undefined): boolean {
+  const normalized = normalizeHololiveMusicText(value ?? "");
+  return BROADCAST_SIZE_PATTERN.test(normalized) || BROADCAST_ENDING_PATTERN.test(normalized);
+}
+
+// Anime titles are also quoted. Only use a single explicitly credited song after
+// the broadcast-video description, never the first quoted show name.
+export function extractHololiveBroadcastSongTitle(value: string, description = ""): string | null {
+  const normalized = normalizeHololiveMusicText(value);
+  const marker = BROADCAST_ENDING_PATTERN.exec(normalized);
+  if (!marker) return null;
+  const tail = normalized.slice(marker.index + marker[0].length);
+  const quoted = [...tail.matchAll(/「([^「」]+)」|“([^“”]+)”|"([^"\n]+)"/gu)];
+  if (quoted.length === 1) return (quoted[0][1] ?? quoted[0][2] ?? quoted[0][3]).trim() || null;
+  if (quoted.length > 1) return null;
+  // Some official anime uploads name only the show in their title. Read the
+  // matching opening/ending credit line, not the other theme in the description.
+  const opening = /オープニング|opening|OP/iu.test(marker[0]);
+  const creditPattern = opening
+    ? /^\s*(?:オープニング(?:主題歌|テーマ)|opening\s+theme|OP(?:主題歌|テーマ))\s*[:：]\s*[^\n「]*「([^「」\n]+)」\s*$/gimu
+    : /^\s*(?:エンディング(?:主題歌|テーマ)|ending\s+theme|ED(?:主題歌|テーマ))\s*[:：]\s*[^\n「]*「([^「」\n]+)」\s*$/gimu;
+  const credits = [...normalizeHololiveMusicText(description).matchAll(creditPattern)];
+  return credits.length === 1 ? credits[0][1].trim() || null : null;
+}
 
 export function normalizeHololiveMusicText(value: string): string {
   return (value || "").normalize("NFKC");
@@ -34,7 +62,7 @@ export function hasHololiveLowPriorityVersionMarker(value: string | null | undef
     return false;
   }
 
-  return LOW_PRIORITY_VERSION_PATTERN.test(normalized) || hasHololiveLowPriorityLiveVersionMarker(normalized);
+  return LOW_PRIORITY_VERSION_PATTERN.test(normalized) || hasHololiveBroadcastEditMarker(normalized) || hasHololiveLowPriorityLiveVersionMarker(normalized);
 }
 
 export function hasHololiveLowPriorityLiveVersionMarker(value: string | null | undefined): boolean {

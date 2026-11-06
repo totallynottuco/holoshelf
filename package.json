@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.94",
+  "version": "1.1.95",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Improves song imports, duplicate filtering, and YouTube availability checks.\n\n- Keeps the best official upload while preserving distinct recordings and multi-song performances.\n- Prevents private, unfinished, and unavailable videos from entering the playable library.\n- Respects configured playback regions and keeps unavailable entries eligible for later verification.\n- Preserves Favorites, ordering, playlists, ratings, notes, and personal exclusions during updates.\n\nSongs and statistics continue to update silently in the background. New catalog updates require Holoshelf 1.1.94 so older clients cannot undo these fixes."
+      "releaseNotes": "Fixes duplicate TV-size and anime opening/ending songs.\n\n- Prefers the full official song when a matching short edit exists, including uploads on anime and distributor channels.\n- Recognizes song credits in anime video descriptions and handles differing song metadata.\n- Repairs existing libraries while preserving Favorites, playlists, notes, ratings, and exact-video exclusions.\n\nSongs and statistics continue to update silently in the background. Install 1.1.95 once to receive catalogs that use the improved duplicate repair."
     },
     "win": {
       "icon": "ico.ico",
