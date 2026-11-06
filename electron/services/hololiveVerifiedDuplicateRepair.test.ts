@@ -11,6 +11,7 @@ const AUDIO = "CeTdduq4KbI";
 const MV = "3f0PTj1xrvw";
 const KIARA = "UCHsx4Hqa-1ORjQTh9TYDhww";
 const IRISE = "UCMmcz1ybSoAD-GUlDx_7H2A";
+const PLAY_COLOR = "pYB-xfIcd9c";
 const folders: string[] = [];
 afterEach(() => {
   for (const folder of folders.splice(0)) {
@@ -65,6 +66,66 @@ function track(db: DatabaseService, id: string, notes: string, rating: number) {
   db.run(`UPDATE tracked_entries SET status = 'completed', rating = ?, notes = ?, started_at = '2026-10-30', completed_at = '2026-10-31'
     WHERE item_id = (SELECT item_id FROM hololive_music_videos WHERE youtube_video_id = ?)`, [rating, notes, id]);
 }
+
+function presentationBundle(): HolodexArtifactBundle {
+  const result = bundle([{ id: PLAY_COLOR, song: "TRAUMA (Feat. Takanashi Kiara)" }]);
+  result.rows.find(row => row.youtubeVideoId === PLAY_COLOR)!.title = "[PLAY COLOR | 4K] 아이리제 (IRISÉ) - TRAUMA (Feat. Takanashi Kiara)";
+  result.detailCache[PLAY_COLOR].songNames = [];
+  result.detailCache[PLAY_COLOR].duration = 182;
+  result.detailCache[PLAY_COLOR].originalChannelId = "UCd-OrgPLrnQiQBcq19j5oEQ";
+  return result;
+}
+
+describe("curated preferred song presentations", () => {
+  it("requires both videos verified before preferring the official MV to PLAY COLOR", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(presentationBundle());
+    const playlist = savePersonalReferences(db, PLAY_COLOR);
+    track(db, PLAY_COLOR, "Saved on the performance upload", 8);
+    expect(db.repairHololiveMusicDuplicateRows(null, new Set([PLAY_COLOR]))).toBe(0);
+    expect(db.repairHololiveMusicDuplicateRows(null, new Set([MV]))).toBe(0);
+    db.importHolodexMusicArtifacts(presentationBundle(), "live", { verifiedVideoIds: [PLAY_COLOR, MV] });
+    expect(ids(db)).toEqual([AUDIO, MV].sort());
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id = ?", [playlist])).toEqual([{ youtube_video_id: MV }]);
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MV] })[0].marker).toBe("favorite");
+    expect(db.select(`SELECT t.notes,t.rating FROM tracked_entries t JOIN hololive_music_videos v ON v.item_id=t.item_id
+      WHERE v.youtube_video_id=?`, [MV])).toEqual([{ notes: "Saved on the performance upload", rating: 8 }]);
+  });
+
+  it("keeps the performance when its preferred MV is inactive or excluded", async () => {
+    for (const excluded of [true, false]) {
+      const { db } = await database();
+      db.importHolodexMusicArtifacts(presentationBundle());
+      if (excluded) db.run("INSERT INTO hololive_music_exclusions (youtube_video_id,created_at) VALUES (?, '2026-11-05')", [MV]);
+      else db.deferHololiveMusicVideo({ youtubeVideoId: MV, reason: "Unavailable", createBackup: false });
+      expect(db.repairHololiveMusicDuplicateRows(null, new Set([PLAY_COLOR, MV]))).toBe(0);
+      expect(ids(db)).toContain(PLAY_COLOR);
+    }
+  });
+
+  it("does not guess replacements for other performance videos or multi-song recordings", async () => {
+    const { db } = await database();
+    const input = presentationBundle();
+    input.detailCache[PLAY_COLOR].songNames = ["TRAUMA (Feat. Takanashi Kiara)", "Another song"];
+    db.importHolodexMusicArtifacts(input, "live", { verifiedVideoIds: [PLAY_COLOR, MV] });
+    expect(ids(db)).toContain(PLAY_COLOR);
+    const other = bundle([{ id: "anotherShow", song: "TRAUMA (Feat. Takanashi Kiara)" }]);
+    other.rows.find(row => row.youtubeVideoId === "anotherShow")!.title = "TRAUMA (Live acoustic performance)";
+    db.importHolodexMusicArtifacts(other, "live", { verifiedVideoIds: ["anotherShow", MV] });
+    expect(ids(db)).toContain("anotherShow");
+  });
+
+  it("preserves conflicting performance notes on an inactive row", async () => {
+    const { db } = await database();
+    db.importHolodexMusicArtifacts(presentationBundle());
+    track(db, PLAY_COLOR, "Performance-specific note", 8);
+    track(db, MV, "MV-specific note", 9);
+    db.repairHololiveMusicDuplicateRows(null, new Set([PLAY_COLOR, MV]));
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [PLAY_COLOR] })).toEqual([]);
+    expect(db.select(`SELECT v.official_catalog_active,t.notes FROM hololive_music_videos v JOIN tracked_entries t ON t.item_id=v.item_id
+      WHERE v.youtube_video_id=?`, [PLAY_COLOR])).toEqual([{ official_catalog_active: 0, notes: "Performance-specific note" }]);
+  });
+});
 
 describe("freshly verified official audio mirror repair", () => {
   it("requires proof for both videos and transfers personal references only after both are verified", async () => {

@@ -23,6 +23,13 @@ export const KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS = [
   { removedYoutubeVideoId: "APB19Vr233c", keptYoutubeVideoId: "LYFciXBcXIQ" },
   { removedYoutubeVideoId: "ev7menqLdK4", keptYoutubeVideoId: "LYFciXBcXIQ" }
 ] as const;
+// Curated preferred presentations, not a claim that every performance upload
+// uses the same recording. The catalog's one-video policy prefers this MV over
+// its PLAY COLOR presentation, whose missing Holodex song metadata prevents a
+// reliable automatic match. Require fresh availability proof for both IDs.
+export const KNOWN_HOLOLIVE_PREFERRED_PRESENTATIONS = [
+  { removedYoutubeVideoId: "pYB-xfIcd9c", keptYoutubeVideoId: "3f0PTj1xrvw" }
+] as const;
 const OFFICIAL_TITLE_MARKERS = ["official", "mv", "original", "\u30aa\u30ea\u30b8\u30ca\u30eb", "\u30aa\u30ea\u30b8\u30ca\u30eb\u30bd\u30f3\u30b0"];
 const VERSION_KEEP_MARKERS = ["acoustic", "piano", "re paint", "repaint", "live", "tour"];
 const DUPLICATE_CONTEXT_DROP_MARKERS = [

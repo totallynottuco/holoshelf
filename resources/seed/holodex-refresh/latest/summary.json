@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-11-05T23:59:07.369Z",
-  "completedAt": "2026-11-06T00:01:42.790Z",
+  "startedAt": "2026-11-06T00:24:13.030Z",
+  "completedAt": "2026-11-06T00:26:37.697Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-11-05T235913Z",
+  "officialDataVersion": "2026-11-06T002413Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -15,39 +15,39 @@
   "resumeCache": {
     "hits": 0,
     "writes": 80,
-    "startedAt": 1793923153413
+    "startedAt": 1793924653205
   },
   "timingsMs": {
-    "databaseInit": 6039,
-    "channels": 1149,
-    "music": 147646,
-    "duplicateRepair": 205,
-    "youtubeStats": 147,
-    "duplicateRepairAfterStats": 126,
+    "databaseInit": 171,
+    "channels": 1242,
+    "music": 142642,
+    "duplicateRepair": 210,
+    "youtubeStats": 152,
+    "duplicateRepairAfterStats": 139,
     "images": 8,
-    "artifacts": 136,
-    "seed": 489
+    "artifacts": 138,
+    "seed": 495
   },
   "channelRefresh": {
     "refreshedChannels": 90,
     "classifiedChannels": 90,
-    "updatedAt": "2026-11-05T23:59:14.027Z"
+    "updatedAt": "2026-11-06T00:24:13.960Z"
   },
   "musicRefresh": {
     "sourceRows": 3147,
-    "importedRows": 3106,
-    "filteredRows": 41,
-    "duplicateRows": 1177,
+    "importedRows": 3104,
+    "filteredRows": 43,
+    "duplicateRows": 1179,
     "run": {
-      "id": "72ee378f-0b77-4def-9b9b-fc13b8aaebf2",
+      "id": "1d82d1d9-e8a5-40a2-b900-d6b3166dc3f1",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-11-06T00:01:34.203Z",
-      "completedAt": "2026-11-06T00:01:42.106Z",
+      "startedAt": "2026-11-06T00:26:28.841Z",
+      "completedAt": "2026-11-06T00:26:36.983Z",
       "fetchedRows": 3147,
-      "keptRows": 3106,
-      "filteredRows": 41,
-      "duplicateRows": 1177,
+      "keptRows": 3104,
+      "filteredRows": 43,
+      "duplicateRows": 1179,
       "error": null
     }
   },
@@ -73,36 +73,36 @@
   "holodexRequestMetrics": {
     "requests": 80,
     "retries": 0,
-    "quotaWaitMs": 109898
+    "quotaWaitMs": 111928
   },
   "videoStatsRefresh": {
-    "requestedVideos": 3085,
-    "updatedVideos": 3085,
+    "requestedVideos": 3083,
+    "updatedVideos": 3083,
     "missingVideos": 0,
     "unavailableVideos": 0,
     "failedBatches": 0,
     "failedBatchDetails": [],
     "batches": 0,
-    "fetchedAt": "2026-11-06T00:01:29.531Z"
+    "fetchedAt": "2026-11-06T00:26:24.301Z"
   },
   "statsCoverage": {
-    "catalogVideos": 3084,
-    "withStats": 3084,
-    "freshVideos": 3084,
+    "catalogVideos": 3083,
+    "withStats": 3083,
+    "freshVideos": 3083,
     "missingVideos": 0,
     "staleVideos": 0,
     "missingVideoIds": [],
     "staleVideoIds": []
   },
   "catalogDuplicateResets": {
-    "resetRows": 3084,
-    "checkedAt": "2026-11-06T00:01:29.531Z"
+    "resetRows": 3083,
+    "checkedAt": "2026-11-06T00:26:24.301Z"
   },
   "videoAvailabilityVerification": {
     "schema": 1,
-    "checkedAt": "2026-11-06T00:01:29.531Z",
-    "checkedVideos": 3085,
-    "retainedVideos": 3084
+    "checkedAt": "2026-11-06T00:26:24.301Z",
+    "checkedVideos": 3083,
+    "retainedVideos": 3083
   },
   "statsRefreshComplete": true,
   "imageRefresh": {
@@ -112,19 +112,12 @@
     "total": 78
   },
   "counts": {
-    "totalMusicRows": 3084,
+    "totalMusicRows": 3083,
     "totalChannels": 189,
     "officialIdols": 78,
     "customIdols": 0,
-    "statsRows": 3084,
-    "detailCacheRows": 3084,
+    "statsRows": 3083,
+    "detailCacheRows": 3083,
     "duplicateRemovalRows": 4277
-  },
-  "postRefreshDuplicateRepair": {
-    "completedAt": "2026-11-06T00:04:06.066Z",
-    "repairedRows": 1,
-    "reason": "Same official group channel with incomplete subset credits for START AGAIN; original API verification and timestamps retained.",
-    "startupMaintenanceRepairRows": 1,
-    "explicitRepairRows": 0
   }
 }

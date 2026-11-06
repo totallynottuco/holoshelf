@@ -137,6 +137,7 @@ import {
 } from "../../src/modules/hololive/music/classification";
 import {
   KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS,
+  KNOWN_HOLOLIVE_PREFERRED_PRESENTATIONS,
   buildDuplicateTitleCore,
   getRowCleanupReason,
   hasCompatibleHolodexTopicDuplicateDuration,
@@ -1978,7 +1979,7 @@ export class DatabaseService {
     let repairedRows = 0;
     const repairStartedAt = new Date().toISOString();
     const repair = () => {
-      this.upsertKnownHololiveDuplicateReplacementRows(runId);
+      this.upsertKnownHololiveDuplicateReplacementRows(runId, verifiedVideoIds);
       repairedRows += this.applyStoredHololiveDuplicateRemovalRows(runId, verifiedVideoIds);
       repairedRows += this.purgeCanonicalTopicDuplicateRows(runId);
       repairedRows += this.purgeCrossOwnerTopicDuplicateRows(runId);
@@ -2095,7 +2096,7 @@ export class DatabaseService {
       this.upsertHolodexDetailCache(matchedDetails);
       this.upsertHolodexDuplicateRemovals(matchedDuplicateRemovals, runId);
       this.upsertHolodexMusicRows(matchedRows, matchedDetails, channelContext, runId);
-      this.upsertKnownHololiveDuplicateReplacementRows(runId);
+      this.upsertKnownHololiveDuplicateReplacementRows(runId, verifiedVideoIds);
       canonicalDuplicateCount = this.applyStoredHololiveDuplicateRemovalRows(runId, verifiedVideoIds);
       canonicalDuplicateCount += this.purgeCanonicalTopicDuplicateRows(runId);
       canonicalDuplicateCount += this.purgeCrossOwnerTopicDuplicateRows(runId);
@@ -12005,10 +12006,14 @@ export class DatabaseService {
     }
   }
 
-  private upsertKnownHololiveDuplicateReplacementRows(runId: string | null): void {
+  private upsertKnownHololiveDuplicateReplacementRows(runId: string | null, verifiedVideoIds: ReadonlySet<string> = new Set<string>()): void {
+    const replacements = [
+      ...KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS.map(row => ({ ...row, preferredPresentation: false })),
+      ...KNOWN_HOLOLIVE_PREFERRED_PRESENTATIONS.map(row => ({ ...row, preferredPresentation: true }))
+    ];
     const videoIds = [
       ...new Set(
-        KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS.flatMap((replacement) => [
+        replacements.flatMap((replacement) => [
           replacement.removedYoutubeVideoId,
           replacement.keptYoutubeVideoId
         ])
@@ -12023,30 +12028,41 @@ export class DatabaseService {
       title: string;
       song_name: string | null;
       published_at: string | null;
+      duration_seconds: number | null;
+      topic_id: HololiveMusicTopic;
+      song_names_json: string | null;
+      excluded: number;
     }>(
-      `SELECT youtube_video_id, title, song_name, published_at
-       FROM hololive_music_videos
-       WHERE youtube_video_id IN (${videoIds.map(() => "?").join(", ")})
-         AND COALESCE(source_kind, 'official') != 'user'
-         AND COALESCE(official_catalog_active, 1) = 1`,
+      `SELECT v.youtube_video_id, v.title, v.song_name, v.published_at, v.duration_seconds, v.topic_id, d.song_names_json,
+              EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id = v.youtube_video_id) AS excluded
+       FROM hololive_music_videos v LEFT JOIN hololive_music_detail_cache d USING (youtube_video_id)
+       WHERE v.youtube_video_id IN (${videoIds.map(() => "?").join(", ")})
+         AND COALESCE(v.source_kind, 'official') != 'user'
+         AND COALESCE(v.official_catalog_active, 1) = 1`,
       videoIds
     );
     const rowsById = new Map(rows.map((row) => [row.youtube_video_id, row]));
     const removals: HolodexDuplicateRemoval[] = [];
 
-    for (const replacement of KNOWN_HOLOLIVE_MUSIC_DUPLICATE_REPLACEMENTS) {
+    for (const replacement of replacements) {
       const removedRow = rowsById.get(replacement.removedYoutubeVideoId);
       const keptRow = rowsById.get(replacement.keptYoutubeVideoId);
       if (!removedRow || !keptRow) {
         continue;
       }
+      if (replacement.preferredPresentation && (
+        !verifiedVideoIds.has(removedRow.youtube_video_id) || !verifiedVideoIds.has(keptRow.youtube_video_id) ||
+        keptRow.excluded || removedRow.excluded || removedRow.topic_id !== "Original_Song" || keptRow.topic_id !== "Original_Song" ||
+        !this.hasCompatibleStoredHololiveMusicRecording(removedRow, keptRow)
+      )) continue;
 
       removals.push({
         removedYoutubeVideoId: removedRow.youtube_video_id,
         removedTitle: removedRow.title,
         keptYoutubeVideoId: keptRow.youtube_video_id,
         keptTitle: keptRow.title,
-        reason: "known_duplicate_of_official",
+        // 1.1.95 already replays this report with personal-state preservation.
+        reason: replacement.preferredPresentation ? "canonical_variant_duplicate_of_full" : "known_duplicate_of_official",
         songName: keptRow.song_name || keptRow.title,
         removedPublishedAt: removedRow.published_at || "",
         keptPublishedAt: keptRow.published_at || ""
