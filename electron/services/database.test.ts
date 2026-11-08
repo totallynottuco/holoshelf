@@ -2760,6 +2760,62 @@ describe("DatabaseService", () => {
     await expectSuffix("winner", ["history-winner"]);
   });
 
+  it("uses overall placements for mixed-format history inclusion, exclusion, and insufficient pools", async () => {
+    const database = await createTempDatabase();
+    const idols = database.listHololiveIdols().filter(idol => idol.source === "official").slice(0, 32);
+    for (const [i, idol] of idols.entries()) for (const topicId of ["Original_Song", "Music_Cover"] as const) {
+      seedHololiveBracketSong(database, { idolId: idol.id, idolName: idol.displayName, channelId: idol.youtubeChannelId!, topicId,
+        suffix: topicId === "Original_Song" ? "placement-single" : "placement-double", viewCount: (topicId === "Original_Song" ? 1_000_000 : 2_000_000) - i });
+    }
+    const single = await completeBracket(database, await database.createHololiveBracket({ size: "RO32", format: "single_elimination",
+      filters: { excludeTopicIds: ["Music_Cover"] } }));
+    const double = await completeBracket(database, await database.createHololiveBracket({ size: "RO32", format: "double_elimination",
+      filters: { excludeTopicIds: ["Original_Song"] } }));
+    const qualifying = new Set(database.select<{ youtube_video_id: string }>(
+      "SELECT youtube_video_id FROM hololive_bracket_archive_entries WHERE is_top8=1").map(row => row.youtube_video_id));
+    expect(qualifying.size).toBe(16);
+    expect(database.select("SELECT archive_id,SUM(is_top4) top4,SUM(is_top8) top8,SUM(is_top16) top16 FROM hololive_bracket_archive_entries GROUP BY archive_id"))
+      .toEqual(expect.arrayContaining([single, double].map(bracket => ({ archive_id: `archive:${bracket.id}`, top4: 4, top8: 8, top16: 16 }))));
+    for (const format of ["single_elimination", "double_elimination"] as const) {
+      const selected = await database.createHololiveBracket({ size: "RO16", format, filters: { historyParticipation: "top8" } });
+      expect(new Set(selected.entries.map(entry => entry.youtubeVideoId))).toEqual(qualifying);
+    }
+    const excluded = await database.createHololiveBracket({ size: "RO32", filters: { excludePreviousTop8: true } });
+    expect(excluded.entries.every(entry => !qualifying.has(entry.youtubeVideoId))).toBe(true);
+    const before = database.listHololiveBrackets().length;
+    await expect(database.createHololiveBracket({ size: "RO16", filters: { historyParticipation: "top4" } })).rejects.toThrow("Only 8 eligible");
+    expect(database.listHololiveBrackets()).toHaveLength(before);
+    const doubleStats = database.getHololiveBracketStatsOverview("double_elimination");
+    expect(doubleStats.totals.completedBrackets).toBe(1);
+    expect(doubleStats.songStats.filter(song => song.top8Count > 0)).toHaveLength(8);
+  });
+
+  it("normalizes old cached DE standings when re-archiving and keeps Top X correct after undo/recompletion", async () => {
+    const database = await createTempDatabase();
+    for (const [i, idol] of database.listHololiveIdols().filter(idol => idol.source === "official").slice(0, 16).entries()) {
+      seedHololiveBracketSong(database, { idolId: idol.id, idolName: idol.displayName, channelId: idol.youtubeChannelId!,
+        topicId: "Original_Song", suffix: "placement-cache", viewCount: 1_000_000 - i });
+    }
+    const completed = await completeBracket(database, await database.createHololiveBracket({ size: "RO16", format: "double_elimination" }));
+    const state = JSON.parse(database.select<{ engine_state_json: string }>("SELECT engine_state_json FROM hololive_brackets WHERE id=?", [completed.id])[0].engine_state_json);
+    const ranks = [...new Set<number>(state.standings.map((standing: { rank: number }) => standing.rank))].sort((a, b) => a - b);
+    state.standings = state.standings.map((standing: { entryId: string; rank: number }) => ({ entryId: standing.entryId, rank: ranks.indexOf(standing.rank) + 1 }));
+    database.run("UPDATE hololive_brackets SET engine_state_json=? WHERE id=?", [JSON.stringify(state), completed.id]);
+    const active = await database.undoHololiveBracket(completed.id);
+    expect(active.status).toBe("active");
+    expect(database.listHololiveBracketArchives()).toHaveLength(0);
+    await completeBracket(database, active);
+    const counts = () => database.select("SELECT SUM(is_top4) top4,SUM(is_top8) top8,SUM(is_top16) top16 FROM hololive_bracket_archive_entries")[0];
+    expect(counts()).toEqual({ top4: 4, top8: 8, top16: 16 });
+    // Deleting a completed bracket re-archives it. Reuse the legacy cache to
+    // prove old engine JSON cannot undo the repair even without a new match.
+    database.run("UPDATE hololive_brackets SET engine_state_json=? WHERE id=?", [JSON.stringify(state), completed.id]);
+    database.deleteHololiveBracket(completed.id);
+    expect(database.listHololiveBrackets()).toHaveLength(0);
+    expect(database.listHololiveBracketArchives()).toHaveLength(1);
+    expect(counts()).toEqual({ top4: 4, top8: 8, top16: 16 });
+  });
+
   it("refuses to create a bracket when first-round same-talent matchups are unavoidable", async () => {
     const database = await createTempDatabase();
     const idol = database.listHololiveIdols().find((candidate) => candidate.source === "official");

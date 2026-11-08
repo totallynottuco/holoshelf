@@ -196,11 +196,11 @@ const BRACKET_FILTER_COPY = {
   },
   previousTop4: {
     label: "Previous Top 4",
-    description: "Exclude songs that have made Semi Final."
+    description: "Exclude songs that finished in the overall Top 4 of any completed bracket, in either format."
   },
   previousTop8: {
     label: "Previous Top 8",
-    description: "Exclude songs that have made Quarter Final."
+    description: "Exclude songs that finished in the overall Top 8 of any completed bracket, in either format."
   },
   topViewed: {
     label: "Skip Top Viewed",
@@ -5368,6 +5368,9 @@ export function HololiveBracketPage() {
                                   disabled={busy}
                                   onChange={setHistoryParticipation}
                                 />
+                                <span className="hololive-bracket-history-hint">
+                                  Any completed bracket, either format. Top X means overall finish; bracket size is separate.
+                                </span>
                               </div>
                             </div>
                           </div>

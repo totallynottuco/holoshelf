@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-11-06T12:51:42.527Z",
-  "completedAt": "2026-11-06T12:54:14.108Z",
+  "startedAt": "2026-11-07T22:30:52.479Z",
+  "completedAt": "2026-11-07T22:33:29.261Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-11-06T125148Z",
+  "officialDataVersion": "2026-11-07T223058Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -15,56 +15,56 @@
   "resumeCache": {
     "hits": 0,
     "writes": 80,
-    "startedAt": 1793969508365
+    "startedAt": 1794090658617
   },
   "timingsMs": {
-    "databaseInit": 5834,
-    "channels": 915,
-    "music": 144253,
-    "duplicateRepair": 193,
-    "youtubeStats": 141,
-    "duplicateRepairAfterStats": 123,
-    "images": 21,
-    "artifacts": 130,
-    "seed": 514
+    "databaseInit": 6134,
+    "channels": 955,
+    "music": 148954,
+    "duplicateRepair": 240,
+    "youtubeStats": 203,
+    "duplicateRepairAfterStats": 154,
+    "images": 11,
+    "artifacts": 138,
+    "seed": 480
   },
   "channelRefresh": {
     "refreshedChannels": 90,
     "classifiedChannels": 90,
-    "updatedAt": "2026-11-06T12:51:48.699Z"
+    "updatedAt": "2026-11-07T22:30:58.951Z"
   },
   "musicRefresh": {
-    "sourceRows": 3148,
-    "importedRows": 3104,
+    "sourceRows": 3154,
+    "importedRows": 3110,
     "filteredRows": 44,
-    "duplicateRows": 1181,
+    "duplicateRows": 1187,
     "run": {
-      "id": "cd907477-527c-4b51-bfd3-22cdb8543a6d",
+      "id": "902e2074-2d1a-4c7d-b475-cff30759e54d",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-11-06T12:54:05.845Z",
-      "completedAt": "2026-11-06T12:54:13.430Z",
-      "fetchedRows": 3148,
-      "keptRows": 3104,
+      "startedAt": "2026-11-07T22:33:19.081Z",
+      "completedAt": "2026-11-07T22:33:28.402Z",
+      "fetchedRows": 3154,
+      "keptRows": 3110,
       "filteredRows": 44,
-      "duplicateRows": 1181,
+      "duplicateRows": 1187,
       "error": null
     }
   },
   "holodexCoverage": {
     "topics": {
       "Music_Cover": {
-        "total": 2649,
-        "fetched": 2649,
+        "total": 2652,
+        "fetched": 2652,
         "pages": 1,
-        "pageSize": 2649,
+        "pageSize": 2652,
         "complete": true
       },
       "Original_Song": {
-        "total": 4009,
-        "fetched": 4009,
+        "total": 4017,
+        "fetched": 4017,
         "pages": 1,
-        "pageSize": 4009,
+        "pageSize": 4017,
         "complete": true
       }
     },
@@ -73,36 +73,36 @@
   "holodexRequestMetrics": {
     "requests": 80,
     "retries": 0,
-    "quotaWaitMs": 110011
+    "quotaWaitMs": 108117
   },
   "videoStatsRefresh": {
-    "requestedVideos": 3083,
-    "updatedVideos": 3083,
+    "requestedVideos": 3089,
+    "updatedVideos": 3089,
     "missingVideos": 0,
     "unavailableVideos": 0,
     "failedBatches": 0,
     "failedBatchDetails": [],
     "batches": 0,
-    "fetchedAt": "2026-11-06T12:54:01.656Z"
+    "fetchedAt": "2026-11-07T22:33:14.059Z"
   },
   "statsCoverage": {
-    "catalogVideos": 3083,
-    "withStats": 3083,
-    "freshVideos": 3083,
+    "catalogVideos": 3089,
+    "withStats": 3089,
+    "freshVideos": 3089,
     "missingVideos": 0,
     "staleVideos": 0,
     "missingVideoIds": [],
     "staleVideoIds": []
   },
   "catalogDuplicateResets": {
-    "resetRows": 3083,
-    "checkedAt": "2026-11-06T12:54:01.656Z"
+    "resetRows": 3089,
+    "checkedAt": "2026-11-07T22:33:14.059Z"
   },
   "videoAvailabilityVerification": {
     "schema": 1,
-    "checkedAt": "2026-11-06T12:54:01.656Z",
-    "checkedVideos": 3083,
-    "retainedVideos": 3083
+    "checkedAt": "2026-11-07T22:33:14.059Z",
+    "checkedVideos": 3089,
+    "retainedVideos": 3089
   },
   "statsRefreshComplete": true,
   "imageRefresh": {
@@ -112,12 +112,12 @@
     "total": 78
   },
   "counts": {
-    "totalMusicRows": 3083,
-    "totalChannels": 189,
+    "totalMusicRows": 3089,
+    "totalChannels": 190,
     "officialIdols": 78,
     "customIdols": 0,
-    "statsRows": 3083,
-    "detailCacheRows": 3083,
-    "duplicateRemovalRows": 4279
+    "statsRows": 3089,
+    "detailCacheRows": 3089,
+    "duplicateRemovalRows": 4291
   }
 }

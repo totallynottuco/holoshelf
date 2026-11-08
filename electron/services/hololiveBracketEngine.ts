@@ -2,6 +2,7 @@ import { BracketsManager } from "brackets-manager";
 import { InMemoryDatabase } from "brackets-memory-db";
 import { Status, type Database, type Match, type Participant, type Round } from "brackets-model";
 import type { HololiveBracketStage } from "../../src/shared/contracts";
+import { normalizeBracketPlacements } from "../../src/shared/bracketPlacements";
 
 export interface HololiveDoubleEliminationEngineState {
   database: Database;
@@ -30,6 +31,7 @@ export interface HololiveDoubleEliminationMatchState {
 export interface HololiveDoubleEliminationStanding {
   entryId: string;
   rank: number;
+  rankEnd?: number;
 }
 
 interface LoadedEngine {
@@ -245,12 +247,12 @@ export async function pickHololiveDoubleEliminationWinner(
   );
   const participantEntries = participantEntryMap(database);
   const standings = finalComplete
-    ? (await manager.get.finalStandings(state.stageId))
+    ? normalizeBracketPlacements((await manager.get.finalStandings(state.stageId))
         .map((standing) => ({
           entryId: participantEntries.get(numericId(standing.id)) ?? "",
           rank: standing.rank
         }))
-        .filter((standing) => standing.entryId)
+        .filter((standing) => standing.entryId))
     : undefined;
   return {
     database,
@@ -291,10 +293,10 @@ export async function getHololiveDoubleEliminationStandings(
   const { manager } = createManager(state.database);
   const participants = participantEntryMap(state.database);
   const standings = await manager.get.finalStandings(state.stageId);
-  return standings
+  return normalizeBracketPlacements(standings
     .map((standing) => ({
       entryId: participants.get(numericId(standing.id)) ?? "",
       rank: standing.rank
     }))
-    .filter((standing) => standing.entryId);
+    .filter((standing) => standing.entryId));
 }

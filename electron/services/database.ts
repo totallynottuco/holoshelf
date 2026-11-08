@@ -96,6 +96,7 @@ import {
   type SequentialGlicko2Event
 } from "../../src/shared/glicko2";
 import { hololiveBracketRoundLabel } from "../../src/shared/hololiveBracketLabels";
+import { isTopBracketPlacement, normalizeBracketPlacements } from "../../src/shared/bracketPlacements";
 import {
   createHololiveDoubleEliminationState,
   listHololiveDoubleEliminationMatches,
@@ -1320,6 +1321,36 @@ const MIGRATIONS = [
     sql: `
       ALTER TABLE hololive_music_detail_cache
         ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    `
+  },
+  {
+    version: 37,
+    sql: `
+      -- Stored rank groups (DE) and round bounds (SE) both normalize through
+      -- competition ranking. Repair derived fields only; retain every outcome
+      -- and snapshot, including archives whose source bracket was deleted.
+      CREATE TEMP TABLE bracket_placement_repair (id TEXT PRIMARY KEY, rank INTEGER NOT NULL);
+      INSERT INTO bracket_placement_repair (id, rank)
+      WITH complete_archives AS (
+        SELECT e.archive_id
+          FROM hololive_bracket_archive_entries e JOIN hololive_bracket_archives a ON a.id = e.archive_id
+         GROUP BY e.archive_id, a.total_entries
+        HAVING COUNT(*) = a.total_entries
+           AND COUNT(CASE WHEN e.final_rank >= 1 AND e.final_rank = CAST(e.final_rank AS INTEGER) THEN 1 END) = COUNT(*)
+      )
+      SELECT e.id, RANK() OVER (PARTITION BY e.archive_id ORDER BY e.final_rank)
+        FROM hololive_bracket_archive_entries e
+        JOIN complete_archives a ON a.archive_id = e.archive_id;
+      UPDATE hololive_bracket_archive_entries
+         SET final_rank = (SELECT rank FROM bracket_placement_repair r WHERE r.id = hololive_bracket_archive_entries.id),
+             is_top4 = (SELECT rank <= 4 FROM bracket_placement_repair r WHERE r.id = hololive_bracket_archive_entries.id),
+             is_top8 = (SELECT rank <= 8 FROM bracket_placement_repair r WHERE r.id = hololive_bracket_archive_entries.id),
+             is_top16 = (SELECT rank <= 16 FROM bracket_placement_repair r WHERE r.id = hololive_bracket_archive_entries.id)
+       WHERE id IN (
+         SELECT r.id FROM bracket_placement_repair r JOIN hololive_bracket_archive_entries e ON e.id = r.id
+          WHERE e.final_rank != r.rank OR e.is_top4 != (r.rank <= 4) OR e.is_top8 != (r.rank <= 8) OR e.is_top16 != (r.rank <= 16)
+       );
+      DROP TABLE bracket_placement_repair;
     `
   }
 ];
@@ -9610,7 +9641,11 @@ export class DatabaseService {
       throw new Error("This double-elimination bracket is missing its saved engine state");
     }
     try {
-      return JSON.parse(value) as HololiveDoubleEliminationEngineState;
+      const state = JSON.parse(value) as HololiveDoubleEliminationEngineState;
+      // Old completed brackets can still carry dense cached standings after the
+      // archive migration. Normalize at the read boundary before any re-archive.
+      if (state.standings) state.standings = normalizeBracketPlacements(state.standings);
+      return state;
     } catch {
       throw new Error("This double-elimination bracket has invalid saved engine state");
     }
@@ -9910,39 +9945,21 @@ export class DatabaseService {
       }
     }
 
-    const participantIdsByRound = new Map<number, Set<string>>();
-    for (const match of matches) {
-      const ids = participantIdsByRound.get(match.roundIndex) ?? new Set<string>();
-      if (match.entryA) {
-        ids.add(match.entryA.id);
-      }
-      if (match.entryB) {
-        ids.add(match.entryB.id);
-      }
-      participantIdsByRound.set(match.roundIndex, ids);
-    }
-
-    const reachedRound = (entryId: string, entrants: number): boolean => {
-      const roundIndex = Math.max(0, finalRoundIndex - Math.log2(entrants) + 1);
-      for (let index = Math.ceil(roundIndex); index <= finalRoundIndex; index += 1) {
-        if (participantIdsByRound.get(index)?.has(entryId)) {
-          return true;
-        }
-      }
-      return false;
-    };
-
     const finalistIds = new Set([finalMatch?.entryA?.id, finalMatch?.entryB?.id].filter((id): id is string => Boolean(id)));
     const champion = bracket.champion;
-    const doubleStandings =
+    const standings =
       bracket.format === "double_elimination"
-        ? new Map(
-            (this.parseHololiveDoubleEliminationState(
-              this.getHololiveBracketEngineRecord(bracket.id).engineStateJson
-            ).standings ?? []).map((standing) => [standing.entryId, standing.rank])
-          )
-        : null;
-    const lowestDoublePlacement = doubleStandings ? Math.max(...doubleStandings.values()) : null;
+        ? this.parseHololiveDoubleEliminationState(this.getHololiveBracketEngineRecord(bracket.id).engineStateJson).standings ?? []
+        : bracket.entries.map(entry => {
+            const eliminatedRound = entryStats.get(entry.id)?.eliminatedRoundIndex;
+            if (entry.id !== champion.id && eliminatedRound == null) throw new Error("Completed bracket is missing a finishing placement");
+            return { entryId: entry.id, rank: entry.id === champion.id ? 1 : 2 ** (finalRoundIndex - eliminatedRound! + 1) };
+          });
+    const placements = new Map(normalizeBracketPlacements(standings).map(standing => [standing.entryId, standing.rank]));
+    if (placements.size !== bracket.entries.length || bracket.entries.some(entry => !placements.has(entry.id))) {
+      throw new Error("Completed bracket has incomplete final standings");
+    }
+    const lowestPlacement = Math.max(...placements.values());
 
     this.createBackup("hololive-bracket-archive-upsert");
 
@@ -9989,19 +10006,12 @@ export class DatabaseService {
           eliminatedStageRoundIndex: null,
           eliminatedByYoutubeVideoId: null
         };
-        const finalRank =
-          bracket.format === "double_elimination"
-            ? doubleStandings?.get(entry.id) ?? null
-            : entry.id === champion.id
-              ? 1
-              : stats.eliminatedRoundIndex === null
-                ? null
-                : 2 ** (finalRoundIndex - stats.eliminatedRoundIndex + 1);
+        const finalRank = placements.get(entry.id)!;
         const firstRoundEliminated =
           bracket.format === "double_elimination"
-            ? finalRank !== null && finalRank === lowestDoublePlacement
+            ? finalRank === lowestPlacement
             : stats.eliminatedRoundIndex === 0;
-        const isTop = (placement: number) => finalRank !== null && finalRank <= placement;
+        const isTop = (placement: number) => isTopBracketPlacement(finalRank, placement);
         this.run(
           `INSERT INTO hololive_bracket_archive_entries
              (id, archive_id, source_entry_id, slot_index, youtube_video_id, title_snapshot, song_name_snapshot,
@@ -10038,9 +10048,9 @@ export class DatabaseService {
             firstRoundEliminated ? 1 : 0,
             entry.id === champion.id ? 1 : 0,
             finalistIds.has(entry.id) ? 1 : 0,
-            bracket.format === "double_elimination" ? (isTop(4) ? 1 : 0) : reachedRound(entry.id, 4) ? 1 : 0,
-            bracket.format === "double_elimination" ? (isTop(8) ? 1 : 0) : reachedRound(entry.id, 8) ? 1 : 0,
-            bracket.format === "double_elimination" ? (isTop(16) ? 1 : 0) : reachedRound(entry.id, 16) ? 1 : 0
+            isTop(4) ? 1 : 0,
+            isTop(8) ? 1 : 0,
+            isTop(16) ? 1 : 0
           ]
         );
       }

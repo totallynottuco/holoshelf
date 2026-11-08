@@ -1623,6 +1623,12 @@ select {
   width: 100%;
 }
 
+.hololive-bracket-history-hint {
+  color: #9eb5cb;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .hololive-bracket-history-select .compact-select-button {
   height: 26px;
   justify-content: space-between;

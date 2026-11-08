@@ -3,10 +3,31 @@ import {
   createHololiveDoubleEliminationState,
   listHololiveDoubleEliminationMatches,
   pickHololiveDoubleEliminationWinner,
+  getHololiveDoubleEliminationStandings,
   undoHololiveDoubleEliminationMatch
 } from "./hololiveBracketEngine";
 
 describe("Hololive double-elimination engine", () => {
+  test.each([16, 32, 64, 128, 256])("returns overall Top X and tie ranges for %i entrants with either grand-final winner", async size => {
+    for (const losersFinalistWins of [false, true]) {
+      let state = await createHololiveDoubleEliminationState(Array.from({ length: size }, (_, i) => `entry-${i}`));
+      let picks = 0;
+      while (!state.standings) {
+        const match = listHololiveDoubleEliminationMatches(state).find(match => match.ready && !match.complete)!;
+        const winner = losersFinalistWins && match.stage === "grand_final" ? match.entryBId! : match.entryAId!;
+        state = await pickHololiveDoubleEliminationWinner(state, match.engineMatchId, winner, "2026-11-08T00:00:00.000Z");
+        expect(++picks).toBeLessThanOrEqual(2 * size - 2);
+      }
+      expect(picks).toBe(2 * size - 2);
+      expect(new Set(state.standings.map(row => row.entryId)).size).toBe(size);
+      for (const cutoff of [1, 2, 4, 8, 16, 32]) {
+        expect(state.standings.filter(row => row.rank <= cutoff)).toHaveLength(Math.min(cutoff, size));
+      }
+      expect(state.standings.filter(row => row.rank === 7 && row.rankEnd === 8)).toHaveLength(2);
+      expect(state.standings.filter(row => row.rank === 9 && row.rankEnd === 12)).toHaveLength(4);
+      expect(await getHololiveDoubleEliminationStandings(state)).toEqual(state.standings);
+    }
+  });
   test.each([16, 32, 64, 128, 256])("creates the complete %i-song topology", async (size) => {
     const state = await createHololiveDoubleEliminationState(
       Array.from({ length: size }, (_, index) => `entry-${index}`)

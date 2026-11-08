@@ -637,6 +637,7 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await createPopover.getByRole("combobox", { name: "History participation" }).click();
   await createPopover.getByRole("option", { name: "Never appeared" }).click();
   await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Never appeared");
+  await expect(createPopover.locator(".hololive-bracket-history-hint")).toContainText("Top X means overall finish; bracket size is separate.");
   await expect(createPopover.getByLabel("Solo songs")).toBeChecked();
   await expect(createPopover.getByLabel("Group Songs")).toBeChecked();
   await createPopover.getByLabel("Group Songs").uncheck();

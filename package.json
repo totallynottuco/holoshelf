@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.1.95",
+  "version": "1.1.96",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Fixes duplicate TV-size and anime opening/ending songs.\n\n- Prefers the full official song when a matching short edit exists, including uploads on anime and distributor channels.\n- Recognizes song credits in anime video descriptions and handles differing song metadata.\n- Repairs existing libraries while preserving Favorites, playlists, notes, ratings, and exact-video exclusions.\n\nSongs and statistics continue to update silently in the background. Install 1.1.95 once to receive catalogs that use the improved duplicate repair."
+      "releaseNotes": "Fixes overall Top X bracket history filters across single and double elimination.\n\n- Uses actual finishing placements instead of double-elimination rank-group numbers.\n- Automatically repairs saved archive placements and Top 4/8/16 statistics after upgrading.\n- Preserves bracket results, champions, match history, Favorites, playlists, and personal settings.\n- Clarifies that history qualifiers combine across completed brackets and do not change the new bracket size."
     },
     "win": {
       "icon": "ico.ico",
