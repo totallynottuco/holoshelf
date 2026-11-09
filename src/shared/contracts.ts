@@ -1,3 +1,4 @@
+import type { BracketDateBasis, MusicReleaseDateBasis } from "./musicReleaseDates";
 export type ModuleId = "hololive";
 
 export type IconName =
@@ -252,6 +253,9 @@ export interface HololiveMusicRow {
   ownedIdolIds: string[];
   featuredIdolIds: string[];
   publishedAt?: string | null;
+  releaseDate?: string | null;
+  releaseDateBasis?: MusicReleaseDateBasis | null;
+  releaseDateSourceUrl?: string | null;
   durationSeconds?: number | null;
   viewCount?: number | null;
   viewCountFetchedAt?: string | null;
@@ -340,6 +344,8 @@ export interface HololiveBracketCreateWarning {
 }
 
 export interface HololiveBracketGenerationFilters {
+  dateBasis?: BracketDateBasis;
+  includeEstimatedReleaseDates?: boolean;
   excludeDisliked?: boolean;
   excludeRated?: boolean;
   ratingBuckets?: HololiveBracketRatingBucket[];
@@ -1008,4 +1014,18 @@ export interface AppBootstrap {
   modules: TrackerModuleManifest[];
   sourceHealth: SourceHealth[];
   stats: AppStats;
+}
+
+export interface HololiveBracketSelectionPreview {
+  eligibleCount: number;
+  entries: Array<{
+    youtubeVideoId: string;
+    title: string;
+    idolName: string;
+    viewCount: number | null;
+    dateUsed: string | null;
+    dateBasis: MusicReleaseDateBasis | "video_upload" | "unknown";
+    sourceUrl: string | null;
+  }>;
+  warnings: HololiveBracketCreateWarning[];
 }

@@ -7,13 +7,15 @@ import initSqlJs from "sql.js";
 import {CatalogUpdateService} from "./catalogUpdateService";
 import {catalogHash} from "./catalogUpdatePackage";
 import {CATALOG_MIN_APP_VERSION, parseCatalogUpdateManifest, type CatalogUpdateManifest} from "../../src/shared/catalogUpdate";
-import type {DatabaseService} from "./database";
+import {DatabaseService} from "./database";
+import {mergeBundledOfficialData} from "./officialDataMergeService";
 import type {AppPathSet} from "./appPaths";
 
 const version = "2026-10-16T120000Z";
 let bytes: Buffer;
 let compressed: Buffer;
 let manifest: CatalogUpdateManifest;
+let releaseVideoId: string;
 let SQL: Awaited<ReturnType<typeof initSqlJs>>;
 const directories: string[] = [];
 beforeAll(async () => {
@@ -23,6 +25,8 @@ beforeAll(async () => {
   seed.run("UPDATE hololive_music_videos SET official_catalog_active=1,source_kind='official'");
   seed.run("DELETE FROM hololive_music_exclusions");
   seed.run("INSERT OR REPLACE INTO hololive_music_video_stats SELECT youtube_video_id,100,'2026-10-16T12:00:00.000Z' FROM hololive_music_videos");
+  releaseVideoId = String(seed.exec("SELECT youtube_video_id FROM hololive_music_videos ORDER BY youtube_video_id LIMIT 1")[0].values[0][0]);
+  seed.run("INSERT OR REPLACE INTO hololive_music_release_dates VALUES(?, '2022-12-19', 'official_release', 'https://hololive.hololivepro.com/en/music/244/', '2026-10-16')", [releaseVideoId]);
   const count = Number(seed.exec("SELECT COUNT(*) FROM hololive_music_videos")[0].values[0][0]);
   bytes = Buffer.from(seed.export()); seed.close();
   compressed = gzipSync(bytes);
@@ -46,8 +50,8 @@ function fixture(next = manifest, body = compressed, appVersion = "1.1.90") {
 }
 
 describe("silent catalog updates", () => {
-  it.each(["1.1.90", "1.1.91", "1.1.92", "1.1.93", "1.1.94"])("blocks catalogs requiring safe variant replacement on legacy client %s before downloading or merging", async appVersion => {
-    expect(CATALOG_MIN_APP_VERSION).toBe("1.1.95");
+  it.each(["1.1.90", "1.1.91", "1.1.92", "1.1.93", "1.1.94", "1.1.95", "1.1.96"])("blocks catalogs requiring date-aware safe replacement on legacy client %s before downloading or merging", async appVersion => {
+    expect(CATALOG_MIN_APP_VERSION).toBe("1.1.97");
     const next = {...manifest, minAppVersion: CATALOG_MIN_APP_VERSION};
     const f = fixture(next, compressed, appVersion);
     expect(await f.service.checkForUpdates()).toBe("requires-app-update");
@@ -57,12 +61,38 @@ describe("silent catalog updates", () => {
     expect(f.settings["hololive.officialDataVersion"]).toBe("2026-10-15T120000Z");
   });
 
-  it("allows the compatible client to receive the current recording-aware catalog silently", async () => {
-    const f = fixture({...manifest, minAppVersion: CATALOG_MIN_APP_VERSION}, compressed, "1.1.95");
+  it("allows the compatible client to receive the current release-date catalog silently", async () => {
+    const f = fixture({...manifest, minAppVersion: CATALOG_MIN_APP_VERSION}, compressed, "1.1.97");
     expect(await f.service.checkForUpdates()).toBe("merged");
     expect(f.fetcher).toHaveBeenCalledTimes(2);
     expect(f.merge).toHaveBeenCalledOnce();
     expect(f.onApplied).toHaveBeenCalledExactlyOnceWith(version);
+  });
+
+  it("downloads and applies release dates and stats through the real silent merge while preserving personal data and bracket history", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-real-merge-")); directories.push(directory);
+    const file = path.join(directory, "holoshelf.sqlite"); fs.copyFileSync("resources/seed/holoshelf-template.sqlite", file);
+    const database = new DatabaseService(file, undefined, {createBackups:false}); await database.init();
+    database.setSetting("hololive.officialDataVersion", "2026-10-15T120000Z");
+    database.setSetting("personal.preference", "preserve");
+    database.run("DELETE FROM hololive_music_release_dates WHERE youtube_video_id=?", [releaseVideoId]);
+    database.run("UPDATE hololive_music_video_stats SET view_count=1,fetched_at='2000-01-01T00:00:00.000Z' WHERE youtube_video_id=?", [releaseVideoId]);
+    database.setHololiveMusicMarker({youtubeVideoId:releaseVideoId,marker:"favorite"});
+    await database.createHololiveBracket({size:"RO16",format:"double_elimination"});
+    const tables = ["hololive_music_marker_keys","hololive_music_playlists","hololive_music_playlist_items","hololive_music_queue_items","hololive_music_exclusions","hololive_brackets","hololive_bracket_entries","hololive_bracket_matches","hololive_bracket_archives","hololive_bracket_archive_entries","hololive_bracket_archive_matches"];
+    const before = tables.map(table => database.select(`SELECT * FROM ${table}`));
+    const paths = {dataDirectory:directory,databasePath:file,backupDirectory:path.join(directory,"backups"),hololiveImageDirectory:path.join(directory,"images"),seedDirectory:null} as AppPathSet;
+    const onApplied = vi.fn();
+    const next = {...manifest, minAppVersion:CATALOG_MIN_APP_VERSION};
+    const fetcher = vi.fn(async (url:unknown) => String(url).endsWith(".json") ? Response.json(next) : new Response(compressed)) as unknown as typeof fetch;
+    const service = new CatalogUpdateService({database,paths,appVersion:"1.1.97",fetcher,merge:mergeBundledOfficialData,onApplied});
+    expect(await service.checkForUpdates()).toBe("merged");
+    expect(database.listHololiveMusicRows({youtubeVideoIds:[releaseVideoId]})[0]).toMatchObject({releaseDate:"2022-12-19",releaseDateBasis:"official_release",viewCount:100,viewCountFetchedAt:"2026-10-16T12:00:00.000Z"});
+    expect(database.getSettings()["personal.preference"]).toBe("preserve");
+    expect(tables.map(table => database.select(`SELECT * FROM ${table}`))).toEqual(before);
+    expect(onApplied).toHaveBeenCalledExactlyOnceWith(version);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(database.select("PRAGMA foreign_key_check")).toEqual([]);
   });
 
   it("validates and stages the complete seed, coalesces checks, and emits only a catalog event", async () => {
@@ -91,10 +121,11 @@ describe("silent catalog updates", () => {
     expect(f.settings["hololive.officialDataVersion"]).toBe("2026-10-15T120000Z");
   });
 
-  it.each(["private-setting", "custom-talent", "wrong-version"])("rejects a checksummed but invalid seed: %s", async failure => {
+  it.each(["private-setting", "custom-talent", "wrong-version", "invalid-release-date"])("rejects a checksummed but invalid seed: %s", async failure => {
     const seed = new SQL.Database(bytes);
     if (failure === "private-setting") seed.run("INSERT INTO settings(key,value,updated_at) VALUES('sources.youtubeApiKey','synthetic-secret','2026-10-16')");
     if (failure === "custom-talent") seed.run("UPDATE hololive_idols SET source='custom' WHERE id=(SELECT id FROM hololive_idols LIMIT 1)");
+    if (failure === "invalid-release-date") seed.run("UPDATE hololive_music_release_dates SET release_date='2022-02-31'");
     if (failure === "wrong-version") seed.run("UPDATE settings SET value='wrong' WHERE key='hololive.officialDataVersion'");
     const modified = Buffer.from(seed.export()); seed.close();
     const payload = gzipSync(modified);

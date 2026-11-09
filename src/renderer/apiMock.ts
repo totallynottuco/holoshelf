@@ -4294,6 +4294,15 @@ const mockBridge: HoloshelfBridge = {
         }
       case "hololive:brackets:list":
         return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
+      case "hololive:brackets:preview": {
+        const payload = _payload as IpcChannelMap["hololive:brackets:preview"]["request"];
+        const preview = await createMockHololiveBracket(payload);
+        return { eligibleCount: preview.entries.length, warnings: [], entries: preview.entries.map(entry => ({
+          youtubeVideoId: entry.youtubeVideoId, title: entry.title, idolName: entry.idolName, viewCount: entry.viewCount ?? null,
+          dateUsed: payload.filters?.excludeBeforeDate ?? entry.publishedAt?.slice(0,10) ?? null,
+          dateBasis: payload.filters?.dateBasis === "song_release" ? "recording_upload" as const : "video_upload" as const, sourceUrl: entry.youtubeUrl
+        })) };
+      }
       case "hololive:brackets:create":
         {
           const payload = _payload as IpcChannelMap["hololive:brackets:create"]["request"];

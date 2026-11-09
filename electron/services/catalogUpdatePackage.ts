@@ -1,3 +1,4 @@
+import { isCalendarDate } from "../../src/shared/musicReleaseDates";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -31,6 +32,11 @@ export async function validateCatalogDatabase(data: Uint8Array, manifest: Catalo
         "hololive_bracket_archive_matches"].map(table => [table, ""])
     ]) {
       if (Number(select(`SELECT COUNT(*) AS count FROM ${table}${where}`)[0].count) !== 0) throw new Error(`Catalog contains personal records: ${table}`);
+    }
+    if (select("SELECT name FROM sqlite_master WHERE type='table' AND name='hololive_music_release_dates'").length) {
+      const facts = select("SELECT youtube_video_id,release_date,basis,source_url FROM hololive_music_release_dates");
+      if (facts.some(row => !String(row.youtube_video_id).trim() || !isCalendarDate(String(row.release_date)) ||
+        !["official_release","youtube_release","recording_upload"].includes(String(row.basis)) || !String(row.source_url).startsWith("https://"))) throw new Error("Catalog release-date evidence is invalid");
     }
     const coverage = auditOfficialMusicStats({ select } as Parameters<typeof auditOfficialMusicStats>[0], manifest.statsFetchedAt);
     if (coverage.catalogVideos !== manifest.musicRows || coverage.missingVideos || coverage.staleVideos) throw new Error("Catalog statistics are incomplete or stale");

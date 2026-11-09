@@ -432,6 +432,8 @@ const hololiveBracketGenerationFiltersSchema = z.object({
   excludePreviousTop8: z.boolean().optional(),
   excludeAboveViews: z.number().int().min(0).max(10_000_000_000).optional().nullable(),
   excludeBelowViews: z.number().int().min(0).max(10_000_000_000).optional().nullable(),
+  dateBasis: z.enum(["song_release","video_upload"]).optional(),
+  includeEstimatedReleaseDates: z.boolean().optional(),
   excludeAfterDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   excludeBeforeDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   excludeTopicIds: z.array(hololiveMusicTopicSchema).optional()
@@ -1223,6 +1225,8 @@ export function installIpcHandlers(context: IpcContext): void {
   });
 
   handle("hololive:brackets:list", async () => context.database.listHololiveBrackets());
+
+  handle("hololive:brackets:preview", async (_event, payload) => context.database.previewHololiveBracketSelection(hololiveBracketCreateSchema.parse(payload)));
 
   handle("hololive:brackets:create", async (_event, payload) => {
     const input = hololiveBracketCreateSchema.parse(payload);

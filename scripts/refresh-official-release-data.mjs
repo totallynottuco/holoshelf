@@ -1,3 +1,4 @@
+import {refreshSongReleaseCatalog} from "./song-release-catalog.mjs";
 import fs from "node:fs";
 import {materializeCatalogDuplicateResets} from "./catalog-duplicate-resets.mjs";
 import os from "node:os";
@@ -508,6 +509,11 @@ async function main() {
       log("Skipping Holodex refresh; stamping and seeding existing source database data");
     }
 
+    const releaseDateRefresh = await measure("releaseDates", () => refreshSongReleaseCatalog(database, {
+      cacheFile: path.join(path.dirname(dbPath), "official-release-date-cache.json"), log
+    }));
+    log(`Release dates: ${releaseDateRefresh.matchedDates} official matches; ${releaseDateRefresh.requests} requests`);
+
     const repairedDuplicateRows = await measure("duplicateRepair", () => database.repairHololiveMusicDuplicateRows());
     if (repairedDuplicateRows > 0) {
       log(`Repaired ${repairedDuplicateRows} official duplicate music row(s)`);
@@ -601,6 +607,7 @@ async function main() {
       holodexRequestMetrics,
       videoStatsRefresh,
       statsCoverage,
+      releaseDateRefresh,
       catalogDuplicateResets,
       videoAvailabilityVerification: videoStatsRefresh && statsCoverage ? {
         schema: 1, checkedAt: videoStatsRefresh.fetchedAt,

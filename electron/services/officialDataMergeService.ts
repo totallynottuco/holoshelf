@@ -626,6 +626,16 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
         WHERE COALESCE(source_kind, 'official') = 'official'
           AND EXISTS (SELECT 1 FROM settings s WHERE s.key = ? || hololive_music_videos.youtube_video_id)`,
       [MUSIC_AVAILABILITY_DEFERRED_PREFIX]);
+      // Append release evidence separately; older catalogs cannot erase it and
+      // global metadata cannot override a user-owned video.
+      if (seedTableExists(seedDatabase, "hololive_music_release_dates")) {
+        const releaseFacts = selectSeedRows(seedDatabase, "SELECT * FROM hololive_music_release_dates");
+        options.database.upsertHololiveMusicReleaseDates(releaseFacts.filter(row => !userVideoIds.has(String(row.youtube_video_id))).map(row => ({
+          youtubeVideoId: String(row.youtube_video_id), releaseDate: String(row.release_date),
+          basis: String(row.basis) as "official_release" | "youtube_release" | "recording_upload", sourceUrl: String(row.source_url)
+        })));
+      }
+      options.database.refreshHololiveMusicReleaseDates();
       options.database.repairHololiveMusicClassifications();
       // Only replay new mirror mappings explicitly supplied by this trusted catalog.
       // An older local report is not current availability evidence during ordinary startup.

@@ -1,3 +1,4 @@
+import { chooseReleaseDate, isCalendarDate, parseYoutubeReleaseDate, type MusicReleaseDateEvidence } from "../../src/shared/musicReleaseDates";
 import initSqlJs, { type Database } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,6 +34,7 @@ import type {
   HololiveBracketRound,
   HololiveBracketRivalryStats,
   HololiveBracketSize,
+  HololiveBracketSelectionPreview,
   HololiveBracketStage,
   HololiveBracketStatsFormat,
   HololiveBracketSongStats,
@@ -1352,7 +1354,15 @@ const MIGRATIONS = [
        );
       DROP TABLE bracket_placement_repair;
     `
-  }
+  },
+  { version: 38, sql: `
+    CREATE TABLE hololive_music_release_dates (
+      youtube_video_id TEXT NOT NULL, release_date TEXT NOT NULL,
+      basis TEXT NOT NULL CHECK(basis IN ('official_release','youtube_release','recording_upload')),
+      source_url TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(youtube_video_id,basis,source_url)
+    );
+  ` }
 ];
 
 export interface DatabaseServiceOptions {
@@ -1463,6 +1473,7 @@ export class DatabaseService {
         ? fs.readFileSync(this.databasePath)
         : undefined;
     this.db = bytes ? new SQL.Database(bytes) : new SQL.Database();
+    this.releaseDateCache = null;
     this.db.run("PRAGMA foreign_keys = ON");
     if (this.options.initializedDatabaseBytes) {
       this.dirty = false;
@@ -1475,6 +1486,7 @@ export class DatabaseService {
     try {
       this.db.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
       this.applyMigrations();
+      this.backfillHololiveMusicReleaseDates();
       this.repairStaleActiveBracketArchives();
       this.seedHololiveTierData();
       const startupMaintenanceFingerprint = this.getStartupMaintenanceFingerprint();
@@ -2126,6 +2138,7 @@ export class DatabaseService {
         duplicateRows: 0,
         error: null
       });
+      this.captureHololiveMusicReleaseDates(bundle.rows, bundle.detailCache);
       this.upsertHolodexDetailCache(matchedDetails);
       this.upsertHolodexDuplicateRemovals(matchedDuplicateRemovals, runId);
       this.upsertHolodexMusicRows(matchedRows, matchedDetails, channelContext, runId);
@@ -2440,6 +2453,7 @@ export class DatabaseService {
       params
     );
     const idolMetadata = this.getHololiveIdolMetadataMap();
+    const releaseDates = this.getHololiveMusicReleaseDateMap();
     const rows = filters.dedupeCanonicalPerformance
       ? this.dedupeHololiveMusicRowsByCanonicalPerformance(selectedRows).slice(0, limit)
       : selectedRows;
@@ -2464,12 +2478,117 @@ export class DatabaseService {
       publishedAt: row.published_at,
       durationSeconds: row.duration_seconds,
       viewCount: row.view_count,
+      releaseDate: releaseDates.get(row.youtube_video_id)?.releaseDate ?? null,
+      releaseDateBasis: releaseDates.get(row.youtube_video_id)?.basis ?? null,
+      releaseDateSourceUrl: releaseDates.get(row.youtube_video_id)?.sourceUrl ?? null,
       viewCountFetchedAt: row.view_count_fetched_at,
       markerKey: row.marker_key,
       marker: row.marker,
       sourceKind: row.source_kind === "user" ? "user" : "official",
       updatedAt: row.updated_at
     }));
+  }
+
+  private releaseDateCache: Map<string, MusicReleaseDateEvidence> | null = null;
+
+  upsertHololiveMusicReleaseDates(facts: readonly MusicReleaseDateEvidence[]): void {
+    const userIds = new Set(this.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_videos WHERE source_kind='user'").map(row => row.youtube_video_id));
+    const work = () => {
+      for (const fact of facts) {
+        if (!fact.youtubeVideoId.trim() || !isCalendarDate(fact.releaseDate) ||
+            !["official_release", "youtube_release", "recording_upload"].includes(fact.basis) ||
+            !/^https:\/\//.test(fact.sourceUrl)) throw new Error("Invalid song release-date evidence");
+        if (userIds.has(fact.youtubeVideoId)) continue;
+        this.run(`INSERT INTO hololive_music_release_dates (youtube_video_id,release_date,basis,source_url,updated_at)
+          VALUES (?,?,?,?,?) ON CONFLICT(youtube_video_id,basis,source_url) DO UPDATE SET
+          release_date=excluded.release_date,updated_at=excluded.updated_at WHERE excluded.release_date<release_date`,
+        [fact.youtubeVideoId, fact.releaseDate, fact.basis, fact.sourceUrl, new Date().toISOString()]);
+      }
+      this.releaseDateCache = null;
+    };
+    if (this.inTransaction) work(); else this.transaction(work);
+  }
+
+  private getHololiveMusicReleaseDateMap(): Map<string, MusicReleaseDateEvidence> {
+    if (this.releaseDateCache) return this.releaseDateCache;
+    const grouped = new Map<string, MusicReleaseDateEvidence[]>();
+    for (const row of this.select<{ youtube_video_id: string; release_date: string; basis: MusicReleaseDateEvidence["basis"]; source_url: string }>(
+      "SELECT youtube_video_id,release_date,basis,source_url FROM hololive_music_release_dates")) {
+      const fact = { youtubeVideoId: row.youtube_video_id, releaseDate: row.release_date, basis: row.basis, sourceUrl: row.source_url };
+      const group = grouped.get(row.youtube_video_id) ?? [];
+      group.push(fact); grouped.set(row.youtube_video_id, group);
+    }
+    this.releaseDateCache = new Map();
+    for (const [id, facts] of grouped) { const selected = chooseReleaseDate(facts); if (selected) this.releaseDateCache.set(id, selected); }
+    return this.releaseDateCache;
+  }
+
+  private captureHololiveMusicReleaseDates(rows: HolodexCatalogRow[], details: Record<string, HolodexVideoDetail>): void {
+    const facts: MusicReleaseDateEvidence[] = [];
+    for (const row of rows) {
+      const date = row.publishedAt?.slice(0, 10);
+      const sourceUrl = `https://www.youtube.com/watch?v=${row.youtubeVideoId}`;
+      if (date && isCalendarDate(date)) facts.push({ youtubeVideoId: row.youtubeVideoId, releaseDate: date, basis: "recording_upload", sourceUrl });
+      const release = parseYoutubeReleaseDate(details[row.youtubeVideoId]?.description ?? "");
+      if (release) facts.push({ youtubeVideoId: row.youtubeVideoId, releaseDate: release, basis: "youtube_release", sourceUrl });
+    }
+    this.upsertHololiveMusicReleaseDates(facts);
+  }
+
+  private transferHololiveMusicReleaseDates(from: string, to: string): void {
+    if (!from || !to || from === to || this.isUserOwnedHololiveMusicVideo(to)) return;
+    this.run(`INSERT INTO hololive_music_release_dates (youtube_video_id,release_date,basis,source_url,updated_at)
+      SELECT ?,release_date,basis,source_url,updated_at FROM hololive_music_release_dates WHERE youtube_video_id=?
+      ON CONFLICT(youtube_video_id,basis,source_url) DO UPDATE SET release_date=excluded.release_date,updated_at=excluded.updated_at
+      WHERE excluded.release_date<release_date`, [to, from]);
+    this.releaseDateCache = null;
+  }
+
+  refreshHololiveMusicReleaseDates(): void {
+    const refresh = () => {
+      const facts: MusicReleaseDateEvidence[] = [];
+      const add = (id: string, date: string | null, basis: MusicReleaseDateEvidence["basis"]) => {
+        if (date && isCalendarDate(date.slice(0, 10))) facts.push({ youtubeVideoId: id, releaseDate: date.slice(0, 10), basis, sourceUrl: `https://www.youtube.com/watch?v=${id}` });
+      };
+      for (const row of this.select<{ youtube_video_id: string; published_at: string | null; description: string | null }>(
+        `SELECT v.youtube_video_id,v.published_at,d.description FROM hololive_music_videos v
+         LEFT JOIN hololive_music_detail_cache d USING(youtube_video_id) WHERE COALESCE(v.source_kind,'official')!='user'`)) {
+        add(row.youtube_video_id, row.published_at, "recording_upload");
+        add(row.youtube_video_id, parseYoutubeReleaseDate(row.description ?? ""), "youtube_release");
+      }
+      this.upsertHololiveMusicReleaseDates(facts);
+      const removals = this.select<{ removed_youtube_video_id: string; kept_youtube_video_id: string; removed_published_at: string | null }>(
+        `SELECT removed_youtube_video_id,kept_youtube_video_id,removed_published_at FROM hololive_music_duplicate_removals
+         WHERE kept_youtube_video_id IS NOT NULL AND reason IN ('topic_duplicate_of_non_topic','canonical_topic_duplicate_of_non_topic','topic_duplicate_without_non_topic','official_audio_duplicate_of_mv','known_duplicate_of_official')`);
+      const historicalFacts: MusicReleaseDateEvidence[] = removals.flatMap(row => {
+        const date = row.removed_published_at?.slice(0, 10);
+        return date && isCalendarDate(date) ? [{ youtubeVideoId: row.removed_youtube_video_id, releaseDate: date, basis: "recording_upload", sourceUrl: `https://www.youtube.com/watch?v=${row.removed_youtube_video_id}` }] : [];
+      });
+      this.upsertHololiveMusicReleaseDates(historicalFacts);
+      for (const row of removals) this.transferHololiveMusicReleaseDates(row.removed_youtube_video_id, row.kept_youtube_video_id);
+    };
+    if (this.inTransaction) refresh(); else this.transaction(refresh);
+  }
+
+  private backfillHololiveMusicReleaseDates(): void {
+    if (this.getSettingValue("internal.releaseDatesBackfill") === "1") return;
+    this.refreshHololiveMusicReleaseDates();
+    this.persistSettingValue("internal.releaseDatesBackfill", "1");
+  }
+
+  previewHololiveBracketSelection(input: { size: HololiveBracketSize; filters?: HololiveBracketGenerationFilters | null }): HololiveBracketSelectionPreview {
+    const filters = this.normalizeHololiveBracketGenerationFilters(input.filters);
+    const pools = this.loadHololiveBracketCandidatePools(filters);
+    const selection = this.selectHololiveBracketCandidates(HOLOLIVE_BRACKET_SIZE_COUNTS[input.size], "preview", "top_songs", filters, pools);
+    return {
+      eligibleCount: new Set([...pools.allByIdol.values()].flat().map(row => this.getHololiveBracketCanonicalKey(row))).size,
+      entries: this.sortHololiveBracketCandidates(selection.selected).map(row => ({
+        youtubeVideoId: row.youtubeVideoId, title: row.songName || row.title, idolName: row.idolNameForBracket, viewCount: row.viewCount ?? null,
+        dateUsed: filters.dateBasis === "song_release" ? row.releaseDate ?? row.publishedAt?.slice(0, 10) ?? null : row.publishedAt?.slice(0, 10) ?? null,
+        dateBasis: filters.dateBasis === "song_release" ? row.releaseDateBasis ?? (row.publishedAt ? "recording_upload" : "unknown") : "video_upload",
+        sourceUrl: filters.dateBasis === "song_release" ? row.releaseDateSourceUrl ?? null : row.youtubeUrl
+      })), warnings: selection.warnings
+    };
   }
 
   setHololiveMusicMarker(input: { youtubeVideoId: string; marker: HololiveMusicMarker | null }): HololiveMusicMarkerRecord {
@@ -9462,7 +9581,11 @@ export class DatabaseService {
       }
     }
 
-    const publishedTime = row.publishedAt ? Date.parse(row.publishedAt) : Number.NaN;
+    const useRelease = filters.dateBasis === "song_release";
+    const date = useRelease ? row.releaseDate || row.publishedAt : row.publishedAt;
+    const estimated = !row.releaseDate || row.releaseDateBasis === "recording_upload";
+    if (useRelease && (filters.excludeBeforeDate || filters.excludeAfterDate) && filters.includeEstimatedReleaseDates === false && estimated) return false;
+    const publishedTime = date ? Date.parse(date) : Number.NaN;
     if (filters.excludeBeforeDate) {
       const boundary = Date.parse(`${filters.excludeBeforeDate}T00:00:00.000Z`);
       if (!Number.isFinite(publishedTime) || !Number.isFinite(boundary) || publishedTime < boundary) {
@@ -10134,6 +10257,8 @@ export class DatabaseService {
     const hasMaxEntriesPerTalent = Object.prototype.hasOwnProperty.call(record, "maxEntriesPerTalent");
 
     return {
+      dateBasis: record.dateBasis === "song_release" ? "song_release" : record.dateBasis === "video_upload" ? "video_upload" : undefined,
+      includeEstimatedReleaseDates: typeof record.includeEstimatedReleaseDates === "boolean" ? record.includeEstimatedReleaseDates : undefined,
       excludeDisliked: hasRatingBuckets ? false : record.excludeDisliked === true,
       excludeRated: hasRatingBuckets ? false : record.excludeRated === true,
       ratingBuckets: hasRatingBuckets ? ratingBuckets : undefined,
@@ -10250,6 +10375,8 @@ export class DatabaseService {
     if (normalized.historyParticipation) {
       payload.historyParticipation = normalized.historyParticipation;
     }
+    if (normalized.dateBasis) payload.dateBasis = normalized.dateBasis;
+    if (normalized.includeEstimatedReleaseDates !== undefined) payload.includeEstimatedReleaseDates = normalized.includeEstimatedReleaseDates;
     if (normalized.maxEntriesPerTalent !== undefined) {
       payload.maxEntriesPerTalent = normalized.maxEntriesPerTalent;
     }
@@ -10547,6 +10674,7 @@ export class DatabaseService {
       return result;
     } catch (error) {
       this.requireDb().run("ROLLBACK");
+      this.releaseDateCache = null;
       this.inTransaction = false;
       throw error;
     }
@@ -10563,7 +10691,9 @@ export class DatabaseService {
     const tempPath = `${this.databasePath}.tmp-${process.pid}-${Date.now()}`;
 
     try {
-      fs.writeFileSync(tempPath, Buffer.from(db.export()));
+      const bytes = db.export();
+      db.run("PRAGMA foreign_keys = ON");
+      fs.writeFileSync(tempPath, Buffer.from(bytes));
       fs.renameSync(tempPath, this.databasePath);
       this.dirty = false;
     } catch (error) {
@@ -11979,12 +12109,18 @@ export class DatabaseService {
   private upsertHolodexDuplicateRemovals(removals: HolodexDuplicateRemoval[], runId: string | null): void {
     const now = new Date().toISOString();
 
-    for (const removal of removals) {
-      if (
-        this.isUserOwnedHololiveMusicVideo(removal.removedYoutubeVideoId) ||
-        (removal.keptYoutubeVideoId ? this.isUserOwnedHololiveMusicVideo(removal.keptYoutubeVideoId) : false)
-      ) {
-        continue;
+    const userIds = new Set(this.select<{ youtube_video_id: string }>("SELECT youtube_video_id FROM hololive_music_videos WHERE source_kind='user'").map(row => row.youtube_video_id));
+    const safeRemovals = removals.filter(row => !userIds.has(row.removedYoutubeVideoId) && !userIds.has(row.keptYoutubeVideoId ?? ""));
+    const sameRecording = new Set(["topic_duplicate_of_non_topic", "canonical_topic_duplicate_of_non_topic", "topic_duplicate_without_non_topic", "official_audio_duplicate_of_mv", "known_duplicate_of_official"]);
+    const releaseFacts: MusicReleaseDateEvidence[] = safeRemovals.flatMap(row => {
+      const date = row.removedPublishedAt?.slice(0, 10);
+      return row.keptYoutubeVideoId && sameRecording.has(row.reason) && date && isCalendarDate(date)
+        ? [{youtubeVideoId:row.removedYoutubeVideoId, releaseDate:date, basis:"recording_upload", sourceUrl:`https://www.youtube.com/watch?v=${row.removedYoutubeVideoId}`}] : [];
+    });
+    this.upsertHololiveMusicReleaseDates(releaseFacts);
+    for (const removal of safeRemovals) {
+      if (removal.keptYoutubeVideoId && sameRecording.has(removal.reason)) {
+        this.transferHololiveMusicReleaseDates(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
       }
 
       this.run(
@@ -13076,30 +13212,7 @@ export class DatabaseService {
         const keptTitle = keptSnapshot?.title ?? null;
         const keptUrl = keptSnapshot?.youtube_url ?? null;
 
-        const removedExclusion = this.select<{ youtube_video_id: string }>(
-          "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
-          [removedId]
-        )[0];
-        // Exclusions identify the exact video the user removed. Choosing a preferred MV
-        // for a mirror or broadcast edit must not exclude that different video as well.
-        if (removedExclusion && removal.reason !== "official_audio_duplicate_of_mv" && removal.reason !== "canonical_variant_duplicate_of_full") {
-          const keptExclusion = this.select<{ youtube_video_id: string }>(
-            "SELECT youtube_video_id FROM hololive_music_exclusions WHERE youtube_video_id = ?",
-            [keptId]
-          )[0];
-          if (keptExclusion) {
-            this.run("DELETE FROM hololive_music_exclusions WHERE youtube_video_id = ?", [removedId]);
-          } else {
-            this.run(
-              `UPDATE hololive_music_exclusions
-               SET youtube_video_id = ?,
-                   title_snapshot = COALESCE(?, title_snapshot),
-                   source_url_snapshot = COALESCE(?, source_url_snapshot)
-               WHERE youtube_video_id = ?`,
-              [keptId, keptTitle, keptUrl, removedId]
-            );
-          }
-        }
+        // Exclusions belong to the exact video, never to its replacement.
 
         const affectedPlaylistIds = this.select<{ playlist_id: string }>(
           "SELECT DISTINCT playlist_id FROM hololive_music_playlist_items WHERE youtube_video_id = ?",

@@ -7,6 +7,7 @@ import type {
   FetchJob,
   HolodexChannel,
   HololiveBracket,
+  HololiveBracketSelectionPreview,
   HololiveBracketArchiveSummary,
   HololiveBracketCreateWarning,
   HololiveBracketFormat,
@@ -855,6 +856,7 @@ export interface IpcChannelMap {
     request: null;
     response: HololiveBracketSummary[];
   };
+  "hololive:brackets:preview": { request: HololiveBracketCreateRequest; response: HololiveBracketSelectionPreview; };
   "hololive:brackets:create": {
     request: HololiveBracketCreateRequest;
     response: HololiveBracketCreateResponse;

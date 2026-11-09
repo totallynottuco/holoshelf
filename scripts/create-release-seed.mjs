@@ -171,6 +171,10 @@ if (customIds.length > 0 && columnExists("hololive_idols", "source")) {
   database.run("DELETE FROM hololive_idols WHERE source = 'custom';");
 }
 
+runIfTable("hololive_music_release_dates", `DELETE FROM hololive_music_release_dates WHERE youtube_video_id NOT IN (
+  SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind,'official')='official'
+  UNION SELECT removed_youtube_video_id FROM hololive_music_duplicate_removals WHERE kept_youtube_video_id IN (SELECT youtube_video_id FROM hololive_music_videos WHERE COALESCE(source_kind,'official')='official')
+);`);
 runIfTable("settings", "DELETE FROM settings;");
 runIfTable(
   "settings",

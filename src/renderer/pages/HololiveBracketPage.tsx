@@ -1,3 +1,5 @@
+import { parseBracketYears, type BracketDateBasis } from "../../shared/musicReleaseDates";
+import type { HololiveBracketSelectionPreview } from "../../shared/contracts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type WheelEvent as ReactWheelEvent } from "react";
 import {
   ArrowUpDown,
@@ -216,11 +218,11 @@ const BRACKET_FILTER_COPY = {
   },
   fromDate: {
     label: "From date",
-    description: "Only include songs published on or after this date."
+    description: "Include the selected date basis on or after this date."
   },
   toDate: {
     label: "To date",
-    description: "Only include songs published on or before this date."
+    description: "Include the selected date basis on or before this date."
   }
 } as const satisfies Record<string, BracketFilterCopy>;
 
@@ -3791,6 +3793,11 @@ export function HololiveBracketPage() {
   const [excludePreviousTop8, setExcludePreviousTop8] = useState(false);
   const [excludeAboveViews, setExcludeAboveViews] = useState("");
   const [excludeBelowViews, setExcludeBelowViews] = useState("");
+  const [dateBasis, setDateBasis] = useState<BracketDateBasis>("song_release");
+  const [includeEstimatedReleaseDates, setIncludeEstimatedReleaseDates] = useState(true);
+  const [yearRange, setYearRange] = useState("");
+  const [selectionPreview, setSelectionPreview] = useState<HololiveBracketSelectionPreview | null>(null);
+  const yearRangeError = yearRange.trim() !== "" && !parseBracketYears(yearRange);
   const [excludeAfterDate, setExcludeAfterDate] = useState("");
   const [excludeBeforeDate, setExcludeBeforeDate] = useState("");
   const [includedTopicIds, setIncludedTopicIds] = useState<HololiveMusicTopic[]>(BRACKET_TOPIC_VALUES);
@@ -3955,6 +3962,8 @@ export function HololiveBracketPage() {
       excludePreviousTop8,
       excludeAboveViews: excludeAboveViewsValue,
       excludeBelowViews: excludeBelowViewsValue,
+      dateBasis,
+      includeEstimatedReleaseDates,
       excludeAfterDate: excludeAfterDate || null,
       excludeBeforeDate: excludeBeforeDate || null,
       excludeTopicIds: excludedTopicIds,
@@ -3966,6 +3975,8 @@ export function HololiveBracketPage() {
       includedTalentIds: isAllTalentsSelected ? undefined : selectedTalentIds
     }),
     [
+      dateBasis,
+      includeEstimatedReleaseDates,
       excludeAboveViewsValue,
       excludeAfterDate,
       excludeBeforeDate,
@@ -3986,6 +3997,15 @@ export function HololiveBracketPage() {
       selectedRatingBuckets
     ]
   );
+  useEffect(() => { setSelectionPreview(null); }, [createFilters, selectedSize, selectedGenerationStyle, yearRange]);
+
+  async function previewSelection() {
+    setBusy(true);
+    try { setSelectionPreview(await api.invoke("hololive:brackets:preview", { size: selectedSize, generationStyle: "top_songs", filters: createFilters })); }
+    catch (error) { showBracketError(error, "Could not preview bracket"); }
+    finally { setBusy(false); }
+  }
+
   const activeFilterLabels = useMemo(() => {
     const labels: string[] = [];
     if (selectedTopicIds.length === 1) {
@@ -5112,6 +5132,9 @@ export function HololiveBracketPage() {
     setExcludePreviousTop8(false);
     setExcludeAboveViews("");
     setExcludeBelowViews("");
+    setYearRange("");
+    setDateBasis("song_release");
+    setIncludeEstimatedReleaseDates(true);
     setExcludeAfterDate("");
     setExcludeBeforeDate("");
     setIncludedTopicIds(BRACKET_TOPIC_VALUES);
@@ -5234,6 +5257,22 @@ export function HololiveBracketPage() {
                     />
                   </label>
                   <div className={`hololive-bracket-exclusions${activeFilterLabels.length > 0 ? " has-active" : ""}`}>
+                    <div className="hololive-bracket-date-shortcuts">
+                      <label>Date basis
+                        <select aria-label="Date basis" value={dateBasis} disabled={busy} onChange={event => setDateBasis(event.target.value as BracketDateBasis)}>
+                          <option value="song_release">Song release date</option>
+                          <option value="video_upload">Video upload date</option>
+                        </select>
+                      </label>
+                      <label>Year or year range
+                        <input aria-label="Year or year range" placeholder="2022 or 2020-2022" value={yearRange} disabled={busy} onChange={event => {
+                          const value = event.target.value; setYearRange(value);
+                          const range = parseBracketYears(value);
+                          if (range || !value.trim()) { setExcludeBeforeDate(range?.from ?? ""); setExcludeAfterDate(range?.to ?? ""); }
+                        }} />
+                      </label>
+                      {yearRangeError && <span role="alert">Enter a year or an ascending range, such as 2020-2022.</span>}
+                    </div>
                     <div className="hololive-bracket-filter-row">
                       <span className="hololive-bracket-exclusions-title">
                         <ListMusic size={13} />
@@ -5496,6 +5535,11 @@ export function HololiveBracketPage() {
                               </div>
                               <div className="hololive-bracket-filter-fieldset">
                                 <div className="hololive-bracket-date-filters">
+                                  {dateBasis === "song_release" && <label className="hololive-bracket-release-estimates">
+                                    <input type="checkbox" checked={includeEstimatedReleaseDates} disabled={busy} onChange={event => setIncludeEstimatedReleaseDates(event.target.checked)} />
+                                    Include estimated dates (earliest known recording upload)
+                                  </label>}
+
                                   <label>
                                     <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.fromDate} />
                                     <input
@@ -5503,7 +5547,7 @@ export function HololiveBracketPage() {
                                       aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.fromDate)}
                                       value={excludeBeforeDate}
                                       disabled={busy}
-                                      onChange={(event) => setExcludeBeforeDate(event.target.value)}
+                                      onChange={(event) => { setYearRange(""); setExcludeBeforeDate(event.target.value); }}
                                     />
                                   </label>
                                   <label>
@@ -5513,7 +5557,7 @@ export function HololiveBracketPage() {
                                       aria-label={bracketFilterAriaLabel(BRACKET_FILTER_COPY.toDate)}
                                       value={excludeAfterDate}
                                       disabled={busy}
-                                      onChange={(event) => setExcludeAfterDate(event.target.value)}
+                                      onChange={(event) => { setYearRange(""); setExcludeAfterDate(event.target.value); }}
                                     />
                                   </label>
                                 </div>
@@ -5631,8 +5675,21 @@ export function HololiveBracketPage() {
                       </div>
                     )}
                   </div>
+                  {selectionPreview && <div className="hololive-bracket-release-preview" aria-label="Ranked entrant preview">
+                    <p>{selectionPreview.entries.length} selected from {selectionPreview.eligibleCount} eligible songs. Ranked by current views.</p>
+                    <table><thead><tr><th>Rank / Song</th><th>Views</th><th>Date used</th></tr></thead><tbody>
+                      {selectionPreview.entries.map((entry, index) => <tr key={entry.youtubeVideoId}>
+                        <td>{index + 1}. {entry.title}<small>{entry.idolName}</small></td>
+                        <td>{entry.viewCount?.toLocaleString() ?? "Unknown"}</td>
+                        <td>{entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer">{entry.dateUsed ?? "Unknown"}</a> : entry.dateUsed ?? "Unknown"}<small>{entry.dateBasis === "recording_upload" ? "Estimated" : entry.dateBasis.replaceAll("_", " ")}</small></td>
+                      </tr>)}
+                    </tbody></table>
+                    {selectionPreview.entries.length < Number(selectedSize.slice(2)) && <p>Too few songs match these filters.</p>}
+                    {selectionPreview.warnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
+                  </div>}
                   <div className="hololive-bracket-create-actions">
-                    <button type="button" className="primary" disabled={busy || selectedTalentIds.length === 0} onClick={() => void createBracket()}>
+                    {selectedGenerationStyle === "top_songs" && <button type="button" disabled={busy || Boolean(yearRangeError) || selectedTalentIds.length === 0} onClick={() => void previewSelection()}>Preview entrants</button>}
+                    <button type="button" className="primary" disabled={busy || Boolean(yearRangeError) || selectedTalentIds.length === 0} onClick={() => void createBracket()}>
                       {busy ? <Loader2 size={14} className="spin" /> : <Swords size={14} />}
                       Create Bracket
                     </button>

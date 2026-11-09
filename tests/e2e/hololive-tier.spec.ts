@@ -36,6 +36,31 @@ async function createBracket(
   await expect(popover).toHaveCount(0);
 }
 
+test("filters bracket releases by a year range and previews entrants without saving a bracket", async ({page}) => {
+  await page.getByRole("link",{name:"Bracket",exact:true}).click();
+  await page.getByRole("button",{name:"Create",exact:true}).click();
+  const popover=page.getByRole("dialog",{name:"Create bracket"});
+  await expect(popover.getByLabel("Year or year range")).toBeVisible();
+  await popover.getByRole("button",{name:/Edit Filters/}).click();
+  await expect(popover.getByLabel("Date basis",{exact:true})).toHaveValue("song_release");
+  await popover.getByLabel("Year or year range").fill("2020-2022");
+  await expect(popover.locator('input[type="date"]').nth(0)).toHaveValue("2020-01-01");
+  await expect(popover.locator('input[type="date"]').nth(1)).toHaveValue("2022-12-31");
+  await popover.getByLabel("Year or year range").fill("2022-2020");
+  await expect(popover.getByRole("alert")).toContainText("ascending range");
+  await expect(popover.getByRole("button",{name:"Create Bracket",exact:true})).toBeDisabled();
+  await popover.getByLabel("Year or year range").fill("2022");
+  await popover.getByRole("button",{name:"Preview entrants"}).click();
+  await expect(popover.getByLabel("Ranked entrant preview")).toContainText("selected from");
+  await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
+  const previewLayout = await popover.getByLabel("Ranked entrant preview").evaluate(element => ({width:element.clientWidth, scroll:element.scrollWidth, table:element.querySelector("table")!.getBoundingClientRect().width}));
+  expect(previewLayout.scroll, JSON.stringify(previewLayout)).toBeLessThanOrEqual(previewLayout.width);
+  await popover.getByLabel("Date basis",{exact:true}).selectOption("video_upload");
+  await expect(popover.getByLabel("Ranked entrant preview")).toHaveCount(0);
+  await expect(popover.getByText("Include estimated dates",{exact:false})).toHaveCount(0);
+  await popover.getByRole("button",{name:"Cancel",exact:true}).click();
+});
+
 async function bracketVerticalFitGap(viewport: Locator): Promise<number> {
   return viewport.evaluate((element) => {
     const viewportRect = element.getBoundingClientRect();

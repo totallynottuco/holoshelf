@@ -1353,7 +1353,7 @@ select {
   display: grid;
   grid-column: 1 / -1;
   grid-row: 4;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 6px;
   min-width: 0;
   min-height: 0;
@@ -1624,6 +1624,8 @@ select {
 }
 
 .hololive-bracket-history-hint {
+  min-width: 0;
+  white-space: normal;
   color: #9eb5cb;
   font-size: 10px;
   line-height: 1.4;
@@ -1931,6 +1933,80 @@ select {
   padding-bottom: 0;
   border-bottom: 0;
 }
+
+.hololive-bracket-release-preview {
+  grid-column: 1 / -1;
+  grid-row: 5;
+  min-width: 0;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: normal;
+}
+
+.hololive-bracket-create-popover:has(.hololive-bracket-release-preview) {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+}
+
+.hololive-bracket-create-popover:has(.hololive-bracket-release-preview) .hololive-bracket-create-actions {
+  grid-row: 6;
+}
+
+.hololive-bracket-release-preview table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.hololive-bracket-release-preview td,
+.hololive-bracket-release-preview th {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 1px solid rgba(64, 171, 210, 0.3);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.hololive-bracket-release-preview th:first-child { width: 49%; }
+.hololive-bracket-release-preview th:nth-child(2) { width: 23%; }
+.hololive-bracket-release-preview th:nth-child(3) { width: 28%; }
+.hololive-bracket-release-preview small { display: block; color: #9eb5cb; }
+
+.hololive-bracket-filter-line-grid:has(.hololive-bracket-date-filters) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.hololive-bracket-date-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  min-width: 0;
+  font-size: 11px;
+  white-space: normal;
+}
+
+.hololive-bracket-date-shortcuts [role="alert"] { grid-column: 1 / -1; }
+
+.hololive-bracket-date-shortcuts select {
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  border: 0;
+  border-bottom: 1px solid rgba(64, 171, 210, 0.3);
+  background: #071822;
+  color: #eaf9ff;
+  font-size: 12px;
+}
+
+.hololive-bracket-date-filters .hololive-bracket-release-estimates {
+  display: flex;
+  align-items: center;
+  grid-column: 1 / -1;
+  font-size: 11px;
+  white-space: normal;
+}
+
+.hololive-bracket-release-estimates input { width: auto; }
 
 .hololive-bracket-filter-group.song-pool .hololive-bracket-date-filters,
 .hololive-bracket-filter-group.song-pool .hololive-bracket-number-filters {
