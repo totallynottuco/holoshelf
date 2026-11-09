@@ -60,6 +60,37 @@ function detail(input: Partial<HolodexVideoDetail> & Pick<HolodexVideoDetail, "y
 }
 
 describe("Holodex cleanup rules", () => {
+  it.each([" / ", "/", " - ", " | "])("recognizes channel-prefixed releases without song metadata: %s", separator => {
+    expect(buildDuplicateTitleCore(`FLOW GLOW${separator}BOUNCE BACK！【Official Music Video】`, { channelName: "hololive FLOW GLOW" })).toBe("bounce back");
+    expect(buildDuplicateTitleCore(`Future Artist${separator}Silver Horizon【Official Music Video】`, { channelName: "Future Artist Official Channel" })).toBe("silver horizon");
+  });
+
+  it("does not treat a song/translation pair as an artist prefix without channel evidence", () => {
+    expect(buildDuplicateTitleCore("Stellar Stellar / Hoshimachi Suisei【Official Music Video】", { channelName: "Suisei Channel" })).toBe("stellar stellar");
+    expect(buildDuplicateTitleCore("未来島 / Future Island【Official Music Video】", { channelName: "Mori Calliope" })).toBe("未来島");
+    expect(buildDuplicateTitleCore("FLOW GLOW / BOUNCE BACK！【Official Music Video】")).toBe("flow glow");
+    expect(buildDuplicateTitleCore("FLOW GLOW Forever / Different Translation", { channelName: "hololive FLOW GLOW" })).toBe("flow glow forever");
+    expect(buildDuplicateTitleCore("FLOW / Flow Translation", { channelName: "hololive FLOW GLOW" })).toBe("flow");
+    expect(buildDuplicateTitleCore("FLOWGLOW / BOUNCE BACK！【Official Music Video】", { channelName: "hololive FLOW GLOW" })).toBe("bounce back");
+  });
+
+  it.each([false, true])("matches a new group MV to its topic audio with missing MV song metadata (audio first: %s)", audioFirst => {
+    const mv = row({ youtubeVideoId: "Mfcj1AdnzhQ", title: "FLOW GLOW / BOUNCE BACK！【Official Music Video】", channelName: "hololive FLOW GLOW" });
+    const audio = row({ youtubeVideoId: "Fv8ijeYqTS8", title: "BOUNCE BACK！", channelName: "hololive FLOW GLOW" });
+    const groupMember = { channelId: "riona", name: "Riona", englishName: "Riona", type: "vtuber", photoUrl: "", org: "Hololive" };
+    const details = {
+      [mv.youtubeVideoId]: { ...detail({ youtubeVideoId: mv.youtubeVideoId, channelId: "flow-glow", duration: 241, songNames: [] }), mentions: [groupMember] },
+      [audio.youtubeVideoId]: { ...detail({ youtubeVideoId: audio.youtubeVideoId, channelId: "flow-glow", originalChannelId: "flow-glow-topic", providedToYoutube: true, duration: 222, songNames: ["BOUNCE BACK!"] }), mentions: [groupMember] }
+    };
+    const result = cleanupCatalogRows(audioFirst ? [audio, mv] : [mv, audio], {}, details);
+    expect(result.rows.map(video => video.youtubeVideoId)).toEqual([mv.youtubeVideoId]);
+    expect(result.duplicateRemovals).toMatchObject([{ removedYoutubeVideoId: audio.youtubeVideoId, keptYoutubeVideoId: mv.youtubeVideoId, reason: "topic_duplicate_of_non_topic" }]);
+    for (const changed of [{ duration: 500 }, { mentions: [], collabChannelIds: [], channelId: "unrelated-performer" }, { songNames: ["Different Song"] }]) {
+      const preserved = cleanupCatalogRows([audio, mv], {}, { ...details, [audio.youtubeVideoId]: { ...details[audio.youtubeVideoId], ...changed } });
+      expect(preserved.rows).toHaveLength(2);
+    }
+  });
+
   const traumaAudio = {
     youtubeVideoId: "CeTdduq4KbI",
     title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)' (Official Audio)",

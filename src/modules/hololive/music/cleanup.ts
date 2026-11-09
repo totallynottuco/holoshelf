@@ -203,11 +203,18 @@ interface DuplicateTitleContext {
   channelName?: string | null;
 }
 
-function hasLikelyChannelPrefix(segmentKey: string, context: DuplicateTitleContext): boolean {
+function hasLikelyChannelPrefix(segmentKey: string, context: DuplicateTitleContext, allowPartial = false): boolean {
   const segmentTokens = segmentKey.split(" ").filter(Boolean);
   const channelTokens = new Set(buildCandidateTitleTokens(context.channelName ?? ""));
   if (segmentTokens.length === 0 || channelTokens.size === 0) {
     return false;
+  }
+
+  if (!allowPartial) {
+    // Slash-separated text can also be a song/translation pair. Require the
+    // whole artist name (including compact group names), not incidental overlap.
+    return segmentTokens.join("") === [...channelTokens].join("") ||
+      (segmentTokens.length > 1 && segmentTokens.every(token => channelTokens.has(token)));
   }
 
   const overlapCount = segmentTokens.filter((token) => channelTokens.has(token)).length;
@@ -242,7 +249,9 @@ export function buildDuplicateTitleCore(title: string, context: DuplicateTitleCo
       continue;
     }
 
-    if (separator === " - " && hasLikelyChannelPrefix(leftKey, context)) {
+    // A fresh release may have no song metadata yet. Artist / Song and
+    // Artist | Song need the same channel-aware handling as Artist - Song.
+    if (hasLikelyChannelPrefix(leftKey, context, separator === " - ")) {
       const rightCore = buildDuplicateTitleCore(rightSegment, context);
       if (rightCore) {
         return rightCore;

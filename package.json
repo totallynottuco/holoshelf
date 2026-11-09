@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Fixes overall Top X bracket history filters across single and double elimination.\n\n- Uses actual finishing placements instead of double-elimination rank-group numbers.\n- Automatically repairs saved archive placements and Top 4/8/16 statistics after upgrading.\n- Preserves bracket results, champions, match history, Favorites, playlists, and personal settings.\n- Clarifies that history qualifiers combine across completed brackets and do not change the new bracket size."
+      "releaseNotes": "Fixes overall Top X bracket history filters across single and double elimination.\n\n- Uses actual finishing placements instead of double-elimination rank-group numbers.\n- Automatically repairs saved archive placements and Top 4/8/16 statistics after upgrading.\n- Preserves bracket results, champions, match history, Favorites, playlists, and personal settings.\n- Clarifies that history qualifiers combine across completed brackets and do not change the new bracket size.\n- Fixes duplicate new releases when Holodex song metadata is delayed, including channel-prefixed titles.\n- Preserves personal notes and ratings when consolidating topic-audio duplicates."
     },
     "win": {
       "icon": "ico.ico",

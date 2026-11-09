@@ -207,7 +207,7 @@ describe("broadcast edit repair on existing libraries", () => {
     const reopened = new DatabaseService(file, undefined, { persistWrites: false, createBackups: false });
     await reopened.init();
     assertPersonal(reopened, playlist);
-    expect(reopened.getSettings()["internal.startupMaintenanceVersion"]).toBe("3");
+    expect(reopened.getSettings()["internal.startupMaintenanceVersion"]).toBe("4");
   });
 
   it("applies a corrected silent catalog to an existing client library", async () => {

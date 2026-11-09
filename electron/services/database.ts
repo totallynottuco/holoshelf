@@ -351,7 +351,7 @@ interface HololiveBracketCandidateSelectionResult {
 }
 
 const STARTUP_MAINTENANCE_SETTING = "internal.startupMaintenanceVersion";
-const STARTUP_MAINTENANCE_VERSION = "3";
+const STARTUP_MAINTENANCE_VERSION = "4";
 const OFFICIAL_ROSTER_CLASSIFICATION_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(HOLOLIVE_IDOLS.map(({ id, displayName, generation, youtubeChannelId }) => (
     [id, displayName, generation, youtubeChannelId]
@@ -12129,13 +12129,9 @@ export class DatabaseService {
     }));
 
     for (const removal of removals) {
-      if (removal.reason === "official_audio_duplicate_of_mv" || removal.reason === "canonical_variant_duplicate_of_full") {
-        this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
-        this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
-        this.retireVerifiedHololiveMusicAudioMirror(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
-      } else {
-        this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
-      }
+      this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.retireHololiveMusicDuplicate(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
@@ -12400,13 +12396,15 @@ export class DatabaseService {
     }
 
     for (const removal of removals) {
-      this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+      this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.retireHololiveMusicDuplicate(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
   }
 
-  private retireVerifiedHololiveMusicAudioMirror(removedYoutubeVideoId: string, keptYoutubeVideoId: string): void {
+  private retireHololiveMusicDuplicate(removedYoutubeVideoId: string, keptYoutubeVideoId: string): void {
     type TrackedState = { item_id: string; status: string; rating: number | null; notes: string | null;
       started_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
     const tracked = (id: string) => this.select<TrackedState>(
@@ -12477,7 +12475,7 @@ export class DatabaseService {
         if (!kept) continue;
         this.transferHololiveMusicReferencesBetweenVideos(audio.youtube_video_id, kept.youtube_video_id);
         this.transferHololiveMusicMarkersBetweenVideos(audio.youtube_video_id, kept.youtube_video_id);
-        this.retireVerifiedHololiveMusicAudioMirror(audio.youtube_video_id, kept.youtube_video_id);
+        this.retireHololiveMusicDuplicate(audio.youtube_video_id, kept.youtube_video_id);
         removals.push({
           removedYoutubeVideoId: audio.youtube_video_id, removedTitle: audio.title,
           keptYoutubeVideoId: kept.youtube_video_id, keptTitle: kept.title,
@@ -12566,7 +12564,9 @@ export class DatabaseService {
     }
 
     for (const removal of removals) {
-      this.deleteHololiveMusicVideoData(removal.removedYoutubeVideoId, { deleteStats: true });
+      this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.retireHololiveMusicDuplicate(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;
@@ -12866,7 +12866,7 @@ export class DatabaseService {
     for (const removal of removals) {
       this.transferHololiveMusicReferencesBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
       this.transferHololiveMusicMarkersBetweenVideos(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
-      this.retireVerifiedHololiveMusicAudioMirror(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
+      this.retireHololiveMusicDuplicate(removal.removedYoutubeVideoId, removal.keptYoutubeVideoId);
     }
     this.upsertHolodexDuplicateRemovals(removals, runId);
     return removals.length;

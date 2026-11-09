@@ -1,9 +1,9 @@
 {
-  "startedAt": "2026-11-07T22:30:52.479Z",
-  "completedAt": "2026-11-07T22:33:29.261Z",
+  "startedAt": "2026-11-09T17:27:13.070Z",
+  "completedAt": "2026-11-09T17:29:47.973Z",
   "databasePath": "resources/seed/holoshelf-template.sqlite",
   "artifactDirectory": "resources/seed/holodex-refresh/latest",
-  "officialDataVersion": "2026-11-07T223058Z",
+  "officialDataVersion": "2026-11-09T173857Z",
   "replaceExisting": true,
   "refreshHolodex": true,
   "refreshChannels": true,
@@ -15,56 +15,56 @@
   "resumeCache": {
     "hits": 0,
     "writes": 80,
-    "startedAt": 1794090658617
+    "startedAt": 1794245238732
   },
   "timingsMs": {
-    "databaseInit": 6134,
-    "channels": 955,
-    "music": 148954,
-    "duplicateRepair": 240,
-    "youtubeStats": 203,
-    "duplicateRepairAfterStats": 154,
-    "images": 11,
-    "artifacts": 138,
-    "seed": 480
+    "databaseInit": 5658,
+    "channels": 997,
+    "music": 147566,
+    "duplicateRepair": 224,
+    "youtubeStats": 183,
+    "duplicateRepairAfterStats": 140,
+    "images": 13,
+    "artifacts": 129,
+    "seed": 495
   },
   "channelRefresh": {
     "refreshedChannels": 90,
     "classifiedChannels": 90,
-    "updatedAt": "2026-11-07T22:30:58.951Z"
+    "updatedAt": "2026-11-09T17:27:19.093Z"
   },
   "musicRefresh": {
-    "sourceRows": 3154,
-    "importedRows": 3110,
+    "sourceRows": 3157,
+    "importedRows": 3113,
     "filteredRows": 44,
-    "duplicateRows": 1187,
+    "duplicateRows": 1189,
     "run": {
-      "id": "902e2074-2d1a-4c7d-b475-cff30759e54d",
+      "id": "e4f8c51b-6897-4ed9-9ebc-0f37f80c6a85",
       "source": "live",
       "status": "completed",
-      "startedAt": "2026-11-07T22:33:19.081Z",
-      "completedAt": "2026-11-07T22:33:28.402Z",
-      "fetchedRows": 3154,
-      "keptRows": 3110,
+      "startedAt": "2026-11-09T17:29:38.550Z",
+      "completedAt": "2026-11-09T17:29:47.163Z",
+      "fetchedRows": 3157,
+      "keptRows": 3113,
       "filteredRows": 44,
-      "duplicateRows": 1187,
+      "duplicateRows": 1189,
       "error": null
     }
   },
   "holodexCoverage": {
     "topics": {
       "Music_Cover": {
-        "total": 2652,
-        "fetched": 2652,
+        "total": 2657,
+        "fetched": 2657,
         "pages": 1,
-        "pageSize": 2652,
+        "pageSize": 2657,
         "complete": true
       },
       "Original_Song": {
-        "total": 4017,
-        "fetched": 4017,
+        "total": 4013,
+        "fetched": 4013,
         "pages": 1,
-        "pageSize": 4017,
+        "pageSize": 4013,
         "complete": true
       }
     },
@@ -73,36 +73,36 @@
   "holodexRequestMetrics": {
     "requests": 80,
     "retries": 0,
-    "quotaWaitMs": 108117
+    "quotaWaitMs": 111159
   },
   "videoStatsRefresh": {
-    "requestedVideos": 3089,
-    "updatedVideos": 3089,
+    "requestedVideos": 3092,
+    "updatedVideos": 3092,
     "missingVideos": 0,
     "unavailableVideos": 0,
     "failedBatches": 0,
     "failedBatchDetails": [],
     "batches": 0,
-    "fetchedAt": "2026-11-07T22:33:14.059Z"
+    "fetchedAt": "2026-11-09T17:29:32.732Z"
   },
   "statsCoverage": {
-    "catalogVideos": 3089,
-    "withStats": 3089,
-    "freshVideos": 3089,
+    "catalogVideos": 3091,
+    "withStats": 3091,
+    "freshVideos": 3091,
     "missingVideos": 0,
     "staleVideos": 0,
     "missingVideoIds": [],
     "staleVideoIds": []
   },
   "catalogDuplicateResets": {
-    "resetRows": 3089,
-    "checkedAt": "2026-11-07T22:33:14.059Z"
+    "resetRows": 3091,
+    "checkedAt": "2026-11-09T17:29:32.732Z"
   },
   "videoAvailabilityVerification": {
     "schema": 1,
-    "checkedAt": "2026-11-07T22:33:14.059Z",
-    "checkedVideos": 3089,
-    "retainedVideos": 3089
+    "checkedAt": "2026-11-09T17:29:32.732Z",
+    "checkedVideos": 3092,
+    "retainedVideos": 3091
   },
   "statsRefreshComplete": true,
   "imageRefresh": {
@@ -112,12 +112,19 @@
     "total": 78
   },
   "counts": {
-    "totalMusicRows": 3089,
+    "totalMusicRows": 3091,
     "totalChannels": 190,
     "officialIdols": 78,
     "customIdols": 0,
-    "statsRows": 3089,
-    "detailCacheRows": 3089,
-    "duplicateRemovalRows": 4291
+    "statsRows": 3091,
+    "detailCacheRows": 3091,
+    "duplicateRemovalRows": 4296
+  },
+  "catalogCorrection": {
+    "completedAt": "2026-11-09T17:38:57.638Z",
+    "basedOnVerifiedDataVersion": "2026-11-09T172718Z",
+    "reason": "Channel-prefixed MV with delayed song metadata",
+    "removedAudioMirrors": 1,
+    "additionalYouTubeVerificationAt": "2026-11-09T17:32:03.776Z"
   }
 }

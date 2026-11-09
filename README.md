@@ -14,6 +14,8 @@ Holoshelf is a Windows desktop app for keeping a local Hololive music, talent, t
 
 Bracket history filters use overall finishing placements across completed single- and double-elimination tournaments. Top X includes complete tied groups; qualifying songs combine across history with existing song-identity deduplication, independently of the new bracket's size. App version 1.1.96 automatically repairs legacy archive ranks and Top 4/8/16 flags once on startup, including archives without their original brackets. The transactional repair preserves outcomes, champions, saved snapshots, and personal data, and cached engine standings normalize before reuse. This repair requires the app update; a silent song/stat catalog update cannot replace bracket logic.
 
+Music duplicate matching recognizes channel-prefixed titles such as `Artist / Song` and `Artist | Song` while Holodex song metadata is still missing. Song translations still use their song segment, and performer and duration checks remain required. Version 1.1.96 also rechecks existing libraries once and preserves personal notes, ratings, Favorites, playlists, and queue references when retiring topic-audio duplicates.
+
 ## Updating bundled release data
 
 Double-click `Update Release Data.cmd` to refresh the maintainer database and regenerate the sanitized data shipped with the installer. The source database is `data/holoshelf.sqlite`; an installed app keeps personal data separately in AppData.
