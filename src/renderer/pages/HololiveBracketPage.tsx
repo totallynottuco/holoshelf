@@ -1,4 +1,4 @@
-import { parseBracketYears, type BracketDateBasis } from "../../shared/musicReleaseDates";
+import { isCalendarDate, parseBracketYears, type BracketDateBasis } from "../../shared/musicReleaseDates";
 import type { HololiveBracketSelectionPreview } from "../../shared/contracts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type WheelEvent as ReactWheelEvent } from "react";
 import {
@@ -71,6 +71,7 @@ import { MusicMarkerIcon, musicMarkerLabel } from "../components/HololiveMusicMa
 import { HololiveMusicMarkerMenu } from "../components/HololiveMusicMarkerMenu";
 import { HololivePlaylistMenu } from "../components/HololivePlaylistMenu";
 import { CompactSelect } from "../components/CompactSelect";
+import { HololiveBracketLobby, type BracketPreset } from "../components/HololiveBracketLobby";
 import { HololiveViewSwitch } from "../components/HololiveViewSwitch";
 import { useHololiveActionToast } from "../components/HololiveActionToast";
 import { renderHololiveBracketExportPng } from "../lib/hololiveBracketExport";
@@ -226,14 +227,6 @@ const BRACKET_FILTER_COPY = {
   }
 } as const satisfies Record<string, BracketFilterCopy>;
 
-const BRACKET_TOPIC_FILTERS: Array<{ value: HololiveMusicTopic } & BracketFilterCopy> = [
-  { value: "Original_Song", label: "Originals", description: "Include original songs." },
-  { value: "Music_Cover", label: "Covers", description: "Include cover songs." }
-];
-const BRACKET_VOCAL_SCOPE_FILTERS: Array<{ value: HololiveBracketVocalScope } & BracketFilterCopy> = [
-  { value: "solo", label: "Solo songs", description: "Include songs with one singer involved." },
-  { value: "group", label: "Group Songs", description: "Include songs with multiple singers involved." }
-];
 const BRACKET_TALENT_STATUS_FILTERS: Array<{ value: HololiveBracketTalentStatusFilter } & BracketFilterCopy> = [
   { value: "active", label: "Active", description: "Include active and affiliate talents." },
   { value: "alumni", label: "Alumni", description: "Include alum and retired talents." },
@@ -408,6 +401,7 @@ function parseViewThresholdInput(value: string): number | null {
 
 function formatViewThresholdInput(value: string): string {
   const parsed = parseViewThresholdInput(value);
+  if (value.trim() && (!/^[\d,\s]+$/.test(value) || parsed === null)) return value;
   return parsed === null ? "" : VIEW_THRESHOLD_FORMATTER.format(parsed);
 }
 
@@ -3797,6 +3791,12 @@ export function HololiveBracketPage() {
   const [includeEstimatedReleaseDates, setIncludeEstimatedReleaseDates] = useState(true);
   const [yearRange, setYearRange] = useState("");
   const [selectionPreview, setSelectionPreview] = useState<HololiveBracketSelectionPreview | null>(null);
+  const [previewKey, setPreviewKey] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [selectionSeed, setSelectionSeed] = useState(() => crypto.randomUUID());
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [arcadePreset, setArcadePreset] = useState<BracketPreset | null>(null);
   const yearRangeError = yearRange.trim() !== "" && !parseBracketYears(yearRange);
   const [excludeAfterDate, setExcludeAfterDate] = useState("");
   const [excludeBeforeDate, setExcludeBeforeDate] = useState("");
@@ -3804,9 +3804,9 @@ export function HololiveBracketPage() {
   const [includedVocalScopes, setIncludedVocalScopes] = useState<HololiveBracketVocalScope[]>(BRACKET_VOCAL_SCOPE_VALUES);
   const [includedTalentStatuses, setIncludedTalentStatuses] = useState<HololiveBracketTalentStatusFilter[]>(BRACKET_TALENT_STATUS_VALUES);
   const [historyParticipation, setHistoryParticipation] = useState<HololiveBracketHistoryParticipation | "all">("all");
-  const [maxEntriesPerTalentEnabled, setMaxEntriesPerTalentEnabled] = useState(true);
+  const [maxEntriesPerTalentEnabled, setMaxEntriesPerTalentEnabled] = useState(false);
   const [maxEntriesPerTalent, setMaxEntriesPerTalent] = useState("2");
-  const [preferTopicSplitPerTalent, setPreferTopicSplitPerTalent] = useState(true);
+  const [preferTopicSplitPerTalent, setPreferTopicSplitPerTalent] = useState(false);
   const [bracketTalents, setBracketTalents] = useState<HololiveIdol[]>([]);
   const [includedTalentIds, setIncludedTalentIds] = useState<string[] | null>(null);
   const [talentSelectorOpen, setTalentSelectorOpen] = useState(false);
@@ -3997,14 +3997,31 @@ export function HololiveBracketPage() {
       selectedRatingBuckets
     ]
   );
-  useEffect(() => { setSelectionPreview(null); }, [createFilters, selectedSize, selectedGenerationStyle, yearRange]);
-
-  async function previewSelection() {
-    setBusy(true);
-    try { setSelectionPreview(await api.invoke("hololive:brackets:preview", { size: selectedSize, generationStyle: "top_songs", filters: createFilters })); }
-    catch (error) { showBracketError(error, "Could not preview bracket"); }
-    finally { setBusy(false); }
-  }
+  const filterError = yearRangeError ? "Enter a year or an ascending range, such as 2020-2022."
+    : (excludeBeforeDate && !isCalendarDate(excludeBeforeDate)) || (excludeAfterDate && !isCalendarDate(excludeAfterDate)) ? "Enter a valid date."
+    : excludeBeforeDate && excludeAfterDate && excludeBeforeDate > excludeAfterDate ? "From date must be before To date."
+    : [excludeAboveViews, excludeBelowViews].some(value => value.trim() && (!/^[\d,\s]+$/.test(value) || parseViewThresholdInput(value) === null || Number(parseViewThresholdInput(value)) > 10_000_000_000)) ? "Enter view counts from 0 to 10,000,000,000."
+    : excludeAboveViewsValue !== null && excludeBelowViewsValue !== null && excludeBelowViewsValue > excludeAboveViewsValue ? "Minimum views cannot exceed maximum views."
+    : selectedTalentIds.length === 0 ? "Choose at least one talent." : null;
+  const previewRequest = useMemo(() => ({ size: selectedSize, format: selectedFormat, generationStyle: selectedGenerationStyle, filters: createFilters, selectionSeed }), [selectedSize, selectedFormat, selectedGenerationStyle, createFilters, selectionSeed]);
+  const requestKey = JSON.stringify([previewRequest, previewRevision, filterError]);
+  const livePreview = previewKey === requestKey && !filterError ? selectionPreview : null;
+  const lineupPending = !filterError && (previewLoading || previewKey !== requestKey);
+  useEffect(() => {
+    if (!createMenuOpen || filterError) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    const timer = window.setTimeout(() => {
+      void api.invoke("hololive:brackets:preview", previewRequest).then(result => {
+        if (!cancelled) { setSelectionPreview(result); setPreviewKey(requestKey); }
+      }).catch(error => {
+        if (!cancelled) { setSelectionPreview(null); setPreviewKey(requestKey); setPreviewError(error instanceof Error ? error.message : "Could not load lineup."); }
+      }).finally(() => { if (!cancelled) setPreviewLoading(false); });
+    }, 180);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [createMenuOpen, requestKey, previewRequest, filterError]);
+  useEffect(() => api.onCatalogUpdated(() => { setPreviewRevision(value => value + 1); }), []);
 
   const activeFilterLabels = useMemo(() => {
     const labels: string[] = [];
@@ -4062,8 +4079,8 @@ export function HololiveBracketPage() {
     if (maxEntriesPerTalentValue !== null) {
       labels.push(`Max ${maxEntriesPerTalentValue} per talent`);
     }
-    if (!preferTopicSplitPerTalent) {
-      labels.push("No type split");
+    if (preferTopicSplitPerTalent) {
+      labels.push("Original/cover split");
     }
     return labels;
   }, [
@@ -4719,13 +4736,13 @@ export function HololiveBracketPage() {
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && createMenuRef.current?.contains(target)) {
+      if (busy || (target instanceof Node && createMenuRef.current?.contains(target)) || (target instanceof Element && target.closest(".hololive-bracket-lobby-backdrop"))) {
         return;
       }
       setCreateMenuOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !busy && !event.defaultPrevented) {
         setCreateMenuOpen(false);
       }
     };
@@ -4736,7 +4753,7 @@ export function HololiveBracketPage() {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [createMenuOpen]);
+  }, [createMenuOpen, busy]);
 
   useEffect(() => {
     if (!talentSelectorOpen) {
@@ -4785,6 +4802,7 @@ export function HololiveBracketPage() {
   }
 
   async function createBracket() {
+    if (!livePreview || lineupPending || filterError || livePreview.creationError || livePreview.entries.length !== HOLOLIVE_BRACKET_SIZE_COUNTS[selectedSize]) return;
     const generationStyle = selectedGenerationStyle;
     const name = nameDraft.trim() || null;
     setBusy(true);
@@ -4794,6 +4812,8 @@ export function HololiveBracketPage() {
         format: selectedFormat,
         generationStyle,
         filters: createFilters,
+        selectionSeed,
+        expectedVideoIds: livePreview.entries.map(entry => entry.youtubeVideoId),
         name
       });
       const bracket = result.bracket;
@@ -4810,6 +4830,7 @@ export function HololiveBracketPage() {
       setMode("play");
     } catch (nextError) {
       showBracketError(nextError, "Could not create bracket");
+      setPreviewRevision(value => value + 1);
     } finally {
       setBusy(false);
     }
@@ -5063,26 +5084,6 @@ export function HololiveBracketPage() {
     );
   }
 
-  function toggleIncludedTopic(topicId: HololiveMusicTopic) {
-    setIncludedTopicIds((current) => {
-      const selected = current.length > 0 ? current : BRACKET_TOPIC_VALUES;
-      if (selected.includes(topicId)) {
-        return selected.length <= 1 ? selected : selected.filter((topic) => topic !== topicId);
-      }
-      return orderedBracketFilterValues(BRACKET_TOPIC_VALUES, [...selected, topicId]);
-    });
-  }
-
-  function toggleIncludedVocalScope(scope: HololiveBracketVocalScope) {
-    setIncludedVocalScopes((current) => {
-      const selected = current.length > 0 ? current : BRACKET_VOCAL_SCOPE_VALUES;
-      if (selected.includes(scope)) {
-        return selected.length <= 1 ? selected : selected.filter((value) => value !== scope);
-      }
-      return orderedBracketFilterValues(BRACKET_VOCAL_SCOPE_VALUES, [...selected, scope]);
-    });
-  }
-
   function toggleIncludedRatingBucket(bucket: HololiveBracketRatingBucket) {
     setIncludedRatingBuckets((current) => {
       const selected = current.length > 0 ? current : BRACKET_RATING_BUCKET_VALUES;
@@ -5141,9 +5142,26 @@ export function HololiveBracketPage() {
     setIncludedVocalScopes(BRACKET_VOCAL_SCOPE_VALUES);
     setIncludedTalentStatuses(BRACKET_TALENT_STATUS_VALUES);
     setHistoryParticipation("all");
-    setMaxEntriesPerTalentEnabled(true);
+    setMaxEntriesPerTalentEnabled(false);
     setMaxEntriesPerTalent("2");
-    setPreferTopicSplitPerTalent(true);
+    setPreferTopicSplitPerTalent(false);
+    setArcadePreset(null);
+  }
+
+  function applyBracketPreset(preset: BracketPreset) {
+    clearBracketFilters();
+    setSelectedGenerationStyle(preset === "random" ? "random_songs" : "top_songs");
+    if (preset === "year") {
+      const year = String(new Date().getFullYear());
+      setYearRange(year);
+      setExcludeBeforeDate(`${year}-01-01`);
+      setExcludeAfterDate(`${year}-12-31`);
+      setIncludedVocalScopes(["solo"]);
+    } else if (preset === "covers") {
+      setIncludedTopicIds(["Music_Cover"]);
+    }
+    setSelectionSeed(crypto.randomUUID());
+    setArcadePreset(preset);
   }
 
   return (
@@ -5190,130 +5208,43 @@ export function HololiveBracketPage() {
                 Create
               </button>
               {createMenuOpen && (
-                <div className="hololive-bracket-create-popover" role="dialog" aria-label="Create bracket">
-                  <div className="hololive-bracket-create-field style-field">
-                    <span>Style</span>
-                    <div className="hololive-bracket-create-options styles" role="radiogroup" aria-label="Style">
-                      {BRACKET_GENERATION_STYLES.map((style) => (
-                        <button
-                          type="button"
-                          key={style.value}
-                          role="radio"
-                          aria-checked={selectedGenerationStyle === style.value}
-                          className={selectedGenerationStyle === style.value ? "active" : ""}
-                          disabled={busy}
-                          onClick={() => setSelectedGenerationStyle(style.value)}
-                        >
-                          {style.label}
-                        </button>
-                      ))}
+                <HololiveBracketLobby
+                  preset={arcadePreset}
+                  onPreset={applyBracketPreset}
+                  size={selectedSize}
+                  style={selectedGenerationStyle}
+                  format={selectedFormat}
+                  preview={livePreview}
+                  pending={lineupPending}
+                  invalid={!!filterError}
+                  error={filterError ?? (previewKey === requestKey ? previewError : null)}
+                  busy={busy}
+                  filtersExpanded={filtersExpanded}
+                  activeFilters={activeFilterLabels.filter(label => !/^(Originals only$|Covers only$|Solo only$|Group only$)/.test(label) && (!yearRange.trim() || !/^(From |To )/.test(label))).concat(dateBasis === "song_release" && !includeEstimatedReleaseDates ? ["Verified dates only"] : [])}
+                  onToggleFilters={() => setFiltersExpanded(value => !value)}
+                  onReset={clearBracketFilters}
+                  onRulesChange={() => setArcadePreset(null)}
+                  onRedraw={() => setSelectionSeed(crypto.randomUUID())}
+                  onRetry={() => setPreviewRevision(value => value + 1)}
+                  onCreate={() => void createBracket()}
+                  onClose={() => setCreateMenuOpen(false)}
+                  rules={<div className="lobby-core-fields">
+                    <label><span>Name</span><input value={nameDraft} placeholder={`${selectedGenerationStyle === "top_songs" ? "Top Songs" : "Random Songs"} ${selectedSize} Bracket`} maxLength={120} disabled={busy} onChange={event => setNameDraft(event.target.value)} /></label>
+                    <div className="lobby-field-pair">
+                      <div><span className="lobby-field-label">Selection</span><div className="lobby-segments" role="radiogroup" aria-label="Style">{BRACKET_GENERATION_STYLES.map(style => <button type="button" key={style.value} role="radio" aria-label={style.label} aria-checked={selectedGenerationStyle === style.value} disabled={busy} onClick={() => { setSelectedGenerationStyle(style.value); setArcadePreset(null); }}>{style.value === "top_songs" ? "Top Songs" : "Random"}</button>)}</div></div>
+                      <div><span className="lobby-field-label">Format</span><div className="lobby-segments" role="radiogroup" aria-label="Format">{BRACKET_FORMATS.map(format => <button type="button" key={format.value} role="radio" aria-checked={selectedFormat === format.value} disabled={busy} onClick={() => setSelectedFormat(format.value)}>{format.label}</button>)}</div></div>
                     </div>
-                  </div>
-                  <div className="hololive-bracket-create-field format-field">
-                    <span>Format</span>
-                    <div className="hololive-bracket-create-format-row">
-                      <div className="hololive-bracket-create-options formats" role="radiogroup" aria-label="Format">
-                        {BRACKET_FORMATS.map((format) => (
-                          <button
-                            type="button"
-                            key={format.value}
-                            role="radio"
-                            aria-checked={selectedFormat === format.value}
-                            className={selectedFormat === format.value ? "active" : ""}
-                            disabled={busy}
-                            onClick={() => setSelectedFormat(format.value)}
-                          >
-                            {format.label}
-                          </button>
-                        ))}
-                      </div>
+                    <div><span className="lobby-field-label">Bracket size</span><div className="lobby-segments" role="radiogroup" aria-label="Size">{BRACKET_SIZES.map(size => <button type="button" key={size} role="radio" aria-checked={selectedSize === size} disabled={busy} onClick={() => setSelectedSize(size)}>{size}</button>)}</div></div>
+                    <div className="lobby-field-pair">
+                      <label><span>Song type</span><select aria-label="Song type" value={selectedTopicIds.length === 2 ? "all" : selectedTopicIds[0]} disabled={busy} onChange={event => setIncludedTopicIds(event.target.value === "all" ? BRACKET_TOPIC_VALUES : [event.target.value as HololiveMusicTopic])}><option value="all">Originals + covers</option><option value="Original_Song">Originals</option><option value="Music_Cover">Covers</option></select></label>
+                      <label><span>Singers</span><select aria-label="Singers" value={selectedVocalScopes.length === 2 ? "all" : selectedVocalScopes[0]} disabled={busy} onChange={event => setIncludedVocalScopes(event.target.value === "all" ? BRACKET_VOCAL_SCOPE_VALUES : [event.target.value as HololiveBracketVocalScope])}><option value="all">Solo + group</option><option value="solo">Solo songs</option><option value="group">Group songs</option></select></label>
                     </div>
-                  </div>
-                  <div className="hololive-bracket-create-field size-field">
-                    <span>Size</span>
-                    <div className="hololive-bracket-create-options sizes" role="radiogroup" aria-label="Size">
-                      {BRACKET_SIZES.map((size) => (
-                        <button
-                          type="button"
-                          key={size}
-                          role="radio"
-                          aria-checked={selectedSize === size}
-                          className={selectedSize === size ? "active" : ""}
-                          disabled={busy}
-                          onClick={() => setSelectedSize(size)}
-                        >
-                          {size}
-                        </button>
-                      ))}
+                    <div className="lobby-field-pair">
+                      <label><span>Year or range</span><input aria-label="Year or year range" placeholder="Any · e.g. 2020-2022" value={yearRange} disabled={busy} onChange={event => { const value = event.target.value; setYearRange(value); const range = parseBracketYears(value); if (range || !value.trim()) { setExcludeBeforeDate(range?.from ?? ""); setExcludeAfterDate(range?.to ?? ""); } }} /></label>
+                      <label><span>Date basis</span><select aria-label="Date basis" value={dateBasis} disabled={busy} onChange={event => setDateBasis(event.target.value as BracketDateBasis)}><option value="song_release">Song release</option><option value="video_upload">Video upload</option></select></label>
                     </div>
-                  </div>
-                  <label className="hololive-bracket-create-name-field">
-                    <span>Name</span>
-                    <input
-                      value={nameDraft}
-                      placeholder={`${BRACKET_GENERATION_STYLES.find((style) => style.value === selectedGenerationStyle)?.label ?? "Top Songs"} ${selectedSize}${selectedFormat === "double_elimination" ? " Double Elimination" : ""} Bracket`}
-                      disabled={busy}
-                      onChange={(event) => setNameDraft(event.target.value)}
-                    />
-                  </label>
-                  <div className={`hololive-bracket-exclusions${activeFilterLabels.length > 0 ? " has-active" : ""}`}>
-                    <div className="hololive-bracket-date-shortcuts">
-                      <label>Date basis
-                        <select aria-label="Date basis" value={dateBasis} disabled={busy} onChange={event => setDateBasis(event.target.value as BracketDateBasis)}>
-                          <option value="song_release">Song release date</option>
-                          <option value="video_upload">Video upload date</option>
-                        </select>
-                      </label>
-                      <label>Year or year range
-                        <input aria-label="Year or year range" placeholder="2022 or 2020-2022" value={yearRange} disabled={busy} onChange={event => {
-                          const value = event.target.value; setYearRange(value);
-                          const range = parseBracketYears(value);
-                          if (range || !value.trim()) { setExcludeBeforeDate(range?.from ?? ""); setExcludeAfterDate(range?.to ?? ""); }
-                        }} />
-                      </label>
-                      {yearRangeError && <span role="alert">Enter a year or an ascending range, such as 2020-2022.</span>}
-                    </div>
-                    <div className="hololive-bracket-filter-row">
-                      <span className="hololive-bracket-exclusions-title">
-                        <ListMusic size={13} />
-                        <strong>Song Pool</strong>
-                      </span>
-                      <div className="hololive-bracket-filter-chips" aria-label="Active bracket filters">
-                        {activeFilterLabels.length > 0 ? (
-                          <>
-                            {activeFilterLabels.slice(0, 5).map((label) => (
-                              <span key={label}>{label}</span>
-                            ))}
-                            {activeFilterLabels.length > 5 && <span>+{activeFilterLabels.length - 5}</span>}
-                          </>
-                        ) : (
-                          <span className="empty">All songs</span>
-                        )}
-                      </div>
-                      {activeFilterLabels.length > 0 && (
-                        <button
-                          type="button"
-                          className="hololive-bracket-exclusions-clear"
-                          title="Reset filters"
-                          disabled={busy}
-                          onClick={clearBracketFilters}
-                        >
-                          <RotateCcw size={12} />
-                          Reset
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="hololive-bracket-filters-edit"
-                        aria-expanded={filtersExpanded}
-                        disabled={busy}
-                        onClick={() => setFiltersExpanded((expanded) => !expanded)}
-                      >
-                        Edit Filters
-                        <ChevronDown size={13} className={filtersExpanded ? "open" : ""} />
-                      </button>
-                    </div>
-                    {filtersExpanded && (
+                  </div>}
+                  filters={
                       <div className="hololive-bracket-exclusions-body">
                         <section className="hololive-bracket-filter-group song-pool">
                           <h4>Song Pool</h4>
@@ -5408,7 +5339,7 @@ export function HololiveBracketPage() {
                                   onChange={setHistoryParticipation}
                                 />
                                 <span className="hololive-bracket-history-hint">
-                                  Any completed bracket, either format. Top X means overall finish; bracket size is separate.
+                                  Overall finish across completed brackets.
                                 </span>
                               </div>
                             </div>
@@ -5429,48 +5360,6 @@ export function HololiveBracketPage() {
                                           onChange={() => toggleIncludedTalentStatus(status.value)}
                                         />
                                         <BracketFilterOptionText copy={status} />
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="hololive-bracket-filter-line">
-                            <div className="hololive-bracket-filter-line-grid">
-                              <div className="hololive-bracket-filter-fieldset">
-                                <span className="hololive-bracket-filter-fieldset-label">Type</span>
-                                <div className="hololive-bracket-exclusion-list compact-pair">
-                                  {BRACKET_TOPIC_FILTERS.map((topic) => {
-                                    const checked = selectedTopicIds.includes(topic.value);
-                                    return (
-                                      <label className="hololive-bracket-exclusion-option" key={topic.value}>
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          disabled={busy || (checked && selectedTopicIds.length <= 1)}
-                                          onChange={() => toggleIncludedTopic(topic.value)}
-                                        />
-                                        <BracketFilterOptionText copy={topic} />
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                              <div className="hololive-bracket-filter-fieldset">
-                                <span className="hololive-bracket-filter-fieldset-label">Singers</span>
-                                <div className="hololive-bracket-exclusion-list compact-pair">
-                                  {BRACKET_VOCAL_SCOPE_FILTERS.map((scope) => {
-                                    const checked = selectedVocalScopes.includes(scope.value);
-                                    return (
-                                      <label className="hololive-bracket-exclusion-option" key={scope.value}>
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          disabled={busy || (checked && selectedVocalScopes.length <= 1)}
-                                          onChange={() => toggleIncludedVocalScope(scope.value)}
-                                        />
-                                        <BracketFilterOptionText copy={scope} />
                                       </label>
                                     );
                                   })}
@@ -5673,31 +5562,8 @@ export function HololiveBracketPage() {
                           </div>
                         </section>
                       </div>
-                    )}
-                  </div>
-                  {selectionPreview && <div className="hololive-bracket-release-preview" aria-label="Ranked entrant preview">
-                    <p>{selectionPreview.entries.length} selected from {selectionPreview.eligibleCount} eligible songs. Ranked by current views.</p>
-                    <table><thead><tr><th>Rank / Song</th><th>Views</th><th>Date used</th></tr></thead><tbody>
-                      {selectionPreview.entries.map((entry, index) => <tr key={entry.youtubeVideoId}>
-                        <td>{index + 1}. {entry.title}<small>{entry.idolName}</small></td>
-                        <td>{entry.viewCount?.toLocaleString() ?? "Unknown"}</td>
-                        <td>{entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer">{entry.dateUsed ?? "Unknown"}</a> : entry.dateUsed ?? "Unknown"}<small>{entry.dateBasis === "recording_upload" ? "Estimated" : entry.dateBasis.replaceAll("_", " ")}</small></td>
-                      </tr>)}
-                    </tbody></table>
-                    {selectionPreview.entries.length < Number(selectedSize.slice(2)) && <p>Too few songs match these filters.</p>}
-                    {selectionPreview.warnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
-                  </div>}
-                  <div className="hololive-bracket-create-actions">
-                    {selectedGenerationStyle === "top_songs" && <button type="button" disabled={busy || Boolean(yearRangeError) || selectedTalentIds.length === 0} onClick={() => void previewSelection()}>Preview entrants</button>}
-                    <button type="button" className="primary" disabled={busy || Boolean(yearRangeError) || selectedTalentIds.length === 0} onClick={() => void createBracket()}>
-                      {busy ? <Loader2 size={14} className="spin" /> : <Swords size={14} />}
-                      Create Bracket
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => setCreateMenuOpen(false)}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
+                  }
+                />
               )}
             </div>
             <div className="hololive-bracket-toolbar-divider" />

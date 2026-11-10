@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Adds song release dates and easier bracket year filters.\n\n- Filter by a year or inclusive range such as 2020-2022, with exact dates still available.\n- Choose song release dates or video upload dates and preview ranked Top Songs entrants before creating a bracket.\n- Preserves release-date evidence through same-recording duplicate cleanup and silent catalog updates.\n- Clearly labels upload-date estimates and offers verified dates only.\n- Preserves existing brackets, results, Favorites, playlists, exclusions, and personal settings."
+      "releaseNotes": "Redesigns bracket creation with a compact Match Lobby and Arcade presets.\n\n- Shows the exact live lineup beside the rules for Top Songs and Random Songs.\n- Keeps every existing filter and adds quick year, cover, and random challenge presets.\n- Keeps random draws stable and checks for catalog changes before creating a bracket.\n- Adds song release dates, year/range shortcuts, and date sources with clearly marked estimates.\n- Preserves existing brackets, results, Favorites, playlists, exclusions, and personal settings."
     },
     "win": {
       "icon": "ico.ico",

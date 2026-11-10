@@ -471,6 +471,8 @@ export interface HololiveBracketCreateRequest {
   generationStyle?: HololiveBracketGenerationStyle;
   filters?: HololiveBracketGenerationFilters | null;
   name?: string | null;
+  selectionSeed?: string;
+  expectedVideoIds?: string[];
 }
 
 export interface HololiveBracketCreateResponse {

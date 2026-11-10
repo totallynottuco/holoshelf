@@ -3030,13 +3030,15 @@ function updateMockDoubleEliminationBracket(
 }
 
 async function createMockHololiveBracket(
-  payload: IpcChannelMap["hololive:brackets:create"]["request"]
+  payload: IpcChannelMap["hololive:brackets:create"]["request"],
+  persist = true
 ): Promise<HololiveBracket> {
   const size = payload.size;
   const format = payload.format ?? "single_elimination";
   const generationStyle: HololiveBracketGenerationStyle = payload.generationStyle ?? "top_songs";
   const sizeCount = MOCK_BRACKET_SIZE_COUNTS[size];
   const id = `mock-bracket-${crypto.randomUUID()}`;
+  const videoPrefix = payload.selectionSeed ?? id;
   const officialIdols = mockHololiveTierData.idols.filter((idol) => idol.source === "official");
   const entries: HololiveBracketEntry[] = [];
 
@@ -3048,11 +3050,11 @@ async function createMockHololiveBracket(
       id: `${id}:entry:${entries.length}`,
       bracketId: id,
       slotIndex: entries.length,
-      youtubeVideoId: `${id}-video-${entries.length}`,
+      youtubeVideoId: `${videoPrefix}-video-${entries.length}`,
       title,
       songName: title,
       topicId: isOriginal ? "Original_Song" : "Music_Cover",
-      youtubeUrl: `https://www.youtube.com/watch?v=${id}-video-${entries.length}`,
+      youtubeUrl: `https://www.youtube.com/watch?v=${videoPrefix}-video-${entries.length}`,
       channelName: `${idol?.displayName ?? "Mock Talent"} Channel`,
       idolId: idol?.id ?? "mock-talent",
       idolName: idol?.displayName ?? "Mock Talent",
@@ -3085,7 +3087,7 @@ async function createMockHololiveBracket(
       shell,
       await createHololiveDoubleEliminationState(entries.map((entry) => entry.id))
     );
-    mockHololiveBrackets.set(id, bracket);
+    if (persist) mockHololiveBrackets.set(id, bracket);
     return bracket;
   }
 
@@ -3144,7 +3146,7 @@ async function createMockHololiveBracket(
     createdAt: now,
     updatedAt: now
   });
-  mockHololiveBrackets.set(id, bracket);
+  if (persist) mockHololiveBrackets.set(id, bracket);
   return bracket;
 }
 
@@ -4296,7 +4298,7 @@ const mockBridge: HoloshelfBridge = {
         return listMockHololiveBracketSummaries() as IpcChannelMap[C]["response"];
       case "hololive:brackets:preview": {
         const payload = _payload as IpcChannelMap["hololive:brackets:preview"]["request"];
-        const preview = await createMockHololiveBracket(payload);
+        const preview = await createMockHololiveBracket(payload, false);
         return { eligibleCount: preview.entries.length, warnings: [], entries: preview.entries.map(entry => ({
           youtubeVideoId: entry.youtubeVideoId, title: entry.title, idolName: entry.idolName, viewCount: entry.viewCount ?? null,
           dateUsed: payload.filters?.excludeBeforeDate ?? entry.publishedAt?.slice(0,10) ?? null,

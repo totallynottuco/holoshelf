@@ -2576,11 +2576,25 @@ export class DatabaseService {
     this.persistSettingValue("internal.releaseDatesBackfill", "1");
   }
 
-  previewHololiveBracketSelection(input: { size: HololiveBracketSize; filters?: HololiveBracketGenerationFilters | null }): HololiveBracketSelectionPreview {
+  previewHololiveBracketSelection(input: {
+    size: HololiveBracketSize;
+    generationStyle?: HololiveBracketGenerationStyle | null;
+    filters?: HololiveBracketGenerationFilters | null;
+    selectionSeed?: string;
+  }): HololiveBracketSelectionPreview {
+    const size = this.normalizeHololiveBracketSize(input.size);
+    const style = this.normalizeHololiveBracketGenerationStyle(input.generationStyle);
+    const seed = input.selectionSeed?.trim() || "preview";
     const filters = this.normalizeHololiveBracketGenerationFilters(input.filters);
     const pools = this.loadHololiveBracketCandidatePools(filters);
-    const selection = this.selectHololiveBracketCandidates(HOLOLIVE_BRACKET_SIZE_COUNTS[input.size], "preview", "top_songs", filters, pools);
+    const selection = this.selectHololiveBracketCandidates(HOLOLIVE_BRACKET_SIZE_COUNTS[size], seed, style, filters, pools);
+    let creationError: string | null = null;
+    if (selection.selected.length === HOLOLIVE_BRACKET_SIZE_COUNTS[size]) {
+      try { this.seedHololiveBracketFirstRoundSlots(selection.selected, seed, size, style); }
+      catch (error) { creationError = error instanceof Error ? error.message : "This lineup cannot be seeded."; }
+    }
     return {
+      creationError,
       eligibleCount: new Set([...pools.allByIdol.values()].flat().map(row => this.getHololiveBracketCanonicalKey(row))).size,
       entries: this.sortHololiveBracketCandidates(selection.selected).map(row => ({
         youtubeVideoId: row.youtubeVideoId, title: row.songName || row.title, idolName: row.idolNameForBracket, viewCount: row.viewCount ?? null,
@@ -6252,6 +6266,8 @@ export class DatabaseService {
     generationStyle?: HololiveBracketGenerationStyle | null;
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
+    selectionSeed?: string;
+    expectedVideoIds?: string[];
   }): Promise<HololiveBracket> {
     return (await this.createHololiveBracketResult(input)).bracket;
   }
@@ -6262,6 +6278,8 @@ export class DatabaseService {
     generationStyle?: HololiveBracketGenerationStyle | null;
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
+    selectionSeed?: string;
+    expectedVideoIds?: string[];
   }): Promise<{ bracket: HololiveBracket; warnings: HololiveBracketCreateWarning[] }> {
     const size = this.normalizeHololiveBracketSize(input.size);
     const format = this.normalizeHololiveBracketFormat(input.format);
@@ -6271,7 +6289,7 @@ export class DatabaseService {
     const sizeCount = HOLOLIVE_BRACKET_SIZE_COUNTS[size];
     const now = new Date().toISOString();
     const id = randomUUID();
-    const seed = randomUUID();
+    const seed = input.selectionSeed?.trim() || randomUUID();
     const name =
       input.name?.trim() ||
       `${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]}${
@@ -6279,6 +6297,14 @@ export class DatabaseService {
       } Bracket`;
     const generated = this.generateHololiveBracketEntries(id, size, seed, generationStyle, generationFilters);
     const entries = generated.entries;
+    if (input.expectedVideoIds) {
+      const expected = [...new Set(input.expectedVideoIds)].sort();
+      const actual = entries.map(entry => entry.youtubeVideoId).sort();
+      if (expected.length !== input.expectedVideoIds.length || expected.length !== actual.length ||
+          expected.some((videoId, index) => videoId !== actual[index])) {
+        throw new Error("The lineup changed. Review the refreshed lineup and try again.");
+      }
+    }
     if (entries.length !== sizeCount) {
       throw new Error(
         `Could not generate ${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]} from the current music database.`

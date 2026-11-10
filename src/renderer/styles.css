@@ -1934,68 +1934,8 @@ select {
   border-bottom: 0;
 }
 
-.hololive-bracket-release-preview {
-  grid-column: 1 / -1;
-  grid-row: 5;
-  min-width: 0;
-  max-height: 180px;
-  overflow: auto;
-  font-size: 11px;
-  white-space: normal;
-}
-
-.hololive-bracket-create-popover:has(.hololive-bracket-release-preview) {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
-}
-
-.hololive-bracket-create-popover:has(.hololive-bracket-release-preview) .hololive-bracket-create-actions {
-  grid-row: 6;
-}
-
-.hololive-bracket-release-preview table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-}
-
-.hololive-bracket-release-preview td,
-.hololive-bracket-release-preview th {
-  text-align: left;
-  padding: 6px 4px;
-  border-bottom: 1px solid rgba(64, 171, 210, 0.3);
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.hololive-bracket-release-preview th:first-child { width: 49%; }
-.hololive-bracket-release-preview th:nth-child(2) { width: 23%; }
-.hololive-bracket-release-preview th:nth-child(3) { width: 28%; }
-.hololive-bracket-release-preview small { display: block; color: #9eb5cb; }
-
 .hololive-bracket-filter-line-grid:has(.hololive-bracket-date-filters) {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.hololive-bracket-date-shortcuts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  min-width: 0;
-  font-size: 11px;
-  white-space: normal;
-}
-
-.hololive-bracket-date-shortcuts [role="alert"] { grid-column: 1 / -1; }
-
-.hololive-bracket-date-shortcuts select {
-  min-width: 0;
-  width: 100%;
-  height: 28px;
-  border: 0;
-  border-bottom: 1px solid rgba(64, 171, 210, 0.3);
-  background: #071822;
-  color: #eaf9ff;
-  font-size: 12px;
 }
 
 .hololive-bracket-date-filters .hololive-bracket-release-estimates {
@@ -2079,65 +2019,7 @@ select {
   border-bottom-color: rgba(109, 218, 248, 0.78);
 }
 
-.hololive-bracket-create-name-field,
-.hololive-bracket-create-actions {
-  grid-column: 1 / -1;
-}
 
-.hololive-bracket-create-name-field {
-  grid-row: 3;
-  margin-top: 1px;
-}
-
-.hololive-bracket-create-actions {
-  grid-row: 5;
-  display: flex;
-  justify-content: flex-end;
-  gap: 14px;
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button {
-  position: relative;
-  width: auto;
-  min-width: 0;
-  height: 28px;
-  padding: 0 0 2px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: #b9e5ef;
-  box-shadow: none;
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 1px;
-  background: transparent;
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button.primary {
-  color: #ffffff;
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button.primary::after {
-  background: rgba(100, 216, 248, 0.82);
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button:hover,
-.hololive-bracket-toolbar .hololive-bracket-create-actions button:focus-visible {
-  background: transparent;
-  color: #ffffff;
-  outline: none;
-}
-
-.hololive-bracket-toolbar .hololive-bracket-create-actions button:hover::after,
-.hololive-bracket-toolbar .hololive-bracket-create-actions button:focus-visible::after {
-  background: rgba(100, 216, 248, 0.42);
-}
 
 .hololive-bracket-toolbar button.danger {
   min-width: 28px;

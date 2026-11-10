@@ -1018,6 +1018,7 @@ export interface AppBootstrap {
 
 export interface HololiveBracketSelectionPreview {
   eligibleCount: number;
+  creationError?: string | null;
   entries: Array<{
     youtubeVideoId: string;
     title: string;

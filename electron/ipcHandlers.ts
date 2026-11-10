@@ -444,7 +444,9 @@ const hololiveBracketCreateSchema = z.object({
   format: hololiveBracketFormatSchema.optional().default("single_elimination"),
   generationStyle: hololiveBracketGenerationStyleSchema.optional().default("top_songs"),
   filters: hololiveBracketGenerationFiltersSchema.optional().nullable(),
-  name: z.string().trim().max(120).optional().nullable()
+  name: z.string().trim().max(120).optional().nullable(),
+  selectionSeed: z.string().trim().min(1).max(120).optional(),
+  expectedVideoIds: z.array(z.string().trim().min(1).max(160)).max(256).optional()
 });
 
 const hololiveBracketGetSchema = z.object({
