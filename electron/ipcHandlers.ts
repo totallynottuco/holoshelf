@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
+import { hololiveBracketGenerationFiltersSchema } from "../src/shared/bracketPresets";
 import type {
   AppBootstrap,
   HololiveImageCacheKind,
@@ -410,34 +411,6 @@ const hololiveBracketSizeSchema = z.enum(["RO16", "RO32", "RO64", "RO128", "RO25
 const hololiveBracketFormatSchema = z.enum(["single_elimination", "double_elimination"]);
 const hololiveBracketStatsFormatSchema = z.enum(["all", "single_elimination", "double_elimination"]);
 const hololiveBracketGenerationStyleSchema = z.enum(["top_songs", "random_songs"]);
-const hololiveMusicTopicSchema = z.enum(["Original_Song", "Music_Cover"]);
-const hololiveBracketRatingBucketSchema = z.enum(["unrated", "favorite", "like", "neutral", "dislike"]);
-const hololiveBracketVocalScopeSchema = z.enum(["solo", "group"]);
-const hololiveBracketTalentStatusFilterSchema = z.enum(["active", "alumni", "custom"]);
-const hololiveBracketHistoryParticipationSchema = z.enum(["never", "appeared", "top8", "top4", "finalist", "winner"]);
-const hololiveBracketGenerationFiltersSchema = z.object({
-  excludeDisliked: z.boolean().optional(),
-  excludeRated: z.boolean().optional(),
-  ratingBuckets: z.array(hololiveBracketRatingBucketSchema).optional(),
-  includedTalentIds: z.array(z.string().trim().min(1)).optional(),
-  vocalScopes: z.array(hololiveBracketVocalScopeSchema).optional(),
-  talentStatuses: z.array(hololiveBracketTalentStatusFilterSchema).optional(),
-  historyParticipation: hololiveBracketHistoryParticipationSchema.optional().nullable(),
-  maxEntriesPerTalent: z.number().int().min(0).max(256).optional().nullable(),
-  preferTopicSplitPerTalent: z.boolean().optional().nullable(),
-  excludeTopViewedPerTalent: z.boolean().optional(),
-  excludePreviousChampions: z.boolean().optional(),
-  excludePreviousFinalists: z.boolean().optional(),
-  excludePreviousTop4: z.boolean().optional(),
-  excludePreviousTop8: z.boolean().optional(),
-  excludeAboveViews: z.number().int().min(0).max(10_000_000_000).optional().nullable(),
-  excludeBelowViews: z.number().int().min(0).max(10_000_000_000).optional().nullable(),
-  dateBasis: z.enum(["song_release","video_upload"]).optional(),
-  includeEstimatedReleaseDates: z.boolean().optional(),
-  excludeAfterDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-  excludeBeforeDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-  excludeTopicIds: z.array(hololiveMusicTopicSchema).optional()
-});
 
 const hololiveBracketCreateSchema = z.object({
   size: hololiveBracketSizeSchema,

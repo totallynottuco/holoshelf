@@ -1,17 +1,15 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Crown, Loader2, MicVocal, RotateCcw, Shuffle, SlidersHorizontal, Swords, X } from "lucide-react";
+import { Loader2, RotateCcw, Shuffle, SlidersHorizontal, Swords, X } from "lucide-react";
 import type { HololiveBracketGenerationStyle, HololiveBracketSelectionPreview, HololiveBracketSize } from "../../shared/contracts";
 import "./HololiveBracketLobby.css";
-
-export type BracketPreset = "year" | "covers" | "random";
 
 interface Props {
   rules: ReactNode;
   filters: ReactNode;
   filtersExpanded: boolean;
   activeFilters: string[];
-  preset: BracketPreset | null;
+  presets: ReactNode;
   preview: HololiveBracketSelectionPreview | null;
   pending: boolean;
   error: string | null;
@@ -20,21 +18,13 @@ interface Props {
   size: HololiveBracketSize;
   style: HololiveBracketGenerationStyle;
   format: string;
-  onPreset: (preset: BracketPreset) => void;
   onToggleFilters: () => void;
   onReset: () => void;
-  onRulesChange: () => void;
   onRedraw: () => void;
   onRetry: () => void;
   onCreate: () => void;
   onClose: () => void;
 }
-
-const PRESETS = [
-  { id: "year", label: "Top of the year", detail: "Highest views", icon: Crown },
-  { id: "covers", label: "Cover clash", detail: "Covers only", icon: MicVocal },
-  { id: "random", label: "Surprise me", detail: "Random draw", icon: Shuffle }
-] as const;
 
 export function HololiveBracketLobby(props: Props) {
   const dialog = useRef<HTMLDivElement>(null);
@@ -71,22 +61,20 @@ export function HololiveBracketLobby(props: Props) {
     <div className="hololive-bracket-lobby-backdrop" onPointerDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
       <div ref={dialog} className="hololive-bracket-create-popover hololive-bracket-lobby" role="dialog" aria-modal="true" aria-label="Create bracket">
         <header className="bracket-lobby-header"><h2><Swords size={20} />New bracket</h2><button type="button" className="lobby-icon-button" aria-label="Close bracket creator" disabled={props.busy} onClick={props.onClose}><X size={18} /></button></header>
-        <div className="bracket-lobby-presets" aria-label="Arcade presets">
-          {PRESETS.map(preset => <button type="button" key={preset.id} className="lobby-preset" aria-pressed={props.preset === preset.id} disabled={props.busy} onClick={() => props.onPreset(preset.id)}><preset.icon size={18} /><span><strong>{preset.label}</strong><small>{preset.detail}</small></span></button>)}
-        </div>
+        {props.presets}
         <div className="bracket-lobby-body">
-          <div className="bracket-lobby-rules" onChange={props.onRulesChange}>
+          <div className="bracket-lobby-rules">
             {props.rules}
-            <div className="hololive-bracket-filter-row lobby-filter-toggle"><button type="button" className="lobby-filter-button" aria-expanded={props.filtersExpanded} disabled={props.busy} onClick={props.onToggleFilters}><SlidersHorizontal size={14} />More filters{props.activeFilters.length > 0 && <span>{props.activeFilters.length}</span>}</button><button type="button" className="lobby-icon-button" aria-label="Reset filters" title="Reset filters" disabled={props.busy} onClick={props.onReset}><RotateCcw size={14} /></button></div>
-            {props.activeFilters.length > 0 && <div className="hololive-bracket-filter-chips lobby-active-filters" aria-label="Active bracket filters">{props.activeFilters.map(label => <span key={label} title={label}>{label}</span>)}</div>}
+            <div className="hololive-bracket-filter-row lobby-filter-toggle"><button type="button" className="lobby-filter-button" aria-expanded={props.filtersExpanded} disabled={props.busy} onClick={props.onToggleFilters}><SlidersHorizontal size={14} />More filters{props.activeFilters.length > 0 && <span>{props.activeFilters.length}</span>}</button><button type="button" className="lobby-icon-button" aria-label="Reset filters" disabled={props.busy} onClick={props.onReset}><RotateCcw size={14} /></button></div>
+            {props.activeFilters.length > 0 && <div className="hololive-bracket-filter-chips lobby-active-filters" aria-label="Active bracket filters">{props.activeFilters.map(label => <span key={label}>{label}</span>)}</div>}
             {props.filtersExpanded && props.filters}
           </div>
           <section className="bracket-lobby-lineup" aria-label="Live entrant lineup" aria-busy={props.pending}>
-            <header className="bracket-lobby-lineup-header"><div><h3>Lineup <span className="lobby-ready-count">{props.preview ? `${props.preview.entries.length} / ${count}` : `— / ${count}`}</span></h3><p aria-live="polite">{props.pending ? "Updating lineup…" : props.preview ? `${props.preview.eligibleCount.toLocaleString()} eligible · ${props.style === "top_songs" ? "Highest views" : "Random draw"}` : "Choose your song pool"}</p></div>{props.style === "random_songs" && <button type="button" className="lobby-icon-button" aria-label="Redraw lineup" title="Redraw lineup" disabled={props.busy || props.pending} onClick={props.onRedraw}><Shuffle size={16} /></button>}</header>
+            <header className="bracket-lobby-lineup-header"><h3 aria-live="polite">Lineup <span className="lobby-ready-count">{props.preview ? `${props.preview.entries.length} / ${count}` : `— / ${count}`}</span>{props.pending && <Loader2 size={13} className="spin" aria-hidden="true" />}</h3><div className="lobby-lineup-tools">{props.preview && <span className="lobby-pool-count">{props.preview.eligibleCount.toLocaleString()} eligible</span>}{props.style === "random_songs" && <button type="button" className="lobby-icon-button" aria-label="Redraw lineup" disabled={props.busy || props.pending} onClick={props.onRedraw}><Shuffle size={16} /></button>}</div></header>
             {props.error && <div role="alert" className="lobby-lineup-message"><p>{props.error}</p>{!props.invalid && <button type="button" className="lobby-text-button" onClick={props.onRetry}>Try again</button>}</div>}
             {props.preview && <>
               <div className="bracket-lobby-roster" aria-label="Entrant preview">
-                <table><thead><tr><th scope="col">#</th><th scope="col">Song / talent</th><th scope="col">Views</th><th scope="col">Date</th></tr></thead><tbody>{props.preview.entries.map((entry, index) => <tr key={entry.youtubeVideoId} data-video-id={entry.youtubeVideoId}><td>{index + 1}</td><td><strong title={entry.title}><a href={`https://www.youtube.com/watch?v=${encodeURIComponent(entry.youtubeVideoId)}`} target="_blank" rel="noreferrer">{entry.title}</a></strong><small title={entry.idolName}>{entry.idolName}</small></td><td>{entry.viewCount === null ? "—" : entry.viewCount.toLocaleString()}</td><td>{entry.dateUsed ?? "—"}</td></tr>)}</tbody></table>
+                <table><thead><tr><th scope="col">#</th><th scope="col">Song / talent</th><th scope="col">Views</th><th scope="col">Date</th></tr></thead><tbody>{props.preview.entries.map((entry, index) => <tr key={entry.youtubeVideoId} data-video-id={entry.youtubeVideoId}><td>{index + 1}</td><td><strong><a href={`https://www.youtube.com/watch?v=${encodeURIComponent(entry.youtubeVideoId)}`} target="_blank" rel="noreferrer">{entry.title}</a></strong><small>{entry.idolName}</small></td><td>{entry.viewCount === null ? "—" : entry.viewCount.toLocaleString()}</td><td>{entry.dateUsed ?? "—"}</td></tr>)}</tbody></table>
               </div>
               {props.preview.entries.length < count && <p className="lobby-lineup-message" role="status">Not enough songs. Widen the filters or choose a smaller bracket.</p>}
               {props.preview.creationError && <p className="lobby-lineup-message" role="status">{props.preview.creationError}</p>}

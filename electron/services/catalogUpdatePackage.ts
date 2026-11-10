@@ -1,4 +1,5 @@
 import { isCalendarDate } from "../../src/shared/musicReleaseDates";
+import { BRACKET_PRESETS_SETTING } from "../../src/shared/bracketPresets";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -22,7 +23,7 @@ export async function validateCatalogDatabase(data: Uint8Array, manifest: Catalo
   try {
     if (database.exec("PRAGMA quick_check")[0]?.values[0]?.[0] !== "ok") throw new Error("Catalog database integrity check failed");
     const settings = select("SELECT key,value FROM settings");
-    if (settings.some(row => /apikey|api_key|token|secret/i.test(String(row.key)))) throw new Error("Catalog contains private settings");
+    if (settings.some(row => row.key === BRACKET_PRESETS_SETTING || /apikey|api_key|token|secret/i.test(String(row.key)))) throw new Error("Catalog contains private settings");
     if (settings.find(row => row.key === "hololive.officialDataVersion")?.value !== manifest.version) throw new Error("Catalog database version does not match");
     for (const [table, where] of [
       ["hololive_idols", " WHERE source='custom'"], ["hololive_music_videos", " WHERE source_kind='user'"],

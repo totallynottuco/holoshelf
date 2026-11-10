@@ -128,7 +128,7 @@ function auditSeedDatabase(database) {
         OR lower(key) LIKE '%api_key%'
         OR lower(key) LIKE '%token%'
         OR lower(key) LIKE '%secret%'
-        OR key IN ('sources.holodexApiKey', 'sources.youtubeApiKey')`
+        OR key IN ('sources.holodexApiKey', 'sources.youtubeApiKey', 'hololive.bracketPresets')`
   );
   if (privateSettings.length > 0) {
     fail(`seed settings contain private keys: ${privateSettings.map((row) => row.key).join(", ")}`);

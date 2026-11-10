@@ -1,0 +1,16 @@
+.hololive-bracket-lobby .bracket-preset-strip { min-width: 0; border-bottom: 1px solid var(--lobby-line); padding: 8px 18px; }
+.hololive-bracket-lobby .bracket-preset-bar { display: flex; gap: 8px; align-items: center; min-width: 0; height: 36px; }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-save { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border: 1px solid #36596e; background: #153243; color: var(--lobby-accent); }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-save[aria-pressed="true"] { border-color: var(--lobby-accent); }
+.hololive-bracket-lobby .preset-carousel { display: flex; align-items: center; flex: 1; min-width: 0; gap: 3px; }
+.hololive-bracket-lobby .preset-carousel-track { display: flex; flex: 1; min-width: 0; gap: 6px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-width: none; padding: 2px; }
+.hololive-bracket-lobby .preset-carousel-track::-webkit-scrollbar { display: none; }
+.hololive-bracket-lobby .bracket-preset-card { display: flex; align-items: center; flex: 0 0 150px; height: 34px; border: 1px solid #2e485a; border-radius: 5px; background: #142c3b; scroll-snap-align: start; min-width: 0; }
+.hololive-bracket-lobby .bracket-preset-card[data-active="true"] { border-color: var(--lobby-accent); background: #1a3c4d; }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-load { flex: 1; min-width: 0; height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-delete { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 30px; padding: 0; color: var(--lobby-muted); border: 0; }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-scroll { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 34px; padding: 0; color: var(--lobby-muted); }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-scroll[hidden] { display: none; }
+.hololive-bracket-lobby .preset-name-form { display: flex; flex: 0 1 210px; min-width: 100px; align-items: center; gap: 2px; }
+.hololive-bracket-create-popover.hololive-bracket-lobby .preset-name-form input { min-width: 0; height: 34px; }
+.hololive-bracket-lobby .preset-error { display: flex; gap: 8px; align-items: center; margin-top: 5px; font-size: 11px; color: #efd09d; }

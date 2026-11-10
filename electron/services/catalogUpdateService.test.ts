@@ -8,6 +8,7 @@ import {CatalogUpdateService} from "./catalogUpdateService";
 import {catalogHash} from "./catalogUpdatePackage";
 import {CATALOG_MIN_APP_VERSION, parseCatalogUpdateManifest, type CatalogUpdateManifest} from "../../src/shared/catalogUpdate";
 import {DatabaseService} from "./database";
+import {BRACKET_PRESETS_SETTING, readBracketPresets, saveBracketPreset, writeBracketPresets} from "../../src/shared/bracketPresets";
 import {mergeBundledOfficialData} from "./officialDataMergeService";
 import type {AppPathSet} from "./appPaths";
 
@@ -75,6 +76,8 @@ describe("silent catalog updates", () => {
     const database = new DatabaseService(file, undefined, {createBackups:false}); await database.init();
     database.setSetting("hololive.officialDataVersion", "2026-10-15T120000Z");
     database.setSetting("personal.preference", "preserve");
+    const presets = writeBracketPresets(saveBracketPreset([], {size:"RO32",format:"double_elimination",generationStyle:"top_songs",filters:{dateBasis:"song_release",excludeBeforeDate:"2022-01-01",excludeAfterDate:"2022-12-31",maxEntriesPerTalent:null}}, "My 2022", null, "personal-preset"));
+    database.setSetting(BRACKET_PRESETS_SETTING, presets);
     database.run("DELETE FROM hololive_music_release_dates WHERE youtube_video_id=?", [releaseVideoId]);
     database.run("UPDATE hololive_music_video_stats SET view_count=1,fetched_at='2000-01-01T00:00:00.000Z' WHERE youtube_video_id=?", [releaseVideoId]);
     database.setHololiveMusicMarker({youtubeVideoId:releaseVideoId,marker:"favorite"});
@@ -89,6 +92,9 @@ describe("silent catalog updates", () => {
     expect(await service.checkForUpdates()).toBe("merged");
     expect(database.listHololiveMusicRows({youtubeVideoIds:[releaseVideoId]})[0]).toMatchObject({releaseDate:"2022-12-19",releaseDateBasis:"official_release",viewCount:100,viewCountFetchedAt:"2026-10-16T12:00:00.000Z"});
     expect(database.getSettings()["personal.preference"]).toBe("preserve");
+    expect(database.getSettings()[BRACKET_PRESETS_SETTING]).toBe(presets);
+    const reopened = new DatabaseService(file, undefined, {createBackups:false}); await reopened.init();
+    expect(readBracketPresets(reopened.getSettings()[BRACKET_PRESETS_SETTING])[0].name).toBe("My 2022");
     expect(tables.map(table => database.select(`SELECT * FROM ${table}`))).toEqual(before);
     expect(onApplied).toHaveBeenCalledExactlyOnceWith(version);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -121,9 +127,10 @@ describe("silent catalog updates", () => {
     expect(f.settings["hololive.officialDataVersion"]).toBe("2026-10-15T120000Z");
   });
 
-  it.each(["private-setting", "custom-talent", "wrong-version", "invalid-release-date"])("rejects a checksummed but invalid seed: %s", async failure => {
+  it.each(["private-setting", "custom-talent", "wrong-version", "invalid-release-date", "personal-presets"])("rejects a checksummed but invalid seed: %s", async failure => {
     const seed = new SQL.Database(bytes);
     if (failure === "private-setting") seed.run("INSERT INTO settings(key,value,updated_at) VALUES('sources.youtubeApiKey','synthetic-secret','2026-10-16')");
+    if (failure === "personal-presets") seed.run("INSERT INTO settings(key,value,updated_at) VALUES(?,'private-preset','2026-10-16')", [BRACKET_PRESETS_SETTING]);
     if (failure === "custom-talent") seed.run("UPDATE hololive_idols SET source='custom' WHERE id=(SELECT id FROM hololive_idols LIMIT 1)");
     if (failure === "invalid-release-date") seed.run("UPDATE hololive_music_release_dates SET release_date='2022-02-31'");
     if (failure === "wrong-version") seed.run("UPDATE settings SET value='wrong' WHERE key='hololive.officialDataVersion'");

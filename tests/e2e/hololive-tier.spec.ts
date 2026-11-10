@@ -74,23 +74,66 @@ test("filters bracket releases by a year range and previews entrants without sav
   await popover.getByRole("button",{name:"Cancel",exact:true}).click();
 });
 
-test("arcade presets reset hidden rules and random lineup survives naming and creation", async ({page}) => {
+test("saves and loads complete custom filters without saving or changing brackets", async ({page}) => {
+  await page.evaluate(async () => {
+    const path = "/src/renderer/apiMock.ts", {api} = await import(path), original = api.invoke.bind(api);
+    api.invoke = (channel:string,payload:any) => {
+      if(channel === "hololive:brackets:preview") (window as any).lobbyLatestPreview = JSON.parse(JSON.stringify(payload));
+      return original(channel,payload);
+    };
+  });
   await page.getByRole("link", {name:"Bracket",exact:true}).click();
   await page.getByRole("button", {name:"Create",exact:true}).click();
-  const lobby = page.getByRole("dialog", {name:"Create bracket"});
-  await lobby.getByRole("button", {name:/More filters/}).click();
-  await lobby.getByRole("checkbox", {name:"Max per talent",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Active",exact:true}).uncheck();
-  await lobby.getByRole("button", {name:/Cover clash/}).click();
-  await expect(lobby.getByRole("combobox", {name:"Song type",exact:true})).toHaveValue("Music_Cover");
-  await expect(lobby.getByRole("checkbox", {name:"Max per talent",exact:true})).not.toBeChecked();
-  await expect(lobby.getByRole("checkbox", {name:"Active",exact:true})).toBeChecked();
-  await lobby.getByRole("button", {name:/Top of the year/}).click();
-  await expect(lobby.getByLabel("Year or year range")).toHaveValue(String(new Date().getFullYear()));
-  await expect(lobby.getByRole("combobox", {name:"Singers",exact:true})).toHaveValue("solo");
-  await lobby.getByRole("button", {name:/Surprise me/}).click();
+  let lobby = page.getByRole("dialog", {name:"Create bracket"});
   await lobby.getByRole("radio", {name:"RO16",exact:true}).click();
   await lobby.getByRole("radio", {name:"Double",exact:true}).click();
+  await lobby.getByRole("radio", {name:"Random Songs",exact:true}).click();
+  await lobby.getByRole("combobox", {name:"Song type",exact:true}).selectOption("Music_Cover");
+  await lobby.getByRole("combobox", {name:"Singers",exact:true}).selectOption("solo");
+  await lobby.getByLabel("Year or year range").fill("2020-2022");
+  await lobby.getByLabel("Date basis",{exact:true}).selectOption("video_upload");
+  await lobby.getByRole("button", {name:/More filters/}).click();
+  await lobby.getByRole("checkbox", {name:"Max per talent",exact:true}).check();
+  await lobby.getByLabel("Max songs per talent").fill("3");
+  await lobby.getByRole("checkbox", {name:"Active",exact:true}).uncheck();
+  await lobby.getByRole("combobox", {name:"History participation"}).click();
+  await lobby.getByRole("option", {name:"Top 8+",exact:true}).click();
+  await lobby.getByRole("checkbox", {name:"Previous Winners",exact:true}).check();
+  await lobby.getByRole("checkbox", {name:"Previous Finalists",exact:true}).check();
+  await lobby.getByRole("checkbox", {name:"Previous Top 4",exact:true}).check();
+  await lobby.getByRole("checkbox", {name:"Previous Top 8",exact:true}).check();
+  await lobby.getByRole("checkbox", {name:"Skip Top Viewed",exact:true}).check();
+  await lobby.getByRole("checkbox", {name:"Prefer original/cover split",exact:true}).check();
+  await lobby.getByLabel(/^Min views:/).fill("500");
+  await lobby.getByLabel(/^Max views:/).fill("2,000,000");
+  await lobby.getByRole("button", {name:"Save preset",exact:true}).click();
+  await lobby.getByLabel("Preset name",{exact:true}).fill("Solo covers");
+  await lobby.getByLabel("Preset name",{exact:true}).press("Enter");
+  await expect(lobby.getByRole("button", {name:"Solo covers",exact:true})).toHaveAttribute("aria-pressed","true");
+  const stored = await page.evaluate(async () => {
+    const path="/src/renderer/apiMock.ts", {api}=await import(path);
+    return JSON.parse((await api.invoke("settings:get",null))["hololive.bracketPresets"]).presets[0];
+  });
+  expect(stored.filters).toMatchObject({historyParticipation:"top8",maxEntriesPerTalent:3,excludePreviousChampions:true,excludePreviousFinalists:true,excludePreviousTop4:true,excludePreviousTop8:true,excludeTopViewedPerTalent:true,preferTopicSplitPerTalent:true,excludeBelowViews:500,excludeAboveViews:2000000});
+  await lobby.getByRole("button", {name:"Reset filters",exact:true}).click();
+  await lobby.getByRole("radio", {name:"RO64",exact:true}).click();
+  await lobby.getByRole("radio", {name:"Single",exact:true}).click();
+  await lobby.getByRole("radio", {name:"Top Songs",exact:true}).click();
+  await expect(lobby.getByRole("button", {name:"Solo covers",exact:true})).toHaveAttribute("aria-pressed","false");
+  await lobby.getByRole("button", {name:"Solo covers",exact:true}).click();
+  await expect(lobby.getByRole("region", {name:"Live entrant lineup"})).toHaveAttribute("aria-busy","false");
+  const request = await page.evaluate(() => (window as any).lobbyLatestPreview);
+  expect({size:request.size,format:request.format,generationStyle:request.generationStyle,filters:request.filters}).toEqual({size:stored.size,format:stored.format,generationStyle:stored.generationStyle,filters:stored.filters});
+  await expect(lobby.getByRole("button", {name:"Solo covers",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(lobby.getByLabel("Year or year range")).toHaveValue("2020-2022");
+  await expect(lobby.locator("[title]")).toHaveCount(0);
+  await lobby.getByRole("button", {name:"Cancel",exact:true}).click();
+  await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
+  await page.getByRole("link", {name:"Player",exact:true}).click();
+  await page.getByRole("link", {name:"Bracket",exact:true}).click();
+  await page.getByRole("button", {name:"Create",exact:true}).click();
+  lobby = page.getByRole("dialog", {name:"Create bracket"});
+  await lobby.getByRole("button", {name:"Solo covers",exact:true}).click();
   const lineup = lobby.getByRole("region", {name:"Live entrant lineup"});
   await expect(lineup).toHaveAttribute("aria-busy","false");
   const ids = await lineup.locator("tbody tr").evaluateAll(rows => rows.map(row => row.getAttribute("data-video-id")));
@@ -103,13 +146,88 @@ test("arcade presets reset hidden rules and random lineup survives naming and cr
   await lobby.getByRole("button", {name:"Create Bracket",exact:true}).click();
   await expect(lobby).toHaveCount(0);
   const saved = await page.evaluate(async () => {
-    const path = "/src/renderer/apiMock.ts";
-    const {api} = await import(path);
+    const path = "/src/renderer/apiMock.ts", {api} = await import(path);
     const summaries = await api.invoke("hololive:brackets:list", null);
     return Promise.all(summaries.map((summary:{id:string}) => api.invoke("hololive:brackets:get",{bracketId:summary.id})));
   });
   expect(saved).toHaveLength(1);
   expect(new Set(saved[0].entries.map((entry:{youtubeVideoId:string}) => entry.youtubeVideoId))).toEqual(new Set(redrawn));
+});
+
+test("preset carousel scrolls while Save stays fixed and supports updating, copying and deleting", async ({page}) => {
+  await page.getByRole("link", {name:"Bracket",exact:true}).click();
+  await page.getByRole("button", {name:"Create",exact:true}).click();
+  let lobby = page.getByRole("dialog", {name:"Create bracket"});
+  await lobby.getByRole("button", {name:"Save preset",exact:true}).click();
+  await lobby.getByLabel("Preset name",{exact:true}).fill("Preset 1");
+  await lobby.getByLabel("Preset name",{exact:true}).press("Enter");
+  await expect(lobby.getByRole("button", {name:"Preset 1",exact:true})).toBeVisible();
+  await page.evaluate(async () => {
+    const path="/src/renderer/apiMock.ts", {api}=await import(path);
+    const preset=JSON.parse((await api.invoke("settings:get",null))["hololive.bracketPresets"]).presets[0];
+    await api.invoke("settings:set",{key:"hololive.bracketPresets",value:JSON.stringify({schema:1,presets:Array.from({length:9},(_,i)=>({...preset,id:`preset-${i+1}`,name:`Preset ${i+1}`}))})});
+  });
+  await lobby.getByRole("button", {name:"Cancel",exact:true}).click();
+  await page.getByRole("link", {name:"Player",exact:true}).click();
+  await page.getByRole("link", {name:"Bracket",exact:true}).click();
+  await page.getByRole("button", {name:"Create",exact:true}).click();
+  lobby = page.getByRole("dialog", {name:"Create bracket"});
+  const save = lobby.getByRole("button", {name:"Save preset",exact:true}), track=lobby.locator(".preset-carousel-track");
+  const initialSaveBox=await save.boundingBox();
+  expect((await lobby.locator(".bracket-preset-strip").boundingBox())!.height).toBeLessThanOrEqual(56);
+  const firstCard = await lobby.getByRole("button", {name:"Preset 1",exact:true}).boundingBox();
+  await page.mouse.move(firstCard!.x+firstCard!.width-10,firstCard!.y+firstCard!.height/2);
+  await page.mouse.down();
+  await page.mouse.move(firstCard!.x-90,firstCard!.y+firstCard!.height/2,{steps:10});
+  await page.mouse.up();
+  await expect.poll(() => track.evaluate(element => element.scrollLeft)).toBeGreaterThan(10);
+  await expect(lobby.getByRole("button", {name:"Preset 1",exact:true})).toHaveAttribute("aria-pressed","false");
+  await lobby.getByRole("button", {name:"Next presets"}).click();
+  await expect.poll(() => track.evaluate(element => element.scrollLeft)).toBeGreaterThan(100);
+  expect((await save.boundingBox())!.x).toBe(initialSaveBox!.x);
+  await lobby.getByRole("button", {name:"Preset 9",exact:true}).click();
+  await lobby.getByRole("radio", {name:"RO16",exact:true}).click();
+  await save.click();
+  await expect(lobby.getByLabel("Preset name",{exact:true})).toHaveValue("Preset 9");
+  await save.click();
+  await expect(lobby.getByRole("button", {name:"Preset 9",exact:true})).toHaveAttribute("aria-pressed","true");
+  await save.click();
+  await lobby.getByLabel("Preset name",{exact:true}).press("Escape");
+  await expect(lobby).toBeVisible();
+  await expect(save).toBeFocused();
+  await save.click();
+  await lobby.getByLabel("Preset name",{exact:true}).fill("New copy");
+  await save.click();
+  await expect(lobby.getByRole("button", {name:"New copy",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(lobby.getByRole("button", {name:"Preset 9",exact:true})).toHaveCount(1);
+  await lobby.getByRole("button", {name:"Delete preset New copy",exact:true}).click();
+  await expect(lobby.getByRole("button", {name:"New copy",exact:true})).toHaveCount(0);
+  await expect(lobby.locator("[title]")).toHaveCount(0);
+  await expect(lobby.getByText(/Cover clash|Surprise me|Top of the year/)).toHaveCount(0);
+});
+
+test("a failed preset save preserves existing stored presets and can be retried", async ({page}) => {
+  await page.evaluate(async () => {
+    const path="/src/renderer/apiMock.ts", {api}=await import(path),original=api.invoke.bind(api);
+    let fail=true;
+    api.invoke=(channel:string,payload:any)=>{
+      if(channel==="settings:set"&&payload.key==="hololive.bracketPresets"&&fail){fail=false;return Promise.reject(new Error("Save failed."));}
+      return original(channel,payload);
+    };
+  });
+  await page.getByRole("link", {name:"Bracket",exact:true}).click();
+  await page.getByRole("button", {name:"Create",exact:true}).click();
+  const lobby=page.getByRole("dialog", {name:"Create bracket"});
+  await lobby.getByRole("button", {name:"Save preset",exact:true}).click();
+  await lobby.getByLabel("Preset name",{exact:true}).fill("My filters");
+  await lobby.getByLabel("Preset name",{exact:true}).press("Enter");
+  await expect(lobby.getByRole("alert")).toContainText("Save failed.");
+  await expect(lobby.getByRole("button", {name:"My filters",exact:true})).toHaveCount(0);
+  const stored=await page.evaluate(async()=>{const path="/src/renderer/apiMock.ts",{api}=await import(path);return(await api.invoke("settings:get",null))["hololive.bracketPresets"];});
+  expect(stored).toBeUndefined();
+  await lobby.getByRole("button", {name:"Save preset",exact:true}).click();
+  await expect(lobby.getByRole("button", {name:"My filters",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(lobby.getByRole("alert")).toHaveCount(0);
 });
 
 test("live lineup discards slow responses for previous filters", async ({page}) => {
@@ -764,7 +882,7 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
   await createPopover.getByRole("combobox", { name: "History participation" }).click();
   await createPopover.getByRole("option", { name: "Never appeared" }).click();
   await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Never appeared");
-  await expect(createPopover.locator(".hololive-bracket-history-hint")).toContainText("Overall finish");
+  await expect(createPopover.locator(".hololive-bracket-history-hint")).toHaveCount(0);
   await expect(createPopover.getByRole("combobox", {name:"Singers",exact:true})).toHaveValue("all");
   await createPopover.getByRole("combobox", {name:"Singers",exact:true}).selectOption("solo");
   await expect(createPopover.getByRole("checkbox", { name: "Max per talent", exact: true })).not.toBeChecked();

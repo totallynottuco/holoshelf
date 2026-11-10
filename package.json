@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Redesigns bracket creation with a compact Match Lobby and Arcade presets.\n\n- Shows the exact live lineup beside the rules for Top Songs and Random Songs.\n- Keeps every existing filter and adds quick year, cover, and random challenge presets.\n- Keeps random draws stable and checks for catalog changes before creating a bracket.\n- Adds song release dates, year/range shortcuts, and official album/distributor dates or the music video’s upload date.\n- Preserves existing brackets, results, Favorites, playlists, exclusions, and personal settings."
+      "releaseNotes": "Redesigns bracket creation with a compact Match Lobby and saved filter presets.\n\n- Shows the exact live lineup beside the rules for Top Songs and Random Songs.\n- Keeps every existing filter and saves and loads named custom configurations.\n- Keeps random draws stable and checks for catalog changes before creating a bracket.\n- Adds song release dates, year/range shortcuts, and official album/distributor dates or the music video\u2019s upload date.\n- Preserves existing brackets, results, Favorites, playlists, exclusions, and personal settings."
     },
     "win": {
       "icon": "ico.ico",
