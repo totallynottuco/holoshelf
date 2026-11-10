@@ -3788,7 +3788,6 @@ export function HololiveBracketPage() {
   const [excludeAboveViews, setExcludeAboveViews] = useState("");
   const [excludeBelowViews, setExcludeBelowViews] = useState("");
   const [dateBasis, setDateBasis] = useState<BracketDateBasis>("song_release");
-  const [includeEstimatedReleaseDates, setIncludeEstimatedReleaseDates] = useState(true);
   const [yearRange, setYearRange] = useState("");
   const [selectionPreview, setSelectionPreview] = useState<HololiveBracketSelectionPreview | null>(null);
   const [previewKey, setPreviewKey] = useState("");
@@ -3963,7 +3962,6 @@ export function HololiveBracketPage() {
       excludeAboveViews: excludeAboveViewsValue,
       excludeBelowViews: excludeBelowViewsValue,
       dateBasis,
-      includeEstimatedReleaseDates,
       excludeAfterDate: excludeAfterDate || null,
       excludeBeforeDate: excludeBeforeDate || null,
       excludeTopicIds: excludedTopicIds,
@@ -3976,7 +3974,6 @@ export function HololiveBracketPage() {
     }),
     [
       dateBasis,
-      includeEstimatedReleaseDates,
       excludeAboveViewsValue,
       excludeAfterDate,
       excludeBeforeDate,
@@ -5135,7 +5132,6 @@ export function HololiveBracketPage() {
     setExcludeBelowViews("");
     setYearRange("");
     setDateBasis("song_release");
-    setIncludeEstimatedReleaseDates(true);
     setExcludeAfterDate("");
     setExcludeBeforeDate("");
     setIncludedTopicIds(BRACKET_TOPIC_VALUES);
@@ -5220,7 +5216,7 @@ export function HololiveBracketPage() {
                   error={filterError ?? (previewKey === requestKey ? previewError : null)}
                   busy={busy}
                   filtersExpanded={filtersExpanded}
-                  activeFilters={activeFilterLabels.filter(label => !/^(Originals only$|Covers only$|Solo only$|Group only$)/.test(label) && (!yearRange.trim() || !/^(From |To )/.test(label))).concat(dateBasis === "song_release" && !includeEstimatedReleaseDates ? ["Verified dates only"] : [])}
+                  activeFilters={activeFilterLabels.filter(label => !/^(Originals only$|Covers only$|Solo only$|Group only$)/.test(label) && (!yearRange.trim() || !/^(From |To )/.test(label)))}
                   onToggleFilters={() => setFiltersExpanded(value => !value)}
                   onReset={clearBracketFilters}
                   onRulesChange={() => setArcadePreset(null)}
@@ -5424,11 +5420,6 @@ export function HololiveBracketPage() {
                               </div>
                               <div className="hololive-bracket-filter-fieldset">
                                 <div className="hololive-bracket-date-filters">
-                                  {dateBasis === "song_release" && <label className="hololive-bracket-release-estimates">
-                                    <input type="checkbox" checked={includeEstimatedReleaseDates} disabled={busy} onChange={event => setIncludeEstimatedReleaseDates(event.target.checked)} />
-                                    Include estimated dates (earliest known recording upload)
-                                  </label>}
-
                                   <label>
                                     <BracketFilterFieldLabel copy={BRACKET_FILTER_COPY.fromDate} />
                                     <input

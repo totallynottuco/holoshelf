@@ -345,6 +345,7 @@ export interface HololiveBracketCreateWarning {
 
 export interface HololiveBracketGenerationFilters {
   dateBasis?: BracketDateBasis;
+  /** Legacy field retained for saved-filter compatibility; upload dates are always accepted. */
   includeEstimatedReleaseDates?: boolean;
   excludeDisliked?: boolean;
   excludeRated?: boolean;

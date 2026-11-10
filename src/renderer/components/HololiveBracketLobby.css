@@ -147,7 +147,6 @@
 .hololive-bracket-lobby .compact-select-menu { position: static; inset: auto; width: 100%; margin-top: 4px; background: #102938; box-shadow: none; }
 .hololive-bracket-create-popover.hololive-bracket-lobby .hololive-bracket-exclusion-option { display: flex; align-items: center; gap: 6px; min-height: 24px; font-size: 11px; }
 .hololive-bracket-lobby .hololive-bracket-filter-option-text strong { color: #cfdfeb; font-size: 11px; font-weight: 500; line-height: 1.3; }
-.hololive-bracket-lobby .hololive-bracket-date-filters .hololive-bracket-release-estimates { font-size: 11px; }
 .hololive-bracket-lobby .hololive-bracket-date-filters label > span,
 .hololive-bracket-lobby .hololive-bracket-number-filters label > span { font-size: 11px; color: var(--lobby-muted); font-weight: 500; }
 .hololive-bracket-create-popover.hololive-bracket-lobby .hololive-bracket-talent-selector-button,

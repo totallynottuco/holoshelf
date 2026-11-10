@@ -51,6 +51,8 @@ test("filters bracket releases by a year range and previews entrants without sav
   await expect(popover.getByRole("button",{name:"Create Bracket",exact:true})).toBeDisabled();
   await popover.getByLabel("Year or year range").fill("2022");
   const lineup = popover.getByRole("region", {name:"Live entrant lineup"});
+  await expect(popover.getByText(/Estimated|Verified dates only|Include estimated dates/)).toHaveCount(0);
+  await expect(lineup.locator("td:last-child a[title]")).toHaveCount(0);
   await expect(lineup).toHaveAttribute("aria-busy", "false");
   await expect(lineup.locator("tbody tr")).toHaveCount(64);
   await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");

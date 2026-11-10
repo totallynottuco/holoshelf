@@ -15,10 +15,10 @@ async function fixture() {
   const db = new DatabaseService(file, undefined, {createBackups:false}); await db.init();
   return {db,file,directory};
 }
-function songs(db: DatabaseService) {
+function songs(db: DatabaseService, topicId: "Original_Song" | "Music_Cover" = "Original_Song") {
   const idols = db.listHololiveIdols().filter(idol => idol.source === "official").slice(0,32);
   const bundle: HolodexArtifactBundle = {
-    rows: idols.map((idol,i)=>({youtubeVideoId:`release-song-${i}`,youtubeUrl:`https://youtu.be/release-song-${i}`,title:`Release Song ${i}`,status:"past",topicId:"Original_Song",channelId:idol.youtubeChannelId!,channelName:idol.displayName,
+    rows: idols.map((idol,i)=>({youtubeVideoId:`release-song-${i}`,youtubeUrl:`https://youtu.be/release-song-${i}`,title:`Release Song ${i}`,status:"past",topicId,channelId:idol.youtubeChannelId!,channelName:idol.displayName,
       publishedAt:i===0?"2023-08-25T12:00:00Z":i===3?"2022-12-31T23:59:59Z":"2022-01-01T00:00:00Z"})),
     detailCache:Object.fromEntries(idols.map((idol,i)=>[`release-song-${i}`,normalizeVideoDetail(`release-song-${i}`,{channelId:idol.youtubeChannelId!,duration:200,songNames:[`Release Song ${i}`],relationshipsLoaded:true})])),duplicateRemovals:[]
   };
@@ -45,12 +45,22 @@ describe("release-date upgrades and bracket filtering",()=>{
     expect(preview.entries[0]).toMatchObject({youtubeVideoId:"release-song-0",dateUsed:"2022-12-19",dateBasis:"official_release"});
     expect(preview.entries.some(row=>row.youtubeVideoId==="release-song-1")).toBe(false);
     expect(upgraded.previewHololiveBracketSelection({size:"RO16",filters:range}).entries[0].youtubeVideoId).toBe("release-song-1");
-    const strict=upgraded.previewHololiveBracketSelection({size:"RO16",filters:{...range,dateBasis:"song_release",includeEstimatedReleaseDates:false}});
-    expect(strict.entries.map(row=>row.youtubeVideoId)).toEqual(["release-song-0"]);
+    const legacyFlag=upgraded.previewHololiveBracketSelection({size:"RO16",filters:{...range,dateBasis:"song_release",includeEstimatedReleaseDates:false}});
+    expect(legacyFlag.entries).toEqual(preview.entries);
     const generated=await upgraded.createHololiveBracket({size:"RO16",filters:{...range,dateBasis:"song_release"}});
     expect(new Set(generated.entries.map(row=>row.youtubeVideoId))).toEqual(new Set(preview.entries.map(row=>row.youtubeVideoId)));
     expect(upgraded.getHololiveBracket(original.id).entries).toEqual(original.entries);
     expect(upgraded.select("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it.each(["Original_Song", "Music_Cover"] as const)("uses the retained %s video upload when no explicit release is known",async(topicId)=>{
+    const {db}=await fixture();songs(db,topicId);
+    db.upsertHololiveMusicReleaseDates([{youtubeVideoId:"release-song-0",releaseDate:"2019-01-01",basis:"recording_upload",sourceUrl:"https://www.youtube.com/watch?v=older-duplicate"}]);
+    expect(db.listHololiveMusicRows({youtubeVideoIds:["release-song-0"]})[0]).toMatchObject({releaseDate:"2023-08-25",releaseDateSourceUrl:"https://youtu.be/release-song-0"});
+    expect(db.previewHololiveBracketSelection({size:"RO16",filters:{...range,dateBasis:"song_release"}}).entries.some(row=>row.youtubeVideoId==="release-song-0")).toBe(false);
+    db.upsertHololiveMusicReleaseDates([{youtubeVideoId:"release-song-0",releaseDate:"2022-12-19",basis:"youtube_release",sourceUrl:"https://www.youtube.com/watch?v=automatic-upload"}]);
+    expect(db.listHololiveMusicRows({youtubeVideoIds:["release-song-0"]})[0].releaseDate).toBe("2022-12-19");
+    expect(db.previewHololiveBracketSelection({size:"RO16",filters:{...range,dateBasis:"song_release"}}).entries[0].youtubeVideoId).toBe("release-song-0");
   });
 
   it("keeps source release evidence through deletion, replacement, repeat imports and album reissues",async()=>{

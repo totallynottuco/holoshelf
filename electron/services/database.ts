@@ -2478,9 +2478,9 @@ export class DatabaseService {
       publishedAt: row.published_at,
       durationSeconds: row.duration_seconds,
       viewCount: row.view_count,
-      releaseDate: releaseDates.get(row.youtube_video_id)?.releaseDate ?? null,
-      releaseDateBasis: releaseDates.get(row.youtube_video_id)?.basis ?? null,
-      releaseDateSourceUrl: releaseDates.get(row.youtube_video_id)?.sourceUrl ?? null,
+      releaseDate: releaseDates.get(row.youtube_video_id)?.releaseDate ?? row.published_at?.slice(0, 10) ?? null,
+      releaseDateBasis: releaseDates.get(row.youtube_video_id)?.basis ?? (row.published_at ? "recording_upload" : null),
+      releaseDateSourceUrl: releaseDates.get(row.youtube_video_id)?.sourceUrl ?? (row.published_at ? row.youtube_url : null),
       viewCountFetchedAt: row.view_count_fetched_at,
       markerKey: row.marker_key,
       marker: row.marker,
@@ -2513,7 +2513,7 @@ export class DatabaseService {
     if (this.releaseDateCache) return this.releaseDateCache;
     const grouped = new Map<string, MusicReleaseDateEvidence[]>();
     for (const row of this.select<{ youtube_video_id: string; release_date: string; basis: MusicReleaseDateEvidence["basis"]; source_url: string }>(
-      "SELECT youtube_video_id,release_date,basis,source_url FROM hololive_music_release_dates")) {
+      "SELECT youtube_video_id,release_date,basis,source_url FROM hololive_music_release_dates WHERE basis != 'recording_upload'")) {
       const fact = { youtubeVideoId: row.youtube_video_id, releaseDate: row.release_date, basis: row.basis, sourceUrl: row.source_url };
       const group = grouped.get(row.youtube_video_id) ?? [];
       group.push(fact); grouped.set(row.youtube_video_id, group);
@@ -9609,8 +9609,6 @@ export class DatabaseService {
 
     const useRelease = filters.dateBasis === "song_release";
     const date = useRelease ? row.releaseDate || row.publishedAt : row.publishedAt;
-    const estimated = !row.releaseDate || row.releaseDateBasis === "recording_upload";
-    if (useRelease && (filters.excludeBeforeDate || filters.excludeAfterDate) && filters.includeEstimatedReleaseDates === false && estimated) return false;
     const publishedTime = date ? Date.parse(date) : Number.NaN;
     if (filters.excludeBeforeDate) {
       const boundary = Date.parse(`${filters.excludeBeforeDate}T00:00:00.000Z`);

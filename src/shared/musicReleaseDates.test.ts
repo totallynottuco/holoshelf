@@ -15,13 +15,13 @@ describe("recording dates and year shortcuts", () => {
     expect(parseYoutubeReleaseDate("New video!\nReleased on: 2022-12-19")).toBeNull();
     expect(parseYoutubeReleaseDate("Provided to YouTube by Label\nReleased on: 2022-12-19\nReleased on: 2023-01-25")).toBeNull();
   });
-  it("keeps the earliest verified release across album reissues, without treating an upload estimate as verified", () => {
+  it("keeps the earliest verified release across album reissues, using the selected video upload when no verified release exists", () => {
     const facts = [
       { releaseDate: "2023-01-25", basis: "youtube_release" as const, sourceUrl: "https://youtu.be/album" },
       { releaseDate: "2022-12-19", basis: "official_release" as const, sourceUrl: "https://hololive.hololivepro.com/en/music/244/" },
       { releaseDate: "2022-12-18", basis: "recording_upload" as const, sourceUrl: "https://youtu.be/premiere" }
     ];
     expect(chooseReleaseDate(facts)?.releaseDate).toBe("2022-12-19");
-    expect(chooseReleaseDate(facts.slice(2))?.basis).toBe("recording_upload");
+    expect(chooseReleaseDate(facts.slice(2))).toBeNull();
   });
 });

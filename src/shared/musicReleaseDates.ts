@@ -31,6 +31,5 @@ export function chooseReleaseDate<T extends { releaseDate: string; basis: MusicR
   const priorities = { official_release: 0, youtube_release: 1, recording_upload: 2 };
   // Keep the earliest verified release even when a later album page is added.
   const verified = facts.filter(fact => isCalendarDate(fact.releaseDate) && fact.basis !== "recording_upload");
-  const candidates = verified.length ? verified : facts.filter(fact => isCalendarDate(fact.releaseDate));
-  return [...candidates].sort((a, b) => a.releaseDate.localeCompare(b.releaseDate) || priorities[a.basis] - priorities[b.basis] || a.sourceUrl.localeCompare(b.sourceUrl))[0] ?? null;
+  return [...verified].sort((a, b) => a.releaseDate.localeCompare(b.releaseDate) || priorities[a.basis] - priorities[b.basis] || a.sourceUrl.localeCompare(b.sourceUrl))[0] ?? null;
 }

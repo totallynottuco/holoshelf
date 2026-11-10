@@ -1938,16 +1938,6 @@ select {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.hololive-bracket-date-filters .hololive-bracket-release-estimates {
-  display: flex;
-  align-items: center;
-  grid-column: 1 / -1;
-  font-size: 11px;
-  white-space: normal;
-}
-
-.hololive-bracket-release-estimates input { width: auto; }
-
 .hololive-bracket-filter-group.song-pool .hololive-bracket-date-filters,
 .hololive-bracket-filter-group.song-pool .hololive-bracket-number-filters {
   display: grid;
