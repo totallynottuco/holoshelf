@@ -55,6 +55,9 @@ test("filters bracket releases by a year range and previews entrants without sav
   await expect(lineup.locator("td:last-child a[title]")).toHaveCount(0);
   await expect(lineup).toHaveAttribute("aria-busy", "false");
   await expect(lineup.locator("tbody tr")).toHaveCount(64);
+  const firstEntry = lineup.locator("tbody tr").first();
+  await expect(firstEntry.locator("td:nth-child(2) a")).toHaveAttribute("href", `https://www.youtube.com/watch?v=${await firstEntry.getAttribute("data-video-id")}`);
+  await expect(lineup.locator("td:last-child a")).toHaveCount(0);
   await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
   expect(await lineup.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await popover.locator('input[type="date"]').nth(0).fill("2021-04-03");
