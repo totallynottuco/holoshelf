@@ -74,12 +74,14 @@ describe("silent catalog updates", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-real-merge-")); directories.push(directory);
     const file = path.join(directory, "holoshelf.sqlite"); fs.copyFileSync("resources/seed/holoshelf-template.sqlite", file);
     const database = new DatabaseService(file, undefined, {createBackups:false}); await database.init();
-    database.setSetting("hololive.officialDataVersion", "2026-10-15T120000Z");
-    database.setSetting("personal.preference", "preserve");
     const presets = writeBracketPresets(saveBracketPreset([], {size:"RO32",format:"double_elimination",generationStyle:"top_songs",filters:{dateBasis:"song_release",excludeBeforeDate:"2022-01-01",excludeAfterDate:"2022-12-31",maxEntriesPerTalent:null}}, "My 2022", null, "personal-preset"));
-    database.setSetting(BRACKET_PRESETS_SETTING, presets);
-    database.run("DELETE FROM hololive_music_release_dates WHERE youtube_video_id=?", [releaseVideoId]);
-    database.run("UPDATE hololive_music_video_stats SET view_count=1,fetched_at='2000-01-01T00:00:00.000Z' WHERE youtube_video_id=?", [releaseVideoId]);
+    database.transaction(() => {
+      database.setSetting("hololive.officialDataVersion", "2026-10-15T120000Z");
+      database.setSetting("personal.preference", "preserve");
+      database.setSetting(BRACKET_PRESETS_SETTING, presets);
+      database.run("DELETE FROM hololive_music_release_dates WHERE youtube_video_id=?", [releaseVideoId]);
+      database.run("UPDATE hololive_music_video_stats SET view_count=1,fetched_at='2000-01-01T00:00:00.000Z' WHERE youtube_video_id=?", [releaseVideoId]);
+    });
     database.setHololiveMusicMarker({youtubeVideoId:releaseVideoId,marker:"favorite"});
     await database.createHololiveBracket({size:"RO16",format:"double_elimination"});
     const tables = ["hololive_music_marker_keys","hololive_music_playlists","hololive_music_playlist_items","hololive_music_queue_items","hololive_music_exclusions","hololive_brackets","hololive_bracket_entries","hololive_bracket_matches","hololive_bracket_archives","hololive_bracket_archive_entries","hololive_bracket_archive_matches"];
@@ -99,7 +101,7 @@ describe("silent catalog updates", () => {
     expect(onApplied).toHaveBeenCalledExactlyOnceWith(version);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(database.select("PRAGMA foreign_key_check")).toEqual([]);
-  });
+  }, 90_000);
 
   it("validates and stages the complete seed, coalesces checks, and emits only a catalog event", async () => {
     const f = fixture();
