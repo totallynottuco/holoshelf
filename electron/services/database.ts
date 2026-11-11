@@ -1,4 +1,7 @@
 import { chooseReleaseDate, isCalendarDate, parseYoutubeReleaseDate, type MusicReleaseDateEvidence } from "../../src/shared/musicReleaseDates";
+import { bracketPopularitySchema, bracketSlotQuotaSchema, bracketYearPopularitySchema } from "../../src/shared/bracketPresets";
+import { bracketPopularitySongCount } from "../../src/shared/bracketPopularity";
+import { allocateBracketSlots, bracketReleaseYear, evenBracketSlotCounts, indexBracketYearPopularity, matchesBracketYearPopularity } from "../../src/shared/bracketSlotSelection";
 import initSqlJs, { type Database } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,11 +22,13 @@ import type {
   HololiveBracketArchiveSummary,
   HololiveBracketCreateWarning,
   HololiveBracketEntry,
+  HololiveBracketEvenQuota,
   HololiveBracketFormat,
   HololiveBracketGenerationFilters,
   HololiveBracketGenerationStyle,
   HololiveBracketHistoryParticipation,
   HololiveBracketMatch,
+  HololiveBracketPoolFilters,
   HololiveBracketStatHistoryEntry,
   HololiveBracketStatHistoryMatchEntry,
   HololiveBracketStatHistoryMetric,
@@ -31,6 +36,7 @@ import type {
   HololiveBracketStatHistorySubject,
   HololiveBracketRatingStatsRow,
   HololiveBracketRatingBucket,
+  HololiveBracketReservation,
   HololiveBracketRound,
   HololiveBracketRivalryStats,
   HololiveBracketSize,
@@ -350,8 +356,16 @@ interface HololiveBracketGenerationResult {
 interface HololiveBracketCandidateSelectionResult {
   selected: HololiveBracketCandidate[];
   warnings: HololiveBracketCreateWarning[];
+  quotaProgress?: HololiveBracketSelectionPreview["quotaProgress"];
+  creationError?: string;
 }
 
+type BracketQuotaGroup = {
+  label: string;
+  requested: number;
+  songs: HololiveBracketCandidate[];
+  style: HololiveBracketGenerationStyle;
+};
 const STARTUP_MAINTENANCE_SETTING = "internal.startupMaintenanceVersion";
 const STARTUP_MAINTENANCE_VERSION = "4";
 const OFFICIAL_ROSTER_CLASSIFICATION_FINGERPRINT = createHash("sha256")
@@ -2318,7 +2332,7 @@ export class DatabaseService {
     dedupeCanonicalPerformance?: boolean | null;
     query?: string | null;
     limit?: number | null;
-  } = {}): HololiveMusicRow[] {
+  } = {}, unlimited = false): HololiveMusicRow[] {
     const where: string[] = [];
     const params: unknown[] = [];
     const videoIdLimit = filters.youtubeVideoIds ? 5000 : 500;
@@ -2400,7 +2414,7 @@ export class DatabaseService {
       params.push(...excludedCanonicalPerformanceKeys);
     }
 
-    const queryLimit = filters.dedupeCanonicalPerformance ? 500 : limit;
+    const queryLimit = unlimited ? -1 : filters.dedupeCanonicalPerformance ? 500 : limit;
     params.push(queryLimit);
 
     const selectedRows = this.select<{
@@ -2454,9 +2468,10 @@ export class DatabaseService {
     );
     const idolMetadata = this.getHololiveIdolMetadataMap();
     const releaseDates = this.getHololiveMusicReleaseDateMap();
-    const rows = filters.dedupeCanonicalPerformance
-      ? this.dedupeHololiveMusicRowsByCanonicalPerformance(selectedRows).slice(0, limit)
+    const deduped = filters.dedupeCanonicalPerformance
+      ? this.dedupeHololiveMusicRowsByCanonicalPerformance(selectedRows)
       : selectedRows;
+    const rows = unlimited ? deduped : deduped.slice(0, limit);
 
     return rows.map((row) => ({
       youtubeVideoId: row.youtube_video_id,
@@ -2581,23 +2596,30 @@ export class DatabaseService {
     generationStyle?: HololiveBracketGenerationStyle | null;
     filters?: HololiveBracketGenerationFilters | null;
     selectionSeed?: string;
+    reservedSongs?: HololiveBracketReservation[];
   }): HololiveBracketSelectionPreview {
     const size = this.normalizeHololiveBracketSize(input.size);
     const style = this.normalizeHololiveBracketGenerationStyle(input.generationStyle);
     const seed = input.selectionSeed?.trim() || "preview";
     const filters = this.normalizeHololiveBracketGenerationFilters(input.filters);
-    const pools = this.loadHololiveBracketCandidatePools(filters);
-    const selection = this.selectHololiveBracketCandidates(HOLOLIVE_BRACKET_SIZE_COUNTS[size], seed, style, filters, pools);
-    let creationError: string | null = null;
-    if (selection.selected.length === HOLOLIVE_BRACKET_SIZE_COUNTS[size]) {
+    const selection = this.selectHololiveBracketLineup(HOLOLIVE_BRACKET_SIZE_COUNTS[size], seed, style, filters, input.reservedSongs);
+    let creationError = selection.creationError ?? null;
+    if (!creationError && selection.selected.length === HOLOLIVE_BRACKET_SIZE_COUNTS[size]) {
       try { this.seedHololiveBracketFirstRoundSlots(selection.selected, seed, size, style); }
       catch (error) { creationError = error instanceof Error ? error.message : "This lineup cannot be seeded."; }
     }
+    const reserved = new Set(input.reservedSongs?.map(song => song.youtubeVideoId));
+    const ordered = [
+      ...selection.selected.filter(row => reserved.has(row.youtubeVideoId)),
+      ...this.sortHololiveBracketCandidates(selection.selected.filter(row => !reserved.has(row.youtubeVideoId)))
+    ];
     return {
       creationError,
-      eligibleCount: new Set([...pools.allByIdol.values()].flat().map(row => this.getHololiveBracketCanonicalKey(row))).size,
-      entries: this.sortHololiveBracketCandidates(selection.selected).map(row => ({
-        youtubeVideoId: row.youtubeVideoId, title: row.songName || row.title, idolName: row.idolNameForBracket, viewCount: row.viewCount ?? null,
+      eligibleCount: selection.eligibleCount,
+      ...(selection.popularityPoolCount !== undefined && { popularityPoolCount: selection.popularityPoolCount }),
+      ...(selection.quotaProgress && { quotaProgress: selection.quotaProgress }),
+      entries: ordered.map(row => ({
+        youtubeVideoId: row.youtubeVideoId, idolId: row.idolIdForBracket, title: row.songName || row.title, idolName: row.idolNameForBracket, viewCount: row.viewCount ?? null,
         dateUsed: filters.dateBasis === "song_release" ? row.releaseDate ?? row.publishedAt?.slice(0, 10) ?? null : row.publishedAt?.slice(0, 10) ?? null,
         dateBasis: filters.dateBasis === "song_release" ? row.releaseDateBasis ?? (row.publishedAt ? "recording_upload" : "unknown") : "video_upload",
         sourceUrl: filters.dateBasis === "song_release" ? row.releaseDateSourceUrl ?? null : row.youtubeUrl
@@ -6267,6 +6289,7 @@ export class DatabaseService {
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
     selectionSeed?: string;
+    reservedSongs?: HololiveBracketReservation[];
     expectedVideoIds?: string[];
   }): Promise<HololiveBracket> {
     return (await this.createHololiveBracketResult(input)).bracket;
@@ -6279,6 +6302,7 @@ export class DatabaseService {
     filters?: HololiveBracketGenerationFilters | null;
     name?: string | null;
     selectionSeed?: string;
+    reservedSongs?: HololiveBracketReservation[];
     expectedVideoIds?: string[];
   }): Promise<{ bracket: HololiveBracket; warnings: HololiveBracketCreateWarning[] }> {
     const size = this.normalizeHololiveBracketSize(input.size);
@@ -6295,7 +6319,7 @@ export class DatabaseService {
       `${HOLOLIVE_BRACKET_GENERATION_STYLE_LABELS[generationStyle]} ${HOLOLIVE_BRACKET_SIZE_LABELS[size]}${
         format === "double_elimination" ? " Double Elimination" : ""
       } Bracket`;
-    const generated = this.generateHololiveBracketEntries(id, size, seed, generationStyle, generationFilters);
+    const generated = this.generateHololiveBracketEntries(id, size, seed, generationStyle, generationFilters, input.reservedSongs);
     const entries = generated.entries;
     if (input.expectedVideoIds) {
       const expected = [...new Set(input.expectedVideoIds)].sort();
@@ -9030,11 +9054,12 @@ export class DatabaseService {
     size: HololiveBracketSize,
     seed: string,
     generationStyle: HololiveBracketGenerationStyle,
-    generationFilters: HololiveBracketGenerationFilters
+    generationFilters: HololiveBracketGenerationFilters,
+    reservedSongs?: HololiveBracketReservation[]
   ): HololiveBracketGenerationResult {
     const sizeCount = HOLOLIVE_BRACKET_SIZE_COUNTS[size];
-    const pools = this.loadHololiveBracketCandidatePools(generationFilters);
-    const selection = this.selectHololiveBracketCandidates(sizeCount, seed, generationStyle, generationFilters, pools);
+    const selection = this.selectHololiveBracketLineup(sizeCount, seed, generationStyle, generationFilters, reservedSongs);
+    if (selection.creationError) throw new Error(selection.creationError);
     const selected = selection.selected;
 
     if (selected.length < sizeCount) {
@@ -9051,31 +9076,282 @@ export class DatabaseService {
     };
   }
 
+  private selectHololiveBracketLineup(
+    size: number,
+    seed: string,
+    style: HololiveBracketGenerationStyle,
+    filters: HololiveBracketGenerationFilters,
+    reservedSongs: HololiveBracketReservation[] = []
+  ): HololiveBracketCandidateSelectionResult & { eligibleCount: number; popularityPoolCount?: number } {
+    const quota = filters.slotQuota;
+    const wildcard = quota?.kind === "wildcard" ? quota : null;
+    const catalog = filters.popularity || filters.yearPopularity || quota ? this.loadHololiveBracketCatalog() : undefined;
+    const keyOf = (song: HololiveBracketCandidate) => this.getHololiveBracketCanonicalKey(song);
+    const ranks = catalog && (filters.yearPopularity || wildcard?.filters.yearPopularity)
+      ? indexBracketYearPopularity(this.sortHololiveBracketCandidates([...catalog.allByIdol.values()].flat()), keyOf)
+      : undefined;
+    const popularity = catalog && this.getHololiveBracketPopularity(filters, catalog);
+    const pools = this.loadHololiveBracketCandidatePools(filters, catalog, ranks, popularity?.keys);
+    const main = [...pools.allByIdol.values()].flat();
+    const eligibleKeys = new Set(main.map(keyOf));
+    if (!quota) {
+      const reserved = this.resolveHololiveBracketReservations(reservedSongs, size);
+      if (typeof reserved === "string") {
+        return { selected: [], warnings: [], eligibleCount: eligibleKeys.size, popularityPoolCount: popularity?.count, creationError: reserved };
+      }
+      for (const song of reserved) eligibleKeys.delete(keyOf(song));
+      return {
+        ...this.selectHololiveBracketCandidates(size, seed, style, filters, pools, reserved),
+        eligibleCount: eligibleKeys.size,
+        popularityPoolCount: popularity?.count
+      };
+    }
+
+    const invalid = (creationError: string) => ({ selected: [], warnings: [], eligibleCount: eligibleKeys.size, creationError });
+    if (reservedSongs.length) return invalid("Release reserved songs before using a slot quota.");
+    if (wildcard && wildcard.slots >= size) return invalid(`Choose 1–${size - 1} wildcard slots.`);
+    const mainSize = size - (wildcard?.slots ?? 0);
+    const mainQuota = quota.kind === "wildcard" ? quota.main : quota;
+    const groups = this.getHololiveBracketMainSlotGroups(mainQuota, mainSize, style, filters, main);
+    if (typeof groups === "string") return invalid(groups);
+    if (wildcard) {
+      const wildPopularity = catalog && this.getHololiveBracketPopularity(wildcard.filters, catalog);
+      const wild = this.loadHololiveBracketCandidatePools(wildcard.filters, catalog, ranks, wildPopularity?.keys);
+      groups.push({ label: "Wildcard", requested: wildcard.slots, songs: [...wild.allByIdol.values()].flat(), style: wildcard.generationStyle });
+    }
+    return this.selectHololiveBracketQuotaGroups(size, seed, filters, groups);
+  }
+
+  private getHololiveBracketPopularity(filters: HololiveBracketPoolFilters, catalog: HololiveBracketCandidatePools) {
+    const popularity = filters.popularity;
+    if (!popularity) return undefined;
+    const candidates = new Map<string, HololiveBracketCandidate>();
+    for (const songs of catalog.allByIdol.values()) {
+      for (const song of songs) {
+        const date = song.releaseDate ?? song.publishedAt?.slice(0, 10);
+        if (song.viewCount == null || !Number.isFinite(song.viewCount) || song.viewCount < 0) continue;
+        if ((filters.excludeBeforeDate || filters.excludeAfterDate) && (!date || !isCalendarDate(date))) continue;
+        if (date && ((filters.excludeBeforeDate && date < filters.excludeBeforeDate) ||
+          (filters.excludeAfterDate && date > filters.excludeAfterDate))) continue;
+        candidates.set(this.getHololiveBracketCanonicalKey(song), song);
+      }
+    }
+    const direction = popularity.direction === "most" ? -1 : 1;
+    const ordered = [...candidates].sort(([, a], [, b]) =>
+      direction * ((a.viewCount ?? 0) - (b.viewCount ?? 0)) || a.youtubeVideoId.localeCompare(b.youtubeVideoId));
+    const count = ordered.length;
+    return { count, keys: new Set(ordered.slice(0, bracketPopularitySongCount(popularity, count)).map(([key]) => key)) };
+  }
+
+  private resolveHololiveBracketReservations(reserved: HololiveBracketReservation[], size: number): HololiveBracketCandidate[] | string {
+    if (!reserved.length) return [];
+    if (reserved.length > size) return "Release reserved songs to fit the bracket size.";
+    const rows = this.listHololiveMusicRows({ youtubeVideoIds: reserved.map(song => song.youtubeVideoId), limit: reserved.length });
+    const byVideo = new Map(rows.map(row => [row.youtubeVideoId, row]));
+    const talents = new Map(this.listHololiveIdols().map(idol => {
+      const identity = getHololiveCanonicalTalentIdentity(idol.id, idol.displayName);
+      return [identity.id, identity.name];
+    }));
+    const keys = new Set<string>();
+    const picks: HololiveBracketCandidate[] = [];
+    const counts = new Map<string, number>();
+    for (const { youtubeVideoId, idolId } of reserved) {
+      const row = byVideo.get(youtubeVideoId);
+      const canonicalId = getHololiveCanonicalTalentId(idolId);
+      const idolName = talents.get(canonicalId);
+      if (!row || !idolName || !row.ownedIdolIds.some(owner => getHololiveCanonicalTalentId(owner) === canonicalId)) {
+        return "A reserved song is unavailable. Release it to continue.";
+      }
+      const key = this.getHololiveBracketCanonicalKey(row);
+      if (keys.has(key)) return "Release duplicate reserved songs to continue.";
+      keys.add(key);
+      const count = (counts.get(canonicalId) ?? 0) + 1;
+      if (count > size / 2) return "Too many reserved songs from one talent for this bracket size.";
+      counts.set(canonicalId, count);
+      picks.push({ ...row, idolIdForBracket: canonicalId, idolNameForBracket: idolName });
+    }
+    return picks;
+  }
+
+  private getHololiveBracketMainSlotGroups(
+    quota: HololiveBracketEvenQuota | undefined,
+    size: number,
+    style: HololiveBracketGenerationStyle,
+    filters: HololiveBracketPoolFilters,
+    main: HololiveBracketCandidate[]
+  ): BracketQuotaGroup[] | string {
+    if (!quota) return [{ label: "Main", requested: size, songs: main, style }];
+    if (quota.kind === "playlists") {
+      if (size < 2) return "A playlist split needs at least 2 main slots.";
+      if (quota.playlistIds.length < 2 || quota.playlistIds.length > size) return `Choose 2–${size} playlists.`;
+      return this.getHololiveBracketPlaylistSlotGroups(quota.playlistIds, main, size, style);
+    }
+    const songsByYear = new Map<number, HololiveBracketCandidate[]>();
+    for (const song of main) {
+      const year = bracketReleaseYear(song);
+      if (year === null) continue;
+      const songs = songsByYear.get(year) ?? [];
+      songs.push(song);
+      songsByYear.set(year, songs);
+    }
+    const from = Number(filters.excludeBeforeDate?.slice(0, 4));
+    const to = Number(filters.excludeAfterDate?.slice(0, 4));
+    let years = [...songsByYear.keys()].sort((a, b) => a - b);
+    if (from > 0 && to >= from) {
+      if (to - from + 1 > size) return `Choose at most ${size} release years.`;
+      years = Array.from({ length: to - from + 1 }, (_, index) => from + index);
+    }
+    if (!years.length) return "No dated songs match.";
+    if (years.length > size) return `Choose at most ${size} release years.`;
+    const counts = evenBracketSlotCounts(size, years.length);
+    return years.map((year, index) => ({ label: String(year), requested: counts[index], songs: songsByYear.get(year) ?? [], style }));
+  }
+
+  private getHololiveBracketPlaylistSlotGroups(
+    ids: string[],
+    songs: HololiveBracketCandidate[],
+    size: number,
+    style: HololiveBracketGenerationStyle
+  ): BracketQuotaGroup[] {
+    const playlists = new Map<string, { name: string; keys: Set<string> }>();
+    const rows = this.select<{ id: string; name: string; video: string | null; performance: string | null }>(
+      `SELECT p.id, p.name, i.youtube_video_id AS video, v.canonical_performance_key AS performance
+       FROM hololive_music_playlists p
+       LEFT JOIN hololive_music_playlist_items i ON i.playlist_id = p.id
+       LEFT JOIN hololive_music_videos v ON v.youtube_video_id = i.youtube_video_id
+       WHERE p.id IN (${ids.map(() => "?").join(", ")})`, ids
+    );
+    for (const row of rows) {
+      const playlist = playlists.get(row.id) ?? { name: row.name, keys: new Set<string>() };
+      if (row.video) playlist.keys.add(this.getHololiveBracketCanonicalKey({ canonicalPerformanceKey: row.performance ?? "", youtubeVideoId: row.video }));
+      playlists.set(row.id, playlist);
+    }
+    const counts = evenBracketSlotCounts(size, ids.length);
+    return ids.map((id, index) => {
+      const playlist = playlists.get(id);
+      const favorites = id === HOLOLIVE_FAVORITES_PLAYLIST_ID;
+      return {
+        label: favorites ? "Favorites" : playlist?.name ?? "Missing playlist",
+        requested: counts[index],
+        songs: songs.filter(song => favorites ? song.marker === "favorite" : playlist?.keys.has(this.getHololiveBracketCanonicalKey(song))),
+        style
+      };
+    });
+  }
+
+  private selectHololiveBracketQuotaGroups(
+    size: number,
+    seed: string,
+    filters: HololiveBracketGenerationFilters,
+    groups: BracketQuotaGroup[]
+  ): HololiveBracketCandidateSelectionResult & { eligibleCount: number } {
+    const keyOf = (song: HololiveBracketCandidate) => this.getHololiveBracketCanonicalKey(song);
+    const allSongs = groups.flatMap(group => group.songs);
+    const identities = new Map(allSongs.map(song => [song.idolIdForBracket, song.idolNameForBracket]));
+    const owners = new Map<string, { id: string; name: string }>();
+    for (const song of this.sortHololiveBracketCandidates(allSongs)) {
+      const key = keyOf(song);
+      if (owners.has(key)) continue;
+      const primary = getHololiveCanonicalTalentId(song.idolId);
+      const name = identities.get(primary);
+      owners.set(key, name ? { id: primary, name } : { id: song.idolIdForBracket, name: song.idolNameForBracket });
+    }
+
+    const options = this.getHololiveBracketSelectionOptions(filters, size);
+    const orderedGroups = groups.map((group, index) => {
+      const order = group.style === "top_songs"
+        ? this.sortHololiveBracketCandidates(group.songs)
+        : this.shuffleWithHololiveBracketSeed(group.songs, `${seed}:quota:${index}`);
+      const unique = new Map<string, HololiveBracketCandidate>();
+      for (const song of order) {
+        const key = keyOf(song);
+        if (unique.has(key)) continue;
+        const owner = owners.get(key)!;
+        unique.set(key, { ...song, idolIdForBracket: owner.id, idolNameForBracket: owner.name });
+      }
+      const songs = [...unique.values()];
+      if (!options.preferTopicSplitPerTalent) return { ...group, songs };
+      const preferred = this.selectHololiveBracketCandidatesFromOrderedList(group.requested, songs, options);
+      const preferredKeys = new Set(preferred.map(keyOf));
+      return { ...group, songs: [...preferred, ...songs.filter(song => !preferredKeys.has(keyOf(song)))] };
+    });
+    // No talent can occupy more than half the bracket and still avoid facing itself in round one.
+    const ceiling = size / 2;
+    const initialCap = Math.min(options.maxEntriesPerTalent ?? ceiling, ceiling);
+    const allocate = (cap: number) => allocateBracketSlots(orderedGroups, keyOf, song => song.idolIdForBracket, cap);
+    let assigned = allocate(initialCap);
+    let appliedCap = initialCap;
+    if (assigned.flat().length < size && initialCap < ceiling) {
+      assigned = allocate(ceiling);
+      if (assigned.flat().length === size) {
+        let low = initialCap + 1, high = ceiling;
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          const trial = allocate(mid);
+          if (trial.flat().length === size) {
+            high = mid;
+            assigned = trial;
+          } else low = mid + 1;
+        }
+        appliedCap = low;
+      }
+    }
+    const selected = assigned.flat();
+    const quotaProgress = groups.map((group, index) => ({ label: group.label, requested: group.requested, filled: assigned[index].length }));
+    const warnings: HololiveBracketCreateWarning[] = [];
+    if (options.maxEntriesPerTalent !== null && appliedCap > options.maxEntriesPerTalent) {
+      warnings.push({
+        code: "talent_cap_relaxed", requestedMaxEntriesPerTalent: options.maxEntriesPerTalent, appliedMaxEntriesPerTalent: appliedCap,
+        message: `Max per talent was relaxed from ${options.maxEntriesPerTalent} to ${appliedCap} so the bracket could be filled.`
+      });
+    }
+    return {
+      selected, warnings, quotaProgress, eligibleCount: owners.size,
+      ...(selected.length < size && { creationError: "Slot quotas could not be filled." })
+    };
+  }
+
   private selectHololiveBracketCandidates(
     sizeCount: number,
     seed: string,
     generationStyle: HololiveBracketGenerationStyle,
     generationFilters: HololiveBracketGenerationFilters,
-    pools: HololiveBracketCandidatePools
+    pools: HololiveBracketCandidatePools,
+    reserved: HololiveBracketCandidate[]
   ): HololiveBracketCandidateSelectionResult {
     const options = this.getHololiveBracketSelectionOptions(generationFilters, sizeCount);
-    const generate = (selectionOptions: HololiveBracketSelectionOptions) =>
-      generationStyle === "random_songs"
-        ? this.generateRandomHololiveBracketCandidates(sizeCount, seed, pools, selectionOptions)
-        : this.generateTopHololiveBracketCandidates(sizeCount, seed, pools, selectionOptions);
-    const selected = generate(options);
-    if (selected.length >= sizeCount || options.maxEntriesPerTalent === null) {
-      return { selected, warnings: [] };
-    }
+    const songs = pools.officialIdols.flatMap(idol => pools.allByIdol.get(idol.id) ?? []);
+    const ordered = generationStyle === "random_songs"
+      ? this.shuffleWithHololiveBracketSeed(songs, `${seed}:random:candidates`)
+      : this.sortHololiveBracketCandidates(songs);
+    const requested = options.maxEntriesPerTalent;
+    const ceiling = reserved.length ? sizeCount / 2 : sizeCount;
+    const pinnedCounts = new Map<string, number>();
+    for (const song of reserved) pinnedCounts.set(song.idolIdForBracket, (pinnedCounts.get(song.idolIdForBracket) ?? 0) + 1);
+    const initialCap = requested === null ? (reserved.length ? ceiling : null)
+      : Math.min(ceiling, Math.max(requested, ...pinnedCounts.values()));
+    const generate = (cap: number | null) =>
+      this.selectHololiveBracketCandidatesFromOrderedList(sizeCount, ordered, { ...options, maxEntriesPerTalent: cap }, reserved);
+    const selected = generate(initialCap);
+    const result = (lineup: HololiveBracketCandidate[], appliedCap: number | null): HololiveBracketCandidateSelectionResult => ({
+      selected: lineup,
+      warnings: requested !== null && appliedCap !== null && appliedCap > requested ? [{
+        code: "talent_cap_relaxed",
+        requestedMaxEntriesPerTalent: requested,
+        appliedMaxEntriesPerTalent: appliedCap,
+        message: `Max per talent was relaxed from ${requested} to ${appliedCap} so the bracket could be filled.`
+      }] : []
+    });
+    if (selected.length >= sizeCount || initialCap === null) return result(selected, initialCap);
 
-    const talentPoolCount = Math.max(pools.allByIdol.size, 1);
+    const talentPoolCount = Math.max(pools.allByIdol.size + pinnedCounts.size, 1);
     const lowestPossibleCap = Math.max(
-      options.maxEntriesPerTalent + 1,
+      initialCap + 1,
       Math.ceil(sizeCount / talentPoolCount)
     );
     let mostCompleteSelection = selected;
-    for (let appliedCap = lowestPossibleCap; appliedCap <= sizeCount; appliedCap += 1) {
-      const relaxed = generate({ ...options, maxEntriesPerTalent: appliedCap });
+    for (let appliedCap = lowestPossibleCap; appliedCap <= ceiling; appliedCap += 1) {
+      const relaxed = generate(appliedCap);
       if (relaxed.length > mostCompleteSelection.length) {
         mostCompleteSelection = relaxed;
       }
@@ -9083,17 +9359,7 @@ export class DatabaseService {
         continue;
       }
 
-      return {
-        selected: relaxed,
-        warnings: [
-          {
-            code: "talent_cap_relaxed",
-            requestedMaxEntriesPerTalent: options.maxEntriesPerTalent,
-            appliedMaxEntriesPerTalent: appliedCap,
-            message: `Max per talent was relaxed from ${options.maxEntriesPerTalent} to ${appliedCap} so the bracket could be filled.`
-          }
-        ]
-      };
+      return result(relaxed, appliedCap);
     }
 
     return { selected: mostCompleteSelection, warnings: [] };
@@ -9259,11 +9525,47 @@ export class DatabaseService {
     return false;
   }
 
-  private loadHololiveBracketCandidatePools(generationFilters: HololiveBracketGenerationFilters): HololiveBracketCandidatePools {
+  private loadHololiveBracketCatalog(): HololiveBracketCandidatePools {
+    const officialIdols = this.getHololiveBracketIdolsBySubscriberPriority();
+    const idolsByIdentity = new Map<string, HololiveIdol[]>();
+    for (const idol of officialIdols) {
+      const identity = getHololiveCanonicalTalentId(idol.id);
+      const group = idolsByIdentity.get(identity) ?? [];
+      group.push(idol);
+      idolsByIdentity.set(identity, group);
+    }
+    const originalsByIdol = new Map<string, HololiveBracketCandidate[]>();
+    const coversByIdol = new Map<string, HololiveBracketCandidate[]>();
+    const allByIdol = new Map<string, HololiveBracketCandidate[]>();
+    for (const row of this.listHololiveMusicRows({ dedupeCanonicalPerformance: true }, true)) {
+      const owners = new Set(row.ownedIdolIds.map(getHololiveCanonicalTalentId));
+      const topicPool = row.topicId === "Original_Song" ? originalsByIdol : coversByIdol;
+      for (const owner of owners) {
+        for (const idol of idolsByIdentity.get(owner) ?? []) {
+          const identity = getHololiveCanonicalTalentIdentity(idol.id, idol.displayName);
+          const candidate = { ...row, idolIdForBracket: identity.id, idolNameForBracket: identity.name };
+          const topic = topicPool.get(idol.id) ?? [];
+          topic.push(candidate);
+          topicPool.set(idol.id, topic);
+          const all = allByIdol.get(idol.id) ?? [];
+          all.push(candidate);
+          allByIdol.set(idol.id, all);
+        }
+      }
+    }
+    return { officialIdols, originalsByIdol, coversByIdol, allByIdol };
+  }
+
+  private loadHololiveBracketCandidatePools(
+    generationFilters: HololiveBracketPoolFilters,
+    catalog?: HololiveBracketCandidatePools,
+    ranks?: ReturnType<typeof indexBracketYearPopularity>,
+    popularityKeys?: ReadonlySet<string>
+  ): HololiveBracketCandidatePools {
     const includedTalentIds = Array.isArray(generationFilters.includedTalentIds)
       ? new Set(generationFilters.includedTalentIds.map((idolId) => getHololiveCanonicalTalentId(idolId)).filter(Boolean))
       : null;
-    const officialIdols = this.getHololiveBracketIdolsBySubscriberPriority().filter(
+    const officialIdols = (catalog?.officialIdols ?? this.getHololiveBracketIdolsBySubscriberPriority()).filter(
       (idol) => {
         const bracketTalentId = getHololiveCanonicalTalentId(idol.id);
         return (
@@ -9278,8 +9580,10 @@ export class DatabaseService {
     const allByIdol = new Map<string, HololiveBracketCandidate[]>();
 
     for (const idol of officialIdols) {
-      let originals = this.getHololiveBracketCandidatesForIdol(idol, "Original_Song", generationFilters, historyExclusions);
-      let covers = this.getHololiveBracketCandidatesForIdol(idol, "Music_Cover", generationFilters, historyExclusions);
+      let originals = this.getHololiveBracketCandidatesForIdol(idol, "Original_Song", generationFilters, historyExclusions,
+        catalog ? catalog.originalsByIdol.get(idol.id) ?? [] : undefined, ranks, popularityKeys);
+      let covers = this.getHololiveBracketCandidatesForIdol(idol, "Music_Cover", generationFilters, historyExclusions,
+        catalog ? catalog.coversByIdol.get(idol.id) ?? [] : undefined, ranks, popularityKeys);
       if (generationFilters.excludeTopViewedPerTalent) {
         const topCandidate = this.sortHololiveBracketCandidates([...originals, ...covers])[0];
         const topKey = topCandidate ? this.getHololiveBracketCanonicalKey(topCandidate) : null;
@@ -9391,28 +9695,22 @@ export class DatabaseService {
     };
   }
 
-  private generateTopHololiveBracketCandidates(
-    sizeCount: number,
-    seed: string,
-    pools: HololiveBracketCandidatePools,
-    options: HololiveBracketSelectionOptions
-  ): HololiveBracketCandidate[] {
-    return this.selectHololiveBracketCandidatesFromOrderedList(
-      sizeCount,
-      this.sortHololiveBracketCandidates(pools.officialIdols.flatMap((idol) => pools.allByIdol.get(idol.id) ?? [])),
-      options
-    );
-  }
-
   private selectHololiveBracketCandidatesFromOrderedList(
     sizeCount: number,
     orderedCandidates: HololiveBracketCandidate[],
-    options: HololiveBracketSelectionOptions
+    options: HololiveBracketSelectionOptions,
+    reserved: HololiveBracketCandidate[] = []
   ): HololiveBracketCandidate[] {
-    const selected: HololiveBracketCandidate[] = [];
-    const usedCanonicalKeys = new Set<string>();
+    const selected = [...reserved];
+    const usedCanonicalKeys = new Set(reserved.map(song => this.getHololiveBracketCanonicalKey(song)));
     const selectedTopicsByIdol = new Map<string, Set<HololiveMusicTopic>>();
     const selectedCountsByIdol = new Map<string, number>();
+    for (const song of reserved) {
+      selectedCountsByIdol.set(song.idolIdForBracket, (selectedCountsByIdol.get(song.idolIdForBracket) ?? 0) + 1);
+      const topics = selectedTopicsByIdol.get(song.idolIdForBracket) ?? new Set<HololiveMusicTopic>();
+      topics.add(song.topicId);
+      selectedTopicsByIdol.set(song.idolIdForBracket, topics);
+    }
 
     const canAddCandidate = (candidate: HololiveBracketCandidate | null | undefined): candidate is HololiveBracketCandidate => {
       if (!candidate || selected.length >= sizeCount) {
@@ -9489,22 +9787,6 @@ export class DatabaseService {
     return selected;
   }
 
-  private generateRandomHololiveBracketCandidates(
-    sizeCount: number,
-    seed: string,
-    pools: HololiveBracketCandidatePools,
-    options: HololiveBracketSelectionOptions
-  ): HololiveBracketCandidate[] {
-    return this.selectHololiveBracketCandidatesFromOrderedList(
-      sizeCount,
-      this.shuffleWithHololiveBracketSeed(
-        pools.officialIdols.flatMap((idol) => pools.allByIdol.get(idol.id) ?? []),
-        `${seed}:random:candidates`
-      ),
-      options
-    );
-  }
-
   private getHololiveBracketIdolsBySubscriberPriority(): HololiveIdol[] {
     const channelsById = new Map(this.listHololiveChannels().map((channel) => [channel.id, channel]));
     return this.listHololiveIdols()
@@ -9525,17 +9807,23 @@ export class DatabaseService {
     idol: HololiveIdol,
     topicId: HololiveMusicTopic,
     generationFilters: HololiveBracketGenerationFilters,
-    historyExclusions: HololiveBracketHistoryExclusions
+    historyExclusions: HololiveBracketHistoryExclusions,
+    catalogRows?: HololiveBracketCandidate[],
+    ranks?: ReturnType<typeof indexBracketYearPopularity>,
+    popularityKeys?: ReadonlySet<string>
   ): HololiveBracketCandidate[] {
     const bracketIdentity = getHololiveCanonicalTalentIdentity(idol.id, idol.displayName);
-    const rows = this.listHololiveMusicRows({
+    const rows = (catalogRows ?? this.listHololiveMusicRows({
       idolId: idol.id,
       topicId,
       assignment: "owned",
       dedupeCanonicalPerformance: true,
       limit: 500
-    })
+    }))
       .filter((row) => this.matchesHololiveBracketGenerationFilters(row, generationFilters, historyExclusions))
+      .filter(row => !popularityKeys || popularityKeys.has(this.getHololiveBracketCanonicalKey(row)))
+      .filter(row => !generationFilters.yearPopularity ||
+        matchesBracketYearPopularity(generationFilters.yearPopularity, ranks?.get(this.getHololiveBracketCanonicalKey(row))))
       .map<HololiveBracketCandidate>((row) => ({
         ...row,
         idolIdForBracket: bracketIdentity.id,
@@ -10263,6 +10551,18 @@ export class DatabaseService {
     }
 
     const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const filters: HololiveBracketGenerationFilters = this.normalizeHololiveBracketPoolFilters(record);
+    const quota = bracketSlotQuotaSchema.safeParse(record.slotQuota).data;
+    if (quota?.kind === "playlists") filters.slotQuota = { ...quota, playlistIds: [...new Set(quota.playlistIds)] };
+    else if (quota?.kind === "wildcard") {
+      const main = quota.main?.kind === "playlists" ? { ...quota.main, playlistIds: [...new Set(quota.main.playlistIds)] } : quota.main;
+      filters.slotQuota = { ...quota, main, filters: { ...this.normalizeHololiveBracketPoolFilters(quota.filters), dateBasis: "song_release" } };
+    } else if (quota) filters.slotQuota = quota;
+    if (filters.popularity || filters.yearPopularity || filters.slotQuota) filters.dateBasis = "song_release";
+    return filters;
+  }
+
+  private normalizeHololiveBracketPoolFilters(record: Record<string, unknown>): HololiveBracketPoolFilters {
     const excludeTopicIds = [
       ...new Set(
         Array.isArray(record.excludeTopicIds)
@@ -10279,6 +10579,8 @@ export class DatabaseService {
     const talentStatuses = this.normalizeHololiveBracketTalentStatuses(record.talentStatuses);
     const hasTalentStatuses = talentStatuses.length > 0;
     const hasMaxEntriesPerTalent = Object.prototype.hasOwnProperty.call(record, "maxEntriesPerTalent");
+    const yearPopularity = bracketYearPopularitySchema.safeParse(record.yearPopularity).data;
+    const popularity = bracketPopularitySchema.safeParse(record.popularity).data;
 
     return {
       dateBasis: record.dateBasis === "song_release" ? "song_release" : record.dateBasis === "video_upload" ? "video_upload" : undefined,
@@ -10303,7 +10605,9 @@ export class DatabaseService {
       excludeBelowViews: this.normalizeHololiveBracketViewFilter(record.excludeBelowViews),
       excludeAfterDate: this.normalizeHololiveBracketDateFilter(record.excludeAfterDate),
       excludeBeforeDate: this.normalizeHololiveBracketDateFilter(record.excludeBeforeDate),
-      excludeTopicIds
+      excludeTopicIds,
+      ...(popularity && { popularity }),
+      ...(yearPopularity && { yearPopularity })
     };
   }
 
@@ -10437,6 +10741,9 @@ export class DatabaseService {
     if (normalized.excludeTopicIds?.length) {
       payload.excludeTopicIds = normalized.excludeTopicIds;
     }
+    if (normalized.popularity) payload.popularity = normalized.popularity;
+    if (normalized.yearPopularity) payload.yearPopularity = normalized.yearPopularity;
+    if (normalized.slotQuota) payload.slotQuota = normalized.slotQuota;
     return JSON.stringify(payload);
   }
 

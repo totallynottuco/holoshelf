@@ -419,6 +419,10 @@ const hololiveBracketCreateSchema = z.object({
   filters: hololiveBracketGenerationFiltersSchema.optional().nullable(),
   name: z.string().trim().max(120).optional().nullable(),
   selectionSeed: z.string().trim().min(1).max(120).optional(),
+  reservedSongs: z.array(z.object({
+    youtubeVideoId: z.string().trim().min(1).max(160),
+    idolId: z.string().trim().min(1).max(160)
+  })).max(256).optional(),
   expectedVideoIds: z.array(z.string().trim().min(1).max(160)).max(256).optional()
 });
 

@@ -28,7 +28,7 @@ async function createBracket(
   await page.getByRole("button", { name: "Create" }).click();
   const popover = page.locator(".hololive-bracket-create-popover");
   await expect(popover).toBeVisible();
-  await popover.getByRole("radio", { name: size }).click();
+  await popover.getByRole("combobox", { name: "Bracket size" }).selectOption(size);
   await popover.getByRole("radio", { name: format, exact: true }).click();
   await popover.getByRole("radio", { name: "Random Songs" }).click();
   await popover.getByLabel("Name").fill(name);
@@ -41,11 +41,13 @@ test("filters bracket releases by a year range and previews entrants without sav
   await page.getByRole("button",{name:"Create",exact:true}).click();
   const popover=page.getByRole("dialog",{name:"Create bracket"});
   await expect(popover.getByLabel("Year or year range")).toBeVisible();
-  await popover.getByRole("button",{name:/More filters/}).click();
-  await expect(popover.getByLabel("Date basis",{exact:true})).toHaveValue("song_release");
+  await expect(popover.getByLabel("Date basis",{exact:true})).toHaveCount(0);
   await popover.getByLabel("Year or year range").fill("2020-2022");
-  await expect(popover.locator('input[type="date"]').nth(0)).toHaveValue("2020-01-01");
-  await expect(popover.locator('input[type="date"]').nth(1)).toHaveValue("2022-12-31");
+  await popover.getByRole("button", {name:"Choose exact dates"}).click();
+  await expect(popover.getByLabel("Released from")).toHaveValue("2020-01-01");
+  await expect(popover.getByLabel("Released to")).toHaveValue("2022-12-31");
+  await popover.getByRole("button", {name:"Choose years"}).click();
+  await expect(popover.getByLabel("Year or year range")).toHaveValue("2020-2022");
   await popover.getByLabel("Year or year range").fill("2022-2020");
   await expect(popover.getByRole("alert")).toContainText("ascending range");
   await expect(popover.getByRole("button",{name:"Create Bracket",exact:true})).toBeDisabled();
@@ -60,18 +62,66 @@ test("filters bracket releases by a year range and previews entrants without sav
   await expect(lineup.locator("td:last-child a")).toHaveCount(0);
   await expect(page.locator(".hololive-bracket-empty")).toContainText("No saved brackets yet");
   expect(await lineup.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await popover.locator('input[type="date"]').nth(0).fill("2021-04-03");
-  await expect(popover.getByLabel("Year or year range")).toHaveValue("");
-  await expect(popover.locator(".lobby-active-filters")).toContainText("From 2021-04-03");
-  await expect(popover.locator(".lobby-active-filters")).toContainText("To 2022-12-31");
-  await popover.getByLabel(/^Min views:/).fill("not a number");
+  await popover.getByRole("button", {name:"Choose exact dates"}).click();
+  await popover.getByLabel("Released from").fill("2021-04-03");
+  await expect(popover.getByLabel("Released to")).toHaveValue("2022-12-31");
+  await popover.getByLabel("Min views", {exact:true}).fill("not a number");
   await expect(popover.getByRole("alert")).toContainText("Enter view counts");
   await expect(popover.getByRole("button",{name:"Create Bracket",exact:true})).toBeDisabled();
-  await popover.getByLabel(/^Min views:/).fill("");
-  await popover.getByLabel("Date basis",{exact:true}).selectOption("video_upload");
+  await popover.getByLabel("Min views", {exact:true}).fill("");
   await expect(lineup).toHaveAttribute("aria-busy", "false");
   await expect(popover.getByText("Include estimated dates",{exact:false})).toHaveCount(0);
   await popover.getByRole("button",{name:"Cancel",exact:true}).click();
+});
+
+test("keeps the lineup aligned while switching selection mode and redrawing", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.evaluate(async () => {
+    const path = "/src/renderer/apiMock.ts", { api } = await import(path);
+    const original = api.invoke.bind(api);
+    const gate = new Promise<void>(resolve => { (window as any).releaseRandomPreview = resolve; });
+    api.invoke = async (channel: string, payload: any) => {
+      if (channel === "hololive:brackets:preview" && payload.generationStyle === "random_songs") await gate;
+      return original(channel, payload);
+    };
+  });
+  await page.getByRole("link", { name: "Bracket", exact: true }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const lobby = page.getByRole("dialog", { name: "Create bracket" });
+  const lineup = lobby.getByRole("region", { name: "Live entrant lineup" });
+  const reserve = lineup.getByRole("button", { name: "Reserve songs" });
+  const redraw = lineup.getByRole("button", { name: "Redraw lineup" });
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  const geometry = () => lineup.evaluate(element => {
+    const header = element.querySelector("header")!.getBoundingClientRect();
+    const table = element.querySelector("table")!.getBoundingClientRect();
+    const reserve = element.querySelector(".lobby-reserve-button")!.getBoundingClientRect();
+    const columns = [...element.querySelectorAll("th")].map(column => column.getBoundingClientRect().width);
+    return { header: header.height, tableX: table.x, tableY: table.y, columns, reserveInset: header.right - reserve.right, reserveX: reserve.x };
+  });
+  const original = await geometry();
+  expect(original.reserveInset).toBeGreaterThanOrEqual(10);
+  expect(original.reserveInset).toBeLessThanOrEqual(20);
+  await expect(redraw).toHaveCount(0);
+  await lobby.getByRole("radio", { name: "Random Songs", exact: true }).click();
+  await expect(lineup).toHaveAttribute("aria-busy", "true");
+  await expect(lineup.locator("table")).toBeVisible();
+  await expect(lobby.getByRole("button", { name: "Create Bracket" })).toBeDisabled();
+  expect(await geometry()).toEqual(original);
+  await page.evaluate(() => (window as any).releaseRandomPreview());
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  const random = await geometry();
+  const redrawBox = (await redraw.boundingBox())!;
+  const reserveBox = (await reserve.boundingBox())!;
+  expect(reserveBox.x - (redrawBox.x + redrawBox.width)).toBeGreaterThanOrEqual(0);
+  expect(reserveBox.x - (redrawBox.x + redrawBox.width)).toBeLessThanOrEqual(8);
+  await redraw.click();
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  expect(random).toEqual(original);
+  expect(await geometry()).toEqual(original);
+  await lobby.getByRole("radio", { name: "Top Songs", exact: true }).click();
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  expect(await geometry()).toEqual(original);
 });
 
 test("saves and loads complete custom filters without saving or changing brackets", async ({page}) => {
@@ -85,27 +135,21 @@ test("saves and loads complete custom filters without saving or changing bracket
   await page.getByRole("link", {name:"Bracket",exact:true}).click();
   await page.getByRole("button", {name:"Create",exact:true}).click();
   let lobby = page.getByRole("dialog", {name:"Create bracket"});
-  await lobby.getByRole("radio", {name:"RO16",exact:true}).click();
+  await lobby.getByRole("combobox", {name:"Bracket size"}).selectOption("RO16");
   await lobby.getByRole("radio", {name:"Double",exact:true}).click();
   await lobby.getByRole("radio", {name:"Random Songs",exact:true}).click();
-  await lobby.getByRole("combobox", {name:"Song type",exact:true}).selectOption("Music_Cover");
-  await lobby.getByRole("combobox", {name:"Singers",exact:true}).selectOption("solo");
+  await lobby.getByRole("radio", {name:"Covers",exact:true}).click();
+  await lobby.getByRole("radio", {name:"Solo",exact:true}).click();
   await lobby.getByLabel("Year or year range").fill("2020-2022");
-  await lobby.getByLabel("Date basis",{exact:true}).selectOption("video_upload");
-  await lobby.getByRole("button", {name:/More filters/}).click();
-  await lobby.getByRole("checkbox", {name:"Max per talent",exact:true}).check();
+  await lobby.getByRole("button", {name:/Extra options/}).click();
   await lobby.getByLabel("Max songs per talent").fill("3");
-  await lobby.getByRole("checkbox", {name:"Active",exact:true}).uncheck();
-  await lobby.getByRole("combobox", {name:"History participation"}).click();
-  await lobby.getByRole("option", {name:"Top 8+",exact:true}).click();
-  await lobby.getByRole("checkbox", {name:"Previous Winners",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Previous Finalists",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Previous Top 4",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Previous Top 8",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Skip Top Viewed",exact:true}).check();
-  await lobby.getByRole("checkbox", {name:"Prefer original/cover split",exact:true}).check();
-  await lobby.getByLabel(/^Min views:/).fill("500");
-  await lobby.getByLabel(/^Max views:/).fill("2,000,000");
+  await lobby.getByRole("combobox", {name:"History rule",exact:true}).selectOption("only");
+  await lobby.getByRole("combobox", {name:"History placement",exact:true}).selectOption("top8");
+  await lobby.getByRole("combobox", {name:"Exclude previous placement",exact:true}).selectOption("winner");
+  await expect(lobby.getByRole("checkbox", {name:"Balance originals / covers",exact:true})).toBeDisabled();
+  await lobby.getByRole("group", {name:"Ratings",exact:true}).getByRole("button", {name:"Disliked",exact:true}).click();
+  await lobby.getByLabel("Min views", {exact:true}).fill("500");
+  await lobby.getByLabel("Max views", {exact:true}).fill("2,000,000");
   await lobby.getByRole("button", {name:"Save preset",exact:true}).click();
   await lobby.getByLabel("Preset name",{exact:true}).fill("Solo covers");
   await lobby.getByLabel("Preset name",{exact:true}).press("Enter");
@@ -114,9 +158,10 @@ test("saves and loads complete custom filters without saving or changing bracket
     const path="/src/renderer/apiMock.ts", {api}=await import(path);
     return JSON.parse((await api.invoke("settings:get",null))["hololive.bracketPresets"]).presets[0];
   });
-  expect(stored.filters).toMatchObject({historyParticipation:"top8",maxEntriesPerTalent:3,excludePreviousChampions:true,excludePreviousFinalists:true,excludePreviousTop4:true,excludePreviousTop8:true,excludeTopViewedPerTalent:true,preferTopicSplitPerTalent:true,excludeBelowViews:500,excludeAboveViews:2000000});
+  expect(stored.filters).toMatchObject({historyParticipation:"top8",maxEntriesPerTalent:3,excludePreviousChampions:true,preferTopicSplitPerTalent:false,excludeBelowViews:500,excludeAboveViews:2000000,dateBasis:"song_release"});
+  expect(stored.filters.ratingBuckets).not.toContain("dislike");
   await lobby.getByRole("button", {name:"Reset filters",exact:true}).click();
-  await lobby.getByRole("radio", {name:"RO64",exact:true}).click();
+  await lobby.getByRole("combobox", {name:"Bracket size"}).selectOption("RO64");
   await lobby.getByRole("radio", {name:"Single",exact:true}).click();
   await lobby.getByRole("radio", {name:"Top Songs",exact:true}).click();
   await expect(lobby.getByRole("button", {name:"Solo covers",exact:true})).toHaveAttribute("aria-pressed","false");
@@ -154,6 +199,157 @@ test("saves and loads complete custom filters without saving or changing bracket
   expect(new Set(saved[0].entries.map((entry:{youtubeVideoId:string}) => entry.youtubeVideoId))).toEqual(new Set(redrawn));
 });
 
+test("loads an older bracket preset using the current filters without rewriting it", async ({ page }) => {
+  const key = "hololive.bracketPresets";
+  const olderPreset = JSON.stringify({ schema: 1, presets: [{
+    id: "older-preset", name: "Older preset", size: "RO16", format: "double_elimination", generationStyle: "top_songs",
+    filters: {
+      dateBasis: "video_upload", talentStatuses: ["active"], excludeTopViewedPerTalent: true,
+      excludeBeforeDate: "2020-01-01", excludeAfterDate: "2022-12-31",
+      historyParticipation: "top8", excludePreviousFinalists: true, excludePreviousChampions: true
+    }
+  }] });
+  await page.evaluate(async ({ key, olderPreset }) => {
+    const path = "/src/renderer/apiMock.ts", { api } = await import(path);
+    await api.invoke("settings:set", { key, value: olderPreset });
+    const original = api.invoke.bind(api);
+    api.invoke = (channel: string, payload: any) => {
+      if (channel === "hololive:brackets:preview") (window as any).lobbyLatestPreview = payload;
+      return original(channel, payload);
+    };
+  }, { key, olderPreset });
+  await page.getByRole("link", { name: "Bracket", exact: true }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const lobby = page.getByRole("dialog", { name: "Create bracket" });
+  const preset = lobby.getByRole("button", { name: "Older preset", exact: true });
+  await preset.click();
+  await expect(preset).toHaveAttribute("aria-pressed", "true");
+  await expect(lobby.getByRole("region", { name: "Live entrant lineup" })).toHaveAttribute("aria-busy", "false");
+  const filters = await page.evaluate(() => (window as any).lobbyLatestPreview.filters);
+  expect(filters).toMatchObject({ dateBasis: "song_release", historyParticipation: "top8", excludePreviousFinalists: true, excludePreviousChampions: false });
+  expect(filters).not.toHaveProperty("talentStatuses");
+  expect(filters).not.toHaveProperty("excludeTopViewedPerTalent");
+  const stored = await page.evaluate(async key => {
+    const path = "/src/renderer/apiMock.ts", { api } = await import(path);
+    return (await api.invoke("settings:get", null))[key];
+  }, key);
+  expect(stored).toBe(olderPreset);
+});
+
+test("aligns the popularity label with the dropdown and saves an adjustable cutoff", async ({ page }) => {
+  await page.getByRole("link", { name: "Bracket", exact: true }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const lobby = page.getByRole("dialog", { name: "Create bracket" });
+  await lobby.getByLabel("Year or year range").fill("2020-2022");
+  await lobby.getByRole("button", { name: /Extra options/ }).click();
+  const popularity = lobby.getByRole("combobox", { name: "Popularity", exact: true });
+  const slider = lobby.getByRole("slider", { name: "Popularity cutoff" });
+  const amount = lobby.getByRole("spinbutton", { name: "Popularity amount" });
+  await popularity.selectOption("least");
+  await expect(slider).toHaveValue("25");
+  const dropdownBox = (await popularity.boundingBox())!;
+  const labelBox = (await lobby.getByText("Popularity", { exact: true }).boundingBox())!;
+  expect(Math.abs(labelBox.y + labelBox.height / 2 - dropdownBox.y - dropdownBox.height / 2)).toBeLessThan(2);
+  expect((await slider.boundingBox())!.y).toBeGreaterThan(dropdownBox.y + dropdownBox.height);
+  await lobby.getByRole("button", { name: "Songs", exact: true }).click();
+  await expect(amount).toHaveValue("60");
+  await amount.fill("33");
+  await amount.press("Tab");
+  await expect(slider).toHaveValue("33");
+  await lobby.getByRole("button", { name: "Percentage", exact: true }).click();
+  await expect(amount).toHaveValue("13.75");
+  await slider.press("ArrowRight");
+  await expect(amount).toHaveValue("13.76");
+
+  await lobby.getByRole("button", { name: "Save preset", exact: true }).click();
+  const input = lobby.getByLabel("Preset name", { exact: true });
+  await input.fill("Deep cuts");
+  await input.press("Enter");
+  const preset = lobby.getByRole("button", { name: "Deep cuts", exact: true });
+  await expect(preset).toHaveAttribute("aria-pressed", "true");
+  await lobby.getByRole("button", { name: "Reset filters" }).click();
+  await expect(popularity).toHaveValue("");
+  await expect(slider).toHaveCount(0);
+  await preset.click();
+  await expect(popularity).toHaveValue("least");
+  await expect(slider).toHaveValue("13.76");
+  await expect(lobby.getByLabel("Year or year range")).toHaveValue("2020-2022");
+});
+
+test("keeps individually picked lineup songs across filters, redraws, and creation", async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 760 });
+  await page.getByRole("link", { name: "Bracket", exact: true }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const lobby = page.getByRole("dialog", { name: "Create bracket" });
+  const lineup = lobby.getByRole("region", { name: "Live entrant lineup" });
+  const rows = lineup.locator("tbody tr");
+  const readIds = () => rows.evaluateAll(items => items.map(row => row.getAttribute("data-video-id")));
+  const reserve = lineup.locator("header").getByRole("button", { name: "Reserve songs", exact: true });
+  const done = lineup.getByRole("button", { name: "Done selecting songs" });
+  await lobby.getByRole("combobox", { name: "Bracket size" }).selectOption("RO16");
+  await lobby.getByRole("radio", { name: "Random Songs", exact: true }).click();
+  await lobby.getByLabel("Year or year range").fill("2020");
+  await expect(reserve).toBeEnabled();
+  const original = await readIds();
+  const initialRowBox = (await rows.first().boundingBox())!;
+  const reserveBox = (await reserve.boundingBox())!;
+  await expect(rows.first().getByRole("link")).toBeVisible();
+  await reserve.click();
+  await expect(lineup.getByRole("checkbox")).toHaveCount(16);
+  await expect(lineup.getByRole("spinbutton")).toHaveCount(0);
+  await expect(rows.first().getByRole("link")).toHaveCount(0);
+  expect(await done.boundingBox()).toEqual(reserveBox);
+  expect(await rows.first().boundingBox()).toEqual(initialRowBox);
+  const firstChoice = rows.first().getByRole("checkbox");
+  const choiceBox = (await firstChoice.boundingBox())!;
+  const choiceCell = (await rows.first().getByRole("cell").first().boundingBox())!;
+  const choiceHeading = (await lineup.getByRole("columnheader", { name: "Keep song" }).locator("svg").boundingBox())!;
+  expect(choiceBox.width).toBe(15);
+  expect(Math.abs(choiceCell.x + choiceCell.width / 2 - choiceBox.x - choiceBox.width / 2)).toBeLessThan(1);
+  expect(Math.abs(choiceCell.y + choiceCell.height / 2 - choiceBox.y - choiceBox.height / 2)).toBeLessThan(1);
+  expect(Math.abs(choiceHeading.x + choiceHeading.width / 2 - choiceBox.x - choiceBox.width / 2)).toBeLessThan(1);
+
+  const picked = [original[1], original[4], original[7]];
+  await rows.nth(1).getByRole("cell").nth(1).click();
+  await rows.nth(4).getByRole("checkbox").press("Space");
+  await rows.nth(7).getByRole("checkbox").click();
+  await expect(lineup.getByRole("checkbox", { checked: true })).toHaveCount(3);
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  expect(await readIds()).toEqual(original);
+  await done.click();
+  await expect(lineup.getByRole("img", { name: "Kept", exact: true })).toHaveCount(3);
+  await expect(rows.first().getByRole("link")).toBeVisible();
+
+  await lobby.getByLabel("Year or year range").fill("2022");
+  await lineup.getByRole("button", { name: "Redraw lineup" }).click();
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  const redrawn = await readIds();
+  expect(redrawn.slice(0, 3)).toEqual(picked);
+  expect(redrawn.slice(3)).not.toEqual(original.slice(3));
+  await expect(rows.first()).toContainText("2020-01-01");
+  await expect(rows.nth(3)).toContainText("2022-01-01");
+
+  await reserve.click();
+  await rows.nth(1).getByRole("checkbox").uncheck();
+  await rows.nth(4).getByRole("checkbox").check();
+  await rows.nth(4).getByRole("checkbox").press("Escape");
+  await expect(reserve).toBeFocused();
+  await expect(lineup.getByRole("img", { name: "Kept", exact: true })).toHaveCount(3);
+  await expect(lineup).toHaveAttribute("aria-busy", "false");
+  const finalIds = await readIds();
+  expect(finalIds.slice(0, 3)).toEqual([picked[0], picked[2], redrawn[4]]);
+  expect(finalIds).not.toContain(picked[1]);
+  await lobby.getByRole("button", { name: "Create Bracket", exact: true }).click();
+  await expect(lobby).toHaveCount(0);
+  const savedIds = await page.evaluate(async () => {
+    const path = "/src/renderer/apiMock.ts", { api } = await import(path);
+    const [summary] = await api.invoke("hololive:brackets:list", null);
+    const bracket = await api.invoke("hololive:brackets:get", { bracketId: summary.id });
+    return bracket.entries.map((entry: { youtubeVideoId: string }) => entry.youtubeVideoId);
+  });
+  expect(new Set(savedIds)).toEqual(new Set(finalIds));
+});
+
 test("preset carousel scrolls while Save stays fixed and supports updating, copying and deleting", async ({page}) => {
   await page.getByRole("link", {name:"Bracket",exact:true}).click();
   await page.getByRole("button", {name:"Create",exact:true}).click();
@@ -186,7 +382,7 @@ test("preset carousel scrolls while Save stays fixed and supports updating, copy
   await expect.poll(() => track.evaluate(element => element.scrollLeft)).toBeGreaterThan(100);
   expect((await save.boundingBox())!.x).toBe(initialSaveBox!.x);
   await lobby.getByRole("button", {name:"Preset 9",exact:true}).click();
-  await lobby.getByRole("radio", {name:"RO16",exact:true}).click();
+  await lobby.getByRole("combobox", {name:"Bracket size"}).selectOption("RO16");
   await save.click();
   await expect(lobby.getByLabel("Preset name",{exact:true})).toHaveValue("Preset 9");
   await save.click();
@@ -271,10 +467,10 @@ test("lobby keeps its controls and footer inside compact desktop windows", async
     expect(await lobby.evaluate(element => element.scrollWidth<=element.clientWidth)).toBe(true);
     await expect(lobby.getByRole("button", {name:"Create Bracket",exact:true})).toBeInViewport();
   }
-  await lobby.getByRole("button", {name:/More filters/}).click();
-  await expect(lobby.getByRole("combobox", {name:"History participation"})).toBeVisible();
-  await lobby.getByRole("checkbox", {name:"Prefer original/cover split",exact:true}).check();
-  await expect(lobby.locator(".hololive-bracket-filter-chips")).toContainText("Original/cover split");
+  await lobby.getByRole("button", {name:/Extra options/}).click();
+  await expect(lobby.getByRole("combobox", {name:"History rule"})).toBeVisible();
+  await lobby.getByRole("checkbox", {name:"Balance originals / covers",exact:true}).check();
+  await expect(lobby.getByRole("button", {name:/Extra options/})).toContainText("1");
   await expect(lobby.getByRole("button", {name:"Create Bracket",exact:true})).toBeInViewport();
   await page.keyboard.press("Escape");
   await expect(lobby).toHaveCount(0);
@@ -859,40 +1055,31 @@ test("@smoke creates and plays through a Hololive bracket matchup", async ({ pag
 
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.locator(".hololive-bracket-create-popover")).toBeVisible();
-  await page.getByRole("radio", { name: "RO16" }).click();
-  await expect(page.getByRole("radio", { name: "RO16" })).toBeChecked();
+  await page.getByRole("combobox", { name: "Bracket size" }).selectOption("RO16");
+  await expect(page.getByRole("combobox", { name: "Bracket size" })).toHaveValue("RO16");
   await page.getByRole("radio", { name: "Random Songs" }).click();
   await expect(page.getByRole("radio", { name: "Random Songs" })).toBeChecked();
   const createPopover = page.locator(".hololive-bracket-create-popover");
   const collapsedPopoverBox = await createPopover.boundingBox();
-  const collapsedNameBox = await createPopover.getByLabel("Name").boundingBox();
+  const collapsedDateBox = await createPopover.getByLabel("Year or year range").boundingBox();
   const collapsedPoolBox = await createPopover.locator(".hololive-bracket-filter-row").boundingBox();
   expect(collapsedPopoverBox?.width).toBeLessThanOrEqual(841);
-  await createPopover.getByRole("button", { name: /More filters/ }).click();
-  const expandedNameBox = await createPopover.getByLabel("Name").boundingBox();
+  await createPopover.getByRole("button", { name: /Extra options/ }).click();
+  const expandedDateBox = await createPopover.getByLabel("Year or year range").boundingBox();
   const expandedPoolBox = await createPopover.locator(".hololive-bracket-filter-row").boundingBox();
-  expect(Math.abs((expandedNameBox?.y ?? 0) - (collapsedNameBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((expandedDateBox?.y ?? 0) - (collapsedDateBox?.y ?? 0))).toBeLessThanOrEqual(1);
   expect(Math.abs((expandedPoolBox?.y ?? 0) - (collapsedPoolBox?.y ?? 0))).toBeLessThanOrEqual(1);
-  expect((expandedPoolBox?.y ?? 0) - ((expandedNameBox?.y ?? 0) + (expandedNameBox?.height ?? 0))).toBeGreaterThanOrEqual(8);
-  await expect(createPopover.getByRole("checkbox", { name: "Active", exact: true })).toBeChecked();
-  await expect(createPopover.getByRole("checkbox", { name: "Alumni", exact: true })).toBeChecked();
-  await expect(createPopover.getByRole("checkbox", { name: "Custom", exact: true })).toBeChecked();
-  await createPopover.getByRole("checkbox", { name: "Alumni", exact: true }).uncheck();
-  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Active + Custom");
-  await createPopover.getByRole("combobox", { name: "History participation" }).click();
-  await createPopover.getByRole("option", { name: "Never appeared" }).click();
-  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Never appeared");
-  await expect(createPopover.locator(".hololive-bracket-history-hint")).toHaveCount(0);
-  await expect(createPopover.getByRole("combobox", {name:"Singers",exact:true})).toHaveValue("all");
-  await createPopover.getByRole("combobox", {name:"Singers",exact:true}).selectOption("solo");
-  await expect(createPopover.getByRole("checkbox", { name: "Max per talent", exact: true })).not.toBeChecked();
-  await createPopover.getByRole("checkbox", { name: "Max per talent", exact: true }).check();
+  await expect(createPopover.getByRole("checkbox", { name: /^(Active|Alumni|Custom)$/ })).toHaveCount(0);
+  await createPopover.getByRole("combobox", { name: "History rule", exact: true }).selectOption("exclude");
+  await expect(createPopover.getByRole("combobox", { name: "History placement", exact: true })).toHaveValue("appeared");
+  const singers = createPopover.getByRole("radiogroup", {name:"Singers",exact:true});
+  await expect(singers.getByRole("radio", {name:"All",exact:true})).toBeChecked();
+  await singers.getByRole("radio", {name:"Solo",exact:true}).click();
   await expect(createPopover.getByLabel("Max songs per talent")).toBeEnabled();
-  await expect(createPopover.getByLabel("Max songs per talent")).toHaveValue("2");
+  await expect(createPopover.getByLabel("Max songs per talent")).toHaveValue("");
   await createPopover.getByLabel("Max songs per talent").fill("1");
-  await createPopover.getByRole("checkbox", { name: "Prefer original/cover split", exact: true }).uncheck();
-  await expect(createPopover.locator(".hololive-bracket-filter-chips")).toContainText("Max 1 per talent");
-  await expect(createPopover.getByRole("checkbox", { name: "Prefer original/cover split", exact:true })).not.toBeChecked();
+  await expect(createPopover.getByRole("button", { name: /Extra options/ })).toContainText("2");
+  await expect(createPopover.getByRole("checkbox", { name: "Balance originals / covers", exact:true })).not.toBeChecked();
   await page.locator(".hololive-bracket-create-popover").getByLabel("Name").fill("Singer Showdown");
   await page.getByRole("button", { name: "Create Bracket" }).click();
   const relaxedCapToast = page.locator(".hololive-action-toast").filter({ hasText: "Max per talent was relaxed" });
@@ -1374,7 +1561,7 @@ test("creates, navigates, and completes a double-elimination bracket", async ({ 
   await page.getByRole("link", { name: "Bracket" }).click();
   await page.getByRole("button", { name: "Create" }).click();
   const popover = page.locator(".hololive-bracket-create-popover");
-  await popover.getByRole("radio", { name: "RO16" }).click();
+  await popover.getByRole("combobox", { name: "Bracket size" }).selectOption("RO16");
   await popover.getByRole("radio", { name: "Double", exact: true }).click();
   await expect(popover.locator(".hololive-bracket-match-count")).toHaveCount(0);
   await popover.getByRole("radio", { name: "Random Songs" }).click();
@@ -1566,7 +1753,7 @@ test("defaults every bracket stage and round view to 100 percent without automat
   await page.getByRole("link", { name: "Bracket" }).click();
   await page.getByRole("button", { name: "Create" }).click();
   const popover = page.locator(".hololive-bracket-create-popover");
-  await popover.getByRole("radio", { name: "RO32" }).click();
+  await popover.getByRole("combobox", { name: "Bracket size" }).selectOption("RO32");
   await popover.getByRole("radio", { name: "Double", exact: true }).click();
   await popover.getByRole("radio", { name: "Random Songs" }).click();
   await popover.getByLabel("Name").fill("Fixed Zoom Policy Probe");

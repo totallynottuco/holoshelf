@@ -1,4 +1,5 @@
 import { trackerModules } from "../modules/registry";
+import { bracketPopularitySongCount } from "../shared/bracketPopularity";
 import {
   DEFAULT_HOLOLIVE_BOARD_NAME,
   DEFAULT_HOLOLIVE_TIERS,
@@ -286,6 +287,8 @@ const MOCK_BRACKET_SIZE_COUNTS: Record<HololiveBracketSize, number> = {
   RO256: 256
 };
 const mockHololiveBrackets = new Map<string, HololiveBracket>();
+let mockBracketPreviewEntries = new Map<string, HololiveBracketEntry>();
+const MOCK_BRACKET_POPULARITY_POOL_COUNT = 240;
 const mockHololiveBracketArchives = new Map<string, HololiveBracket>();
 const mockHololiveDoubleEngineStates = new Map<string, HololiveDoubleEliminationEngineState>();
 
@@ -3040,9 +3043,19 @@ async function createMockHololiveBracket(
   const id = `mock-bracket-${crypto.randomUUID()}`;
   const videoPrefix = payload.selectionSeed ?? id;
   const officialIdols = mockHololiveTierData.idols.filter((idol) => idol.source === "official");
-  const entries: HololiveBracketEntry[] = [];
+  const entries = (payload.reservedSongs ?? []).flatMap(({ youtubeVideoId }) => {
+    const entry = mockBracketPreviewEntries.get(youtubeVideoId);
+    return entry ? [entry] : [];
+  }).map((entry, slotIndex) => ({ ...entry, id: `${id}:entry:${slotIndex}`, bracketId: id, slotIndex }));
+  const reservedIds = new Set(entries.map(entry => entry.youtubeVideoId));
+  const popularity = payload.filters?.popularity;
+  const poolCount = MOCK_BRACKET_POPULARITY_POOL_COUNT;
+  const cutoff = popularity ? bracketPopularitySongCount(popularity, poolCount) : Infinity;
+  const firstRank = popularity?.direction === "least" ? poolCount - cutoff : 0;
 
-  for (let index = 0; entries.length < sizeCount; index += 1) {
+  for (let index = firstRank; entries.length < sizeCount && index < firstRank + cutoff; index += 1) {
+    const youtubeVideoId = `${videoPrefix}-video-${index}`;
+    if (reservedIds.has(youtubeVideoId)) continue;
     const idol = officialIdols[index % Math.max(officialIdols.length, 1)];
     const isOriginal = generationStyle === "random_songs" ? (index + idol.id.length) % 2 === 0 : index % 2 === 0;
     const title = `${idol?.displayName ?? "Mock Talent"} ${isOriginal ? "Original" : "Cover"} ${Math.floor(index / 2) + 1}`;
@@ -3050,17 +3063,17 @@ async function createMockHololiveBracket(
       id: `${id}:entry:${entries.length}`,
       bracketId: id,
       slotIndex: entries.length,
-      youtubeVideoId: `${videoPrefix}-video-${entries.length}`,
+      youtubeVideoId,
       title,
       songName: title,
       topicId: isOriginal ? "Original_Song" : "Music_Cover",
-      youtubeUrl: `https://www.youtube.com/watch?v=${videoPrefix}-video-${entries.length}`,
+      youtubeUrl: `https://www.youtube.com/watch?v=${youtubeVideoId}`,
       channelName: `${idol?.displayName ?? "Mock Talent"} Channel`,
       idolId: idol?.id ?? "mock-talent",
       idolName: idol?.displayName ?? "Mock Talent",
       canonicalPerformanceKey: `${id}:canonical:${entries.length}`,
-      viewCount: 1_000_000 - entries.length * 1000,
-      publishedAt: now,
+      viewCount: 1_000_000 - index * 1000,
+      publishedAt: payload.filters?.excludeBeforeDate ?? now,
       durationSeconds: 210
     });
   }
@@ -3083,6 +3096,7 @@ async function createMockHololiveBracket(
       createdAt: now,
       updatedAt: now
     };
+    if (entries.length < sizeCount) return shell;
     const bracket = updateMockDoubleEliminationBracket(
       shell,
       await createHololiveDoubleEliminationState(entries.map((entry) => entry.id))
@@ -4299,9 +4313,14 @@ const mockBridge: HoloshelfBridge = {
       case "hololive:brackets:preview": {
         const payload = _payload as IpcChannelMap["hololive:brackets:preview"]["request"];
         const preview = await createMockHololiveBracket(payload, false);
-        return { eligibleCount: preview.entries.length, warnings: [], entries: preview.entries.map(entry => ({
-          youtubeVideoId: entry.youtubeVideoId, title: entry.title, idolName: entry.idolName, viewCount: entry.viewCount ?? null,
-          dateUsed: payload.filters?.excludeBeforeDate ?? entry.publishedAt?.slice(0,10) ?? null,
+        mockBracketPreviewEntries = new Map(preview.entries.map(entry => [entry.youtubeVideoId, entry]));
+        const popularityPoolCount = payload.filters?.popularity ? MOCK_BRACKET_POPULARITY_POOL_COUNT : undefined;
+        const eligibleCount = payload.filters?.popularity && popularityPoolCount
+          ? bracketPopularitySongCount(payload.filters.popularity, popularityPoolCount)
+          : preview.entries.length;
+        return { eligibleCount, popularityPoolCount, warnings: [], entries: preview.entries.map(entry => ({
+          youtubeVideoId: entry.youtubeVideoId, title: entry.title, idolId: entry.idolId, idolName: entry.idolName, viewCount: entry.viewCount ?? null,
+          dateUsed: entry.publishedAt?.slice(0,10) ?? null,
           dateBasis: payload.filters?.dateBasis === "song_release" ? "recording_upload" as const : "video_upload" as const, sourceUrl: entry.youtubeUrl
         })) };
       }

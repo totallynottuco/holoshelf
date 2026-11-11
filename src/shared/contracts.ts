@@ -343,7 +343,15 @@ export interface HololiveBracketCreateWarning {
   appliedMaxEntriesPerTalent: number;
 }
 
-export interface HololiveBracketGenerationFilters {
+export type HololiveBracketYearPopularity = "top10" | "top25" | "middle50" | "bottom50" | "outsideTop25";
+export type HololiveBracketPopularity = {
+  direction: "most" | "least";
+  unit: "percent" | "songs";
+  amount: number;
+};
+export type HololiveBracketReservation = { youtubeVideoId: string; idolId: string };
+
+export interface HololiveBracketPoolFilters {
   dateBasis?: BracketDateBasis;
   /** Legacy field retained for saved-filter compatibility; upload dates are always accepted. */
   includeEstimatedReleaseDates?: boolean;
@@ -366,6 +374,25 @@ export interface HololiveBracketGenerationFilters {
   excludeAfterDate?: string | null;
   excludeBeforeDate?: string | null;
   excludeTopicIds?: HololiveMusicTopic[];
+  popularity?: HololiveBracketPopularity;
+  yearPopularity?: HololiveBracketYearPopularity;
+}
+
+export type HololiveBracketEvenQuota =
+  | { kind: "years" }
+  | { kind: "playlists"; playlistIds: string[] };
+
+export type HololiveBracketSlotQuota = HololiveBracketEvenQuota | {
+  kind: "wildcard";
+  slots: number;
+  name: string;
+  generationStyle: HololiveBracketGenerationStyle;
+  filters: HololiveBracketPoolFilters;
+  main?: HololiveBracketEvenQuota;
+};
+
+export interface HololiveBracketGenerationFilters extends HololiveBracketPoolFilters {
+  slotQuota?: HololiveBracketSlotQuota;
 }
 
 export interface HololiveBracketEntry {
@@ -1020,8 +1047,11 @@ export interface AppBootstrap {
 export interface HololiveBracketSelectionPreview {
   eligibleCount: number;
   creationError?: string | null;
+  quotaProgress?: Array<{ label: string; filled: number; requested: number }>;
+  popularityPoolCount?: number;
   entries: Array<{
     youtubeVideoId: string;
+    idolId: string;
     title: string;
     idolName: string;
     viewCount: number | null;

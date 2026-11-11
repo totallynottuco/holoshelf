@@ -8,6 +8,7 @@ import type {
   HolodexChannel,
   HololiveBracket,
   HololiveBracketSelectionPreview,
+  HololiveBracketReservation,
   HololiveBracketArchiveSummary,
   HololiveBracketCreateWarning,
   HololiveBracketFormat,
@@ -472,6 +473,7 @@ export interface HololiveBracketCreateRequest {
   filters?: HololiveBracketGenerationFilters | null;
   name?: string | null;
   selectionSeed?: string;
+  reservedSongs?: HololiveBracketReservation[];
   expectedVideoIds?: string[];
 }
 
