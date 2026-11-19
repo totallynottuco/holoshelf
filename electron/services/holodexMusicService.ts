@@ -19,7 +19,6 @@ import {
   HOLODEX_RELEASE_CHANNEL_PAGE_SIZE,
   buildHolodexPageUrl,
   cleanupCatalogRows,
-  isHololiveOfficialAudioMirror,
   makeCatalogRowsFromRecords,
   normalizeVideoDetail,
   normalizeHolodexSearchItem,
@@ -32,6 +31,7 @@ import {
   type HolodexVideoDetail,
   type HolodexVideoRecord
 } from "../../src/modules/hololive/music";
+import { planSongPresentations } from "../../src/modules/hololive/music/presentations";
 import type { DatabaseService } from "./database";
 import { mapConcurrent, requestConcurrency } from "../../src/shared/asyncPool";
 import type { HolodexResponseCache } from "../../src/modules/hololive/music/holodexClient";
@@ -171,31 +171,33 @@ export class HolodexMusicService {
         channel_id: string; channel_name: string; published_at: string; provided_to_youtube: number; duration_seconds: number | null;
       }>(`SELECT youtube_video_id, title, song_name, topic_id, channel_id, channel_name, published_at, provided_to_youtube, duration_seconds
           FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user' AND COALESCE(official_catalog_active, 1) = 1`);
-      const candidate = (row: HolodexCatalogRow) => ({
-        youtubeVideoId: row.youtubeVideoId, title: row.title, topicId: row.topicId, channelId: row.channelId,
-        songName: verifiedDetails[row.youtubeVideoId]?.songNames[0],
-        providedToYoutube: verifiedDetails[row.youtubeVideoId]?.providedToYoutube,
-        durationSeconds: verifiedDetails[row.youtubeVideoId]?.duration
-      });
-      for (const row of stored) {
-        if (incoming.has(row.youtube_video_id) || !availableIds.has(row.youtube_video_id) || typeof row.title !== "string") continue;
-        const actual = statsById.get(row.youtube_video_id)!;
-        const descriptor = {
-          youtubeVideoId: row.youtube_video_id, title: actual.title || row.title, songName: row.song_name,
-          topicId: row.topic_id, channelId: row.channel_id, providedToYoutube: Boolean(row.provided_to_youtube),
-          durationSeconds: actual.durationSeconds ?? row.duration_seconds
-        };
-        if (!verifiedRows.some((peer) => isHololiveOfficialAudioMirror(candidate(peer), descriptor) || isHololiveOfficialAudioMirror(descriptor, candidate(peer)))) continue;
-        verifiedDetails[row.youtube_video_id] = normalizeVideoDetail(row.youtube_video_id, {
-          ...this.database.listHolodexDetailCache([row.youtube_video_id])[row.youtube_video_id],
-          channelId: row.channel_id, duration: descriptor.durationSeconds, songNames: row.song_name ? [row.song_name] : [],
-          providedToYoutube: Boolean(row.provided_to_youtube)
+      const missing = stored.filter(row => typeof row.title === "string" && !incoming.has(row.youtube_video_id) && availableIds.has(row.youtube_video_id));
+      if (missing.length) {
+        const cached = this.database.listHolodexDetailCache(missing.map(row => row.youtube_video_id));
+        const missingRows: HolodexCatalogRow[] = missing.map(row => {
+          const actual = statsById.get(row.youtube_video_id);
+          const detail = cached[row.youtube_video_id];
+          verifiedDetails[row.youtube_video_id] = normalizeVideoDetail(row.youtube_video_id, {
+            ...detail, channelId: row.channel_id, duration: actual?.durationSeconds ?? row.duration_seconds,
+            songNames: detail?.songNames.length ? detail.songNames : row.song_name ? [row.song_name] : [],
+            providedToYoutube: Boolean(row.provided_to_youtube)
+          });
+          return { youtubeVideoId: row.youtube_video_id, youtubeUrl: `https://www.youtube.com/watch?v=${row.youtube_video_id}`,
+            title: actual?.title || row.title, status: actual?.status ?? "past", topicId: row.topic_id,
+            channelId: row.channel_id, channelName: row.channel_name, publishedAt: row.published_at };
         });
-        verifiedRows.push({
-          youtubeVideoId: row.youtube_video_id, youtubeUrl: `https://www.youtube.com/watch?v=${row.youtube_video_id}`,
-          title: descriptor.title, status: actual.status, topicId: row.topic_id, channelId: row.channel_id,
-          channelName: row.channel_name, publishedAt: row.published_at
+        const candidates = [...verifiedRows, ...missingRows].map(row => {
+          const detail = verifiedDetails[row.youtubeVideoId];
+          return { ...row, channelId: detail?.channelId || row.channelId, songName: detail?.songNames[0], songNames: detail?.songNames,
+            originalChannelId: detail?.originalChannelId, providedToYoutube: detail?.providedToYoutube,
+            durationSeconds: detail?.duration, description: detail?.description, participantIds: [...(detail?.mentions ?? []).map(m => m.channelId), ...(detail?.collabChannelIds ?? [])] };
         });
+        const related = new Set<string>();
+        for (const { removed, kept } of planSongPresentations(candidates)) {
+          if (incoming.has(removed.youtubeVideoId)) related.add(kept.youtubeVideoId);
+          if (incoming.has(kept.youtubeVideoId)) related.add(removed.youtubeVideoId);
+        }
+        verifiedRows.push(...missingRows.filter(row => related.has(row.youtubeVideoId)));
       }
     }
     // Validate every candidate first: an embargoed MV must never displace its playable audio.

@@ -1,6 +1,6 @@
 {
   "name": "holoshelf",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Windows-only personal Hololive catalog, music, talent, and bracket shelf.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -104,7 +104,7 @@
       }
     ],
     "releaseInfo": {
-      "releaseNotes": "Bracket creation has a new Match Lobby with filters and a live lineup side by side.\n\n- Save and load custom filter presets. Filter by release year, a range of years, or exact dates.\n- Choose the most- or least-viewed songs in the release window by percentage or song count.\n- Use Reserve in the lineup to pick individual songs and keep them through filter changes and redraws.\n- Review the exact Top Songs or Random Songs lineup before creating a single- or double-elimination bracket. Existing brackets and results are preserved."
+      "releaseNotes": "The music catalog now consolidates matching music-show uploads, performance videos, and repeat live presentations under the preferred artist release. Silent catalog updates carry the replacement video for saved songs and playlists."
     },
     "win": {
       "icon": "ico.ico",

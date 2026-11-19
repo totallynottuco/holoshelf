@@ -645,7 +645,24 @@ export async function mergeBundledOfficialData(options: MergeOptions): Promise<O
       options.database.repairHololiveMusicDuplicateRows(null, verifiedMirrorIds);
       options.database.repairRejectedHololiveMusicRows();
 
-      const pruneResult = pruneMissingOfficialMusicRows(options.database, officialVideoIds);
+      // A worldwide representative may be excluded or region-blocked on this client.
+      // Preserve its already-playable local alternate until a usable representative arrives.
+      const playableLocalAlternates = options.database.select<{ youtube_video_id: string }>(
+        `SELECT alt.youtube_video_id FROM hololive_music_duplicate_removals r
+         JOIN hololive_music_videos alt ON alt.youtube_video_id=r.removed_youtube_video_id
+         JOIN hololive_music_videos kept ON kept.youtube_video_id=r.kept_youtube_video_id
+         WHERE r.reason IN ('canonical_variant_duplicate_of_full','official_audio_duplicate_of_mv')
+           AND alt.official_catalog_active=1 AND alt.source_kind='official'
+           AND NOT EXISTS (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id=alt.youtube_video_id)
+           AND (kept.official_catalog_active=0 OR EXISTS
+             (SELECT 1 FROM hololive_music_exclusions e WHERE e.youtube_video_id=kept.youtube_video_id))`);
+      const unavailableReplacements = new Set(playableLocalAlternates.map(row => row.youtube_video_id));
+      const retainIds = new Set(officialVideoIds);
+      for (const report of duplicateRows) {
+        const id = String(report.removed_youtube_video_id);
+        if (unavailableReplacements.has(id) && report.kept_youtube_video_id) retainIds.add(id);
+      }
+      const pruneResult = pruneMissingOfficialMusicRows(options.database, retainIds);
       prunedMissingRows = pruneResult.prunedMissingRows;
       preservedMissingRows = pruneResult.preservedMissingRows;
 

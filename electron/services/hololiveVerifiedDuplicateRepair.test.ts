@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseService } from "./database";
+import { assertCatalogSongPresentations } from "./catalogSongPresentations";
 import { mergeBundledOfficialData } from "./officialDataMergeService";
 import { normalizeVideoDetail } from "../../src/modules/hololive/music/cleanup";
 import type { HolodexArtifactBundle } from "../../src/modules/hololive/music/types";
@@ -76,7 +77,53 @@ function presentationBundle(): HolodexArtifactBundle {
   return result;
 }
 
-describe("curated preferred song presentations", () => {
+describe("verified song presentations", () => {
+  it("repairs the broadcast and both live uploads, then replays direct replacements on an existing library", async () => {
+    const show = "sWC_fPb5v0g", live = "DPSaDLItzF4", firstLive = "bb2TnCOWXrE", topic = "RCxElILN4ws";
+    const input = only(bundle([{ id: show, song: "" }, { id: firstLive, song: "Rat A Tat" },
+      { id: live, song: "Rat A Tat [3D Live]" }]), [show, MV, live, firstLive]);
+    input.rows.find(row => row.youtubeVideoId === show)!.title = "[V+음악중심] 아이리제 (IRISÉ) - TRAUMA (Feat. Takanashi Kiara)ㅣ EP.8 #아이리제 #IRISÉ ㅣ V+MusicCore";
+    Object.assign(input.detailCache[show], { originalChannelId: "UCe52oeb7Xv_KaJsEzcKXJJg", duration: 174, songNames: [] });
+    const suisei = "UC5CwaMl1eIgY8h02uZw7u8A";
+    for (const row of input.rows.filter(row => [live, firstLive].includes(row.youtubeVideoId))) {
+      const older = row.youtubeVideoId === firstLive;
+      row.channelId = "UCnVbtCwr-5LXxUlGxsgD7sQ";
+      row.channelName = "Midnight Grand Orchestra";
+      row.publishedAt = older ? "2023-07-27" : "2026-11-13";
+      row.title = row.channelName + "『Rat A Tat』" + (older ? "Live Performance Video" : "(Live Video)");
+      Object.assign(input.detailCache[row.youtubeVideoId], { channelId: row.channelId, duration: older ? 230 : 235,
+        collabChannelIds: [suisei], mentions: [{ channelId: suisei, name: "Suisei Channel",
+          englishName: "Hoshimachi Suisei", type: "vtuber", org: "Hololive", photoUrl: "" }] });
+    }
+    input.duplicateRemovals = [{ removedYoutubeVideoId: topic, removedTitle: "Rat A Tat", keptYoutubeVideoId: live,
+      keptTitle: input.rows.find(row => row.youtubeVideoId === live)!.title, reason: "topic_duplicate_of_non_topic",
+      songName: "Rat A Tat", removedPublishedAt: "2022-07-26", keptPublishedAt: "2026-11-13" }];
+    const { db: client, file } = await database();
+    client.importHolodexMusicArtifacts(input);
+    expect(ids(client)).toEqual([show, MV, firstLive, live].sort());
+    expect(() => assertCatalogSongPresentations(client)).toThrow(/2 overlapping/);
+    const playlist = savePersonalReferences(client, show);
+    track(client, live, "My live performance note", 9);
+    const { db: seed, file: seedFile } = await database(true);
+    seed.importHolodexMusicArtifacts(input, "live", { verifiedVideoIds: input.rows.map(row => row.youtubeVideoId) });
+    expect(ids(seed)).toEqual([MV, firstLive].sort());
+    expect(() => assertCatalogSongPresentations(seed)).not.toThrow();
+    expect(seed.select("SELECT kept_youtube_video_id FROM hololive_music_duplicate_removals WHERE removed_youtube_video_id=?", [topic]))
+      .toEqual([{ kept_youtube_video_id: firstLive }]);
+    expect(seed.repairVerifiedHololiveMusicAudioMirrors(input.rows.map(row => row.youtubeVideoId))).toBe(0);
+    const seedDirectory = path.dirname(seedFile);
+    fs.copyFileSync(seedFile, path.join(seedDirectory, "holoshelf-template.sqlite"));
+    fs.writeFileSync(path.join(seedDirectory, "official-data.json"), JSON.stringify({ schema: 1, version: "2026.11.19.presentation-test" }));
+    const merged = await mergeBundledOfficialData({ database: client, isPackaged: true,
+      paths: { dataDirectory: path.dirname(file), hololiveImageDirectory: path.join(path.dirname(file), "images"), seedDirectory } });
+    expect(merged.status).toBe("merged");
+    expect(ids(client)).toEqual([MV, firstLive].sort());
+    expect(client.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id=?", [playlist])).toEqual([{ youtube_video_id: MV }]);
+    expect(client.select("SELECT youtube_video_id FROM hololive_music_queue_items")).toEqual([{ youtube_video_id: MV }]);
+    expect(client.listHololiveMusicRows({ youtubeVideoIds: [MV] })[0].marker).toBe("favorite");
+    expect(client.select("SELECT notes,rating FROM tracked_entries JOIN hololive_music_videos USING(item_id) WHERE youtube_video_id=?", [firstLive]))
+      .toEqual([{ notes: "My live performance note", rating: 9 }]);
+  });
   it("prefers the MV for new same-artist performance uploads without a curated ID", async () => {
     for (const id of ["3d1AbOhFUxE", "futureVideo"]){
       const { db } = await database();
@@ -120,6 +167,23 @@ describe("curated preferred song presentations", () => {
       expect(db.repairHololiveMusicDuplicateRows(null, new Set([PLAY_COLOR, MV]))).toBe(0);
       expect(ids(db)).toContain(PLAY_COLOR);
     }
+  });
+
+  it.each(["excluded", "region-blocked"])("keeps the playable local alternate during a silent merge with an %s MV", async condition => {
+    const { db, file } = await database();
+    db.importHolodexMusicArtifacts(presentationBundle());
+    const playlist = savePersonalReferences(db, PLAY_COLOR);
+    if (condition === "excluded") db.excludeHololiveMusicVideo({ youtubeVideoId: MV });
+    else db.deferHololiveMusicVideo({ youtubeVideoId: MV, reason: "Blocked locally", createBackup: false });
+    const { db: seed, file: seedFile } = await database(true);
+    seed.importHolodexMusicArtifacts(presentationBundle(), "live", { verifiedVideoIds: [PLAY_COLOR, MV] });
+    const seedDirectory = path.dirname(seedFile);
+    fs.copyFileSync(seedFile, path.join(seedDirectory, "holoshelf-template.sqlite"));
+    fs.writeFileSync(path.join(seedDirectory, "official-data.json"), JSON.stringify({ schema: 1, version: "2026.11.19.fallback-test" }));
+    await mergeBundledOfficialData({ database: db, isPackaged: true, paths: { dataDirectory: path.dirname(file),
+      hololiveImageDirectory: path.join(path.dirname(file), "images"), seedDirectory } });
+    expect(db.listHololiveMusicRows({ youtubeVideoIds: [MV, PLAY_COLOR] }).map(row => row.youtubeVideoId)).toEqual([PLAY_COLOR]);
+    expect(db.select("SELECT youtube_video_id FROM hololive_music_playlist_items WHERE playlist_id=?", [playlist])).toEqual([{ youtube_video_id: PLAY_COLOR }]);
   });
 
   it("does not guess replacements for other performance videos or multi-song recordings", async () => {

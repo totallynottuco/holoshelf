@@ -1,3 +1,4 @@
+import { planSongPresentations, type SongUpload } from "./presentations";
 import { describe, expect, it } from "vitest";
 import { buildHololiveMusicSongKey } from "./classification";
 import {
@@ -5,25 +6,26 @@ import {
   cleanupCatalogRows,
   hasCompatibleHololiveMusicRecording,
   isHololiveOfficialAudioMirror,
-  isHololiveOfficialPerformancePresentation,
   normalizeVideoDetail,
   parseProvidedToYoutubeArtistCredits
 } from "./cleanup";
 import type { HolodexCatalogRow, HolodexVideoDetail, HolodexVideoRecord } from "./types";
 
 describe("official performance presentation preference", () => {
+  const prefers = (performance: SongUpload, mv: SongUpload) =>
+    planSongPresentations([performance, mv]).some(match => match.kept.youtubeVideoId === mv.youtubeVideoId);
   const mv = { youtubeVideoId: "3f0PTj1xrvw", title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)’ Official MV",
     songName: "TRAUMA (Feat. Takanashi Kiara)", songNames: ["TRAUMA (Feat. Takanashi Kiara)"], topicId: "Original_Song",
     channelId: "irise", durationSeconds: 172, participantIds: ["kiara"] };
   const performance = { ...mv, youtubeVideoId: "3d1AbOhFUxE", title: "IRISÉ (아이리제) ‘TRAUMA (Feat. Takanashi Kiara)’ Performance Video",
     songName: null, songNames: [], durationSeconds: 165 };
   it("uses an unambiguous quoted title when song metadata is missing", () => {
-    expect(isHololiveOfficialPerformancePresentation(performance, mv)).toBe(true);
-    expect(isHololiveOfficialPerformancePresentation({ ...performance, youtubeVideoId: "futureUpload", title: performance.title.replace("TRAUMA", "New Song") },
+    expect(prefers(performance, mv)).toBe(true);
+    expect(prefers({ ...performance, youtubeVideoId: "futureUpload", title: performance.title.replace("TRAUMA", "New Song") },
       { ...mv, title: mv.title.replace("TRAUMA", "New Song"), songName: "New Song (Feat. Takanashi Kiara)", songNames: [] })).toBe(true);
   });
   it.each(["Live", "Acoustic", "Piano", "Remix", "Rehearsal", "2026 ver.", "ライブ"])("preserves a distinct %s performance", variant => {
-    expect(isHololiveOfficialPerformancePresentation({ ...performance, title: `${performance.title} (${variant})` }, mv)).toBe(false);
+    expect(prefers({ ...performance, title: `${performance.title} (${variant})` }, mv)).toBe(false);
   });
   it("requires matching artists, participants, song identity, and compatible complete recordings", () => {
     for (const changed of [
@@ -31,7 +33,32 @@ describe("official performance presentation preference", () => {
       { durationSeconds: null }, { durationSeconds: 400 }, { songNames: ["TRAUMA", "Other Song"] },
       { title: "IRISÉ ‘Other Song’ Performance Video" }, { title: "IRISÉ ‘TRAUMA’ ‘Another Song’ Performance Video" },
       { title: "TRAUMA Performance Video" }, { songName: "Conflicting metadata" }, { topicId: "Music_Cover" }
-    ]) expect(isHololiveOfficialPerformancePresentation({ ...performance, ...changed }, mv)).toBe(false);
+    ]) expect(prefers({ ...performance, ...changed }, mv)).toBe(false);
+  });
+  it("uses exact credited song and artist on unfamiliar broadcasts and rejects ambiguous credits", () => {
+    const release = { ...mv, youtubeVideoId: "release", channelId: "artist", channelName: "New Artist",
+      songName: "Light", songNames: ["Light"], title: "New Artist『Light』 Official MV" };
+    const show = { ...release, youtubeVideoId: "stage", originalChannelId: "network", songName: null, songNames: [],
+      title: "[Stage 4K] New Artist - Light | EP.3" };
+    expect(prefers(show, release)).toBe(true);
+    for (const title of ["[Stage 4K] Another Artist - Light | EP.3", "[Stage] New Artist - Light Years | EP.3",
+      "[Stage] New Artist - Light (feat. Someone Else) | EP.3", "[Stage] New Artist - Light | Another Song",
+      "[Stage] New Artist - Light (Acoustic) | EP.3"]) {
+      expect(prefers({ ...show, title }, release)).toBe(false);
+    }
+    expect(prefers({ ...show, participantIds: [] }, { ...release, participantIds: [] })).toBe(false);
+  });
+  it("selects a stable playable winner directly for each alternate, independently of input order", () => {
+    const song = { ...mv, songName: "New Song", songNames: ["New Song"] };
+    const earlier = { ...song, title: "Artist『New Song』Live Video", youtubeVideoId: "first", publishedAt: "2023-01-01", durationSeconds: 200 };
+    const later = { ...earlier, youtubeVideoId: "second", publishedAt: "2024-01-01", durationSeconds: 230 };
+    const distant = { ...later, youtubeVideoId: "third", publishedAt: "2025-01-01", durationSeconds: 260 };
+    for (const rows of [[distant, later, earlier], [earlier, later, distant]]) {
+      expect(planSongPresentations(rows).map(m => [m.removed.youtubeVideoId, m.kept.youtubeVideoId])).toEqual([["second", "first"]]);
+    }
+    expect(planSongPresentations([{ ...earlier, excluded: true }, later])).toEqual([]);
+    const final = { ...earlier, title: "New Song / Artist", youtubeVideoId: "final" };
+    expect(prefers({ ...later, title: "New Song / Artist 先行MV" }, final)).toBe(true);
   });
 });
 

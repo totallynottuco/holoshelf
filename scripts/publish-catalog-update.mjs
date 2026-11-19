@@ -74,7 +74,7 @@ export async function prepareCatalogUpdate({seedDirectory = path.join(root, "res
     minAppVersion: CATALOG_MIN_APP_VERSION, musicRows: seed.musicRows, statsFetchedAt: summary.videoStatsRefresh.fetchedAt,
     database: {url: `https://github.com/${CATALOG_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${assetName}`,
       bytes: payload.length, sha256: catalogHash(payload), uncompressedBytes: bytes.length, uncompressedSha256: catalogHash(bytes)}});
-  await validateCatalogDatabase(bytes, manifest);
+  await validateCatalogDatabase(bytes, manifest, { preparingRelease: true });
   fs.mkdirSync(outputDirectory, {recursive: true});
   const payloadFile = path.join(outputDirectory, assetName);
   const manifestFile = path.join(outputDirectory, CATALOG_MANIFEST_ASSET);

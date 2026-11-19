@@ -5,11 +5,12 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import initSqlJs from "sql.js";
 import type { CatalogUpdateManifest } from "../../src/shared/catalogUpdate";
+import { assertCatalogSongPresentations } from "./catalogSongPresentations";
 import { auditOfficialMusicStats } from "./musicStatsAudit";
 
 export const catalogHash = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
 
-export async function validateCatalogDatabase(data: Uint8Array, manifest: CatalogUpdateManifest): Promise<void> {
+export async function validateCatalogDatabase(data: Uint8Array, manifest: CatalogUpdateManifest, options: { preparingRelease?: boolean } = {}): Promise<void> {
   if (data.length !== manifest.database.uncompressedBytes || catalogHash(data) !== manifest.database.uncompressedSha256 ||
       Buffer.from(data.subarray(0, 16)).toString() !== "SQLite format 3\0") throw new Error("Catalog database checksum or size does not match");
   const packagedWasm = path.join(process.resourcesPath ?? "", "sql-wasm.wasm");
@@ -39,6 +40,7 @@ export async function validateCatalogDatabase(data: Uint8Array, manifest: Catalo
       if (facts.some(row => !String(row.youtube_video_id).trim() || !isCalendarDate(String(row.release_date)) ||
         !["official_release","youtube_release","recording_upload"].includes(String(row.basis)) || !String(row.source_url).startsWith("https://"))) throw new Error("Catalog release-date evidence is invalid");
     }
+    if (options.preparingRelease) assertCatalogSongPresentations({ select } as Parameters<typeof assertCatalogSongPresentations>[0]);
     const coverage = auditOfficialMusicStats({ select } as Parameters<typeof auditOfficialMusicStats>[0], manifest.statsFetchedAt);
     if (coverage.catalogVideos !== manifest.musicRows || coverage.missingVideos || coverage.staleVideos) throw new Error("Catalog statistics are incomplete or stale");
   } finally { database.close(); }

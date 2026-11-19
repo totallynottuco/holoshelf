@@ -89,11 +89,13 @@ let YouTubeVideoStatsService;
 let ReleaseRequestCache;
 let listOfficialMusicVideoIds;
 let auditOfficialMusicStats;
+let assertCatalogSongPresentations;
 try {
   ({ DatabaseService } = require("../dist-electron/electron/services/database.js"));
   ({ HolodexMusicService } = require("../dist-electron/electron/services/holodexMusicService.js"));
   ({ YouTubeVideoStatsService } = require("../dist-electron/electron/services/youtubeVideoStatsService.js"));
   ({ ReleaseRequestCache } = require("../dist-electron/electron/services/releaseRequestCache.js"));
+  ({ assertCatalogSongPresentations } = require("../dist-electron/electron/services/catalogSongPresentations.js"));
   ({ listOfficialMusicVideoIds, auditOfficialMusicStats } = require("../dist-electron/electron/services/musicStatsAudit.js"));
 } catch (error) {
   throw new Error(
@@ -559,6 +561,8 @@ async function main() {
     }
 
     statsCoverage ??= auditOfficialMusicStats(database);
+
+    if (writeSeed) assertCatalogSongPresentations(database);
 
     let catalogDuplicateResets = null;
     if (refreshHolodex && refreshStats && holodexCoverage?.complete && statsCoverage.missingVideos === 0 && statsCoverage.staleVideos === 0) {

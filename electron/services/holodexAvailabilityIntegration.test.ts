@@ -72,6 +72,20 @@ function verified(videos: FixtureVideo[], availableIds = videos.map(candidate =>
 const liveOptions = { includeChannels: false, includeCustomTalents: false, includeCollabs: false, replaceExisting: true, maxRequestsPerWindow: 999, requestWindowMs: 1000 };
 
 describe("Holodex import availability integration", () => {
+  it("keeps a previously imported MV through a complete refresh that only returns a new broadcast", async () => {
+    const db = await database();
+    const mv = video("oldartistmv", "IRISÉ『New Song』Official MV", { channelId: IRISE_CHANNEL, songName: "New Song" });
+    const broadcast = { ...video("freshstage1", "[Another Show] IRISÉ - New Song | EP.42", { channelId: IRISE_CHANNEL }),
+      songs: [], original_channel_id: "network" };
+    const refresh = (incoming: FixtureVideo[], available: FixtureVideo[]) => new HolodexMusicService(db, fetcher(incoming), null,
+      { availabilityVerifier: async ids => verified([mv, broadcast].filter(v => ids.includes(v.id)), available.map(v => v.id)) })
+      .refreshLive({ ...liveOptions, includeCollabs: true });
+    expect((await refresh([mv], [mv])).run.status).toBe("completed");
+    expect((await refresh([broadcast], [mv, broadcast])).run.status).toBe("completed");
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([mv.id]);
+    expect((await refresh([broadcast], [broadcast])).run.status).toBe("completed");
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([broadcast.id]);
+  });
   it("checks every candidate before an unavailable preferred MV can displace its public audio", async () => {
     const db = await database();
     const songName = "TRAUMA (Feat. Takanashi Kiara)";
