@@ -54,6 +54,7 @@ function describe(row: SongUpload) {
   const quoted = quotes[0]?.slice(1).find(Boolean);
   const inferred = program ? credited : quoted || (!song && credited) || undefined;
   const aliases = metadataName.split(/\s+\/\s+/u).map(key).filter(Boolean);
+  const translation = aliases.slice(1).map(alias => alias.replace(/\s+/gu, "")).join("/");
   const name = aliases[0] || key(inferred || "");
   if (!name || (inferred && aliases.length && !aliases.includes(key(inferred)))) return;
   if (row.songNames?.length && row.songName && key(row.songNames[0]) !== key(row.songName)) return;
@@ -66,7 +67,7 @@ function describe(row: SongUpload) {
   const plainTitle = key(title.replace(/^\s*(?:\[original\]|【original】)\s*/iu, ""));
   const songHeadline = key(title.replace(performanceVideo, "").replace(musicVideo, "").replace(liveVideo, ""));
   const movieCredit = /^\s*(?:movie|animation|映像|動画制作)\s*[-:：]/imu.test(row.description ?? "");
-  return { row, group, kind, plainTitle, movieCredit, protectedVersion, songHeadline, guest: key(guest || ""), aliases };
+  return { row, group, kind, plainTitle, movieCredit, protectedVersion, songHeadline, guest: key(guest || ""), translation };
 }
 
 /** Each alternate points directly to a playable representative it matched itself. */
@@ -92,7 +93,7 @@ export function planSongPresentations(rows: readonly SongUpload[]) {
         if (alternate.kind === "audio") return isHololiveOfficialAudioMirror(alternate.row, rep.row);
         if (alternate.protectedVersion || rep.protectedVersion || alternate.row.excluded ||
             alternate.guest !== rep.guest ||
-            (alternate.aliases.length > 1 && rep.aliases.length > 1 && alternate.aliases.join("/") !== rep.aliases.join("/") &&
+            (alternate.translation && rep.translation && alternate.translation !== rep.translation &&
               alternate.songHeadline !== rep.songHeadline) ||
             (alternate.kind === rep.kind && ["release", "mv"].includes(rep.kind) && rep.plainTitle !== alternate.plainTitle)) return false;
         return hasCompatibleHolodexTopicDuplicateDuration(rep.row.durationSeconds ?? 0, alternate.row.durationSeconds ?? 0);

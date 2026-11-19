@@ -60,6 +60,12 @@ describe("official performance presentation preference", () => {
     const final = { ...earlier, title: "New Song / Artist", youtubeVideoId: "final" };
     expect(prefers({ ...later, title: "New Song / Artist 先行MV" }, final)).toBe(true);
   });
+  it("accepts spacing changes in a translation but preserves conflicting secondary titles", () => {
+    const official = { ...mv, title: "【MV】リアルメランコリー / AZKi", songName: "リアルメランコリー / Real Melancholy", songNames: [] };
+    const release = { ...performance, title: "【2ndオリジナルソング】リアルメランコリー", songName: "リアルメランコリー / RealMelancholy" };
+    expect(prefers(release, official)).toBe(true);
+    expect(prefers({ ...release, songName: "リアルメランコリー / Other Work" }, official)).toBe(false);
+  });
 });
 
 function row(input: Partial<HolodexCatalogRow> & Pick<HolodexCatalogRow, "youtubeVideoId" | "title">): HolodexCatalogRow {
