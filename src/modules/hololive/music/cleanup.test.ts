@@ -48,6 +48,15 @@ describe("official performance presentation preference", () => {
     }
     expect(prefers({ ...show, participantIds: [] }, { ...release, participantIds: [] })).toBe(false);
   });
+  it("uses a show's named version only when its song-specific MV link points to the eligible release", () => {
+    const official = { ...mv, youtubeVideoId: "official001", title: "【MV】New Song", songName: "New Song", songNames: [], channelName: "Artist Ch. hololive" };
+    const broadcast = { ...official, youtubeVideoId: "anotherShow", title: "Artist – New Songㅣ[4K] ArtistㅣNight Stage",
+      description: "New Song MV：https://youtu.be/official001", originalChannelId: "studio", songName: "New Song (Night Stage ver.)" };
+    expect(prefers(broadcast, official)).toBe(true);
+    expect(prefers({ ...broadcast, description: "New Song MV: https://youtu.be/another0001" }, official)).toBe(false);
+    expect(prefers({ ...broadcast, description: "Next Song MV: https://youtu.be/official001" }, official)).toBe(false);
+    expect(prefers({ ...broadcast, songName: "New Song (Acoustic ver.)" }, official)).toBe(false);
+  });
   it("selects a stable playable winner directly for each alternate, independently of input order", () => {
     const song = { ...mv, songName: "New Song", songNames: ["New Song"] };
     const earlier = { ...song, title: "Artist『New Song』Live Video", youtubeVideoId: "first", publishedAt: "2023-01-01", durationSeconds: 200 };

@@ -21,13 +21,21 @@ type Format = typeof presentationOrder[number];
 function creditedProgramSong(title: string, channelName: string): string | undefined {
   const credit = title.replace(/^(?:\s*\[[^\]]+\]\s*)+/u, "").split(/\s+[-–—]\s+/u);
   if (credit.length !== 2 || !channelName) return;
-  const artist = key(channelName);
+  const artist = key(channelName.replace(/\s+(?:ch\.|channel\b).*$/iu, ""));
   const aliases = [credit[0].replace(/\([^()]+\)/gu, ""), ...Array.from(credit[0].matchAll(/\(([^()]+)\)/gu), match => match[1])];
   if (!aliases.some(alias => key(alias) === artist)) return;
   // NFKC represents the Korean vertical separator ㅣ as ᅵ.
   const segments = credit[1].split(/[|ᅵ]/u);
   if (segments.length > 1 && !/^\s*(?:ep(?:isode)?\.?\s*\d|#|\[)/iu.test(segments[1])) return;
   return segments[0].trim();
+}
+
+function linkedMusicVideo(description: string, song: string): string | undefined {
+  const links = new Set<string>();
+  for (const match of description.normalize("NFKC").matchAll(/^([^\n]+?)\s+(?:official\s+)?(?:music\s+video|mv)\s*:\s*https:\/\/(?:youtu\.be\/|(?:www\.)?youtube\.com\/watch\?v=)([\w-]{11})(?![\w-])/gimu)) {
+    if (key(match[1]) === key(song)) links.add(match[2]);
+  }
+  return links.size === 1 ? [...links][0] : undefined;
 }
 
 function describe(row: SongUpload) {
@@ -38,13 +46,19 @@ function describe(row: SongUpload) {
   const program = Boolean(credited && (external || /^\[.+?\]/u.test(title)));
   if (external && (!program || !row.participantIds?.length)) return;
   const audio = /\bofficial[\s_-]+audio\b/iu.test(title);
-  const kind: Format = program ? "program" : audio ? "audio" : liveVideo.test(title) ? "live" :
+  let kind: Format = program ? "program" : audio ? "audio" : liveVideo.test(title) ? "live" :
     performanceVideo.test(title) ? "performance" : /先行MV|\badvance\s+mv\b/iu.test(title) ? "advance" :
     musicVideo.test(title) ? "mv" : "release";
   const song = (row.songName || row.songNames?.[0] || "").normalize("NFKC");
   const withoutFormat = title.replace(liveVideo, "").replace(performanceVideo, "");
-  const metadataName = song.replace(/\s*\[(?:3d\s+)?live\]\s*$/iu, "");
-  const protectedVersion = distinctVersion.test(title + " " + song) || hasHololiveBroadcastEditMarker(title + " " + song) ||
+  let metadataName = song.replace(/\s*\[(?:3d\s+)?live\]\s*$/iu, "");
+  const linkedMv = program && credited ? linkedMusicVideo(row.description ?? "", credited) : undefined;
+  // A show's own version tag can be corroborated by its byline and an explicit link
+  // to this song's MV. Generic version tags and arrangement labels stay protected.
+  const showTag = linkedMv && /^(.*?)\s+\(([^()]+?)\s+ver\.?\)$/iu.exec(metadataName);
+  if (showTag && key(credited ?? "") === key(showTag[1]) && !distinctVersion.test(showTag[2]) &&
+      title.split(/[|ᅵ]/u).some(segment => key(segment) === key(showTag[2]))) metadataName = showTag[1];
+  const protectedVersion = distinctVersion.test(title + " " + metadataName) || hasHololiveBroadcastEditMarker(title + " " + song) ||
     /\b(?:live|concert)\b/iu.test(withoutFormat + " " + metadataName);
   if (protectedVersion && kind !== "audio" && kind !== "mv") return;
   // A quoted work inside a trailing source credit (e.g. an anime title) isn't the song.
@@ -60,6 +74,13 @@ function describe(row: SongUpload) {
   if (row.songNames?.length && row.songName && key(row.songNames[0]) !== key(row.songName)) return;
   // An unlabeled upload needs independent song evidence in its displayed title.
   if (kind === "release" && ((!metadataName && !credited && !quoted) || !(" " + key(title) + " ").includes(" " + name + " "))) return;
+  if (kind === "release") {
+    const intro = (row.description ?? "").normalize("NFKC").split(/\r?\n/u, 4);
+    if (intro.some(line => {
+      const credit = /^[「『]([^」』]+)[」』][^\n]{0,12}(?:オリジナルMV公開|official (?:music video|mv)\b)/iu.exec(line);
+      return credit && key(credit[1]) === name;
+    })) kind = "mv";
+  }
   const participants = [...new Set(row.participantIds ?? [])].sort();
   const guest = /\((?:feat\.?|featuring|ft\.?)\s+([^()]+)\)/iu.exec(title + " " + song)?.[1];
   const languages = [...new Set((title + " " + song).toLowerCase().match(/\b(?:english|japanese|korean|chinese|spanish|indonesian)\b/gu))].sort();
@@ -67,7 +88,7 @@ function describe(row: SongUpload) {
   const plainTitle = key(title.replace(/^\s*(?:\[original\]|【original】)\s*/iu, ""));
   const songHeadline = key(title.replace(performanceVideo, "").replace(musicVideo, "").replace(liveVideo, ""));
   const movieCredit = /^\s*(?:movie|animation|映像|動画制作)\s*[-:：]/imu.test(row.description ?? "");
-  return { row, group, kind, plainTitle, movieCredit, protectedVersion, songHeadline, guest: key(guest || ""), translation };
+  return { row, group, kind, plainTitle, movieCredit, protectedVersion, songHeadline, guest: key(guest || ""), translation, linkedMv };
 }
 
 /** Each alternate points directly to a playable representative it matched itself. */
@@ -92,6 +113,7 @@ export function planSongPresentations(rows: readonly SongUpload[]) {
       const kept = representatives.find(rep => {
         if (alternate.kind === "audio") return isHololiveOfficialAudioMirror(alternate.row, rep.row);
         if (alternate.protectedVersion || rep.protectedVersion || alternate.row.excluded ||
+            (alternate.linkedMv && alternate.linkedMv !== rep.row.youtubeVideoId) ||
             alternate.guest !== rep.guest ||
             (alternate.translation && rep.translation && alternate.translation !== rep.translation &&
               alternate.songHeadline !== rep.songHeadline) ||

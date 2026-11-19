@@ -153,7 +153,11 @@ export class HolodexMusicService {
       }
     }
     const verifiedDetails = { ...details };
-    const verifiedRows = rows.filter((row) => availableIds.has(row.youtubeVideoId)).map((row) => {
+    const localOnlyIds = new Set(this.database.select<{ youtube_video_id: string }>(
+      `SELECT youtube_video_id FROM hololive_music_exclusions UNION
+       SELECT youtube_video_id FROM hololive_music_videos WHERE source_kind='user'`
+    ).map(row => row.youtube_video_id));
+    const verifiedRows = rows.filter((row) => availableIds.has(row.youtubeVideoId) && !localOnlyIds.has(row.youtubeVideoId)).map((row) => {
       const actual = statsById.get(row.youtubeVideoId);
       if (verifiedDetails[row.youtubeVideoId] && actual) {
         verifiedDetails[row.youtubeVideoId] = {
@@ -171,7 +175,8 @@ export class HolodexMusicService {
         channel_id: string; channel_name: string; published_at: string; provided_to_youtube: number; duration_seconds: number | null;
       }>(`SELECT youtube_video_id, title, song_name, topic_id, channel_id, channel_name, published_at, provided_to_youtube, duration_seconds
           FROM hololive_music_videos WHERE COALESCE(source_kind, 'official') != 'user' AND COALESCE(official_catalog_active, 1) = 1`);
-      const missing = stored.filter(row => typeof row.title === "string" && !incoming.has(row.youtube_video_id) && availableIds.has(row.youtube_video_id));
+      const missing = stored.filter(row => typeof row.title === "string" && !incoming.has(row.youtube_video_id) &&
+        !localOnlyIds.has(row.youtube_video_id) && availableIds.has(row.youtube_video_id));
       if (missing.length) {
         const cached = this.database.listHolodexDetailCache(missing.map(row => row.youtube_video_id));
         const missingRows: HolodexCatalogRow[] = missing.map(row => {

@@ -112,6 +112,15 @@ describe("Holodex import availability integration", () => {
     expect(result.run.status).toBe("completed");
     expect(db.listHololiveMusicRows({})).toMatchObject([{ youtubeVideoId: "preview0001", status: "upcoming", durationSeconds: 0 }]);
   });
+  it("chooses a playable alternate before cleanup when the user excluded the MV", async () => {
+    const db = await database();
+    const audio = video("audio000001", "New Song (Official Audio)", { songName: "New Song" });
+    const mv = video("musicvid001", "New Song Official MV", { songName: "New Song" });
+    db.run("INSERT INTO hololive_music_exclusions (youtube_video_id,created_at) VALUES (?, '2026-11-19')", [mv.id]);
+    const service = new HolodexMusicService(db, fetcher([audio, mv]), null, { availabilityVerifier: async () => verified([audio, mv]) });
+    expect((await service.refreshLive(liveOptions)).run.status).toBe("completed");
+    expect(db.listHololiveMusicRows({}).map(row => row.youtubeVideoId)).toEqual([audio.id]);
+  });
 
   it("does not let an older stored MV that became private displace public audio during a non-replace import", async () => {
     const db = await database();
